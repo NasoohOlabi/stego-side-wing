@@ -1,0 +1,15 @@
+{
+	"python.pythonPath": "d:\\Master\\code\\stego-side-wing\\.venv\\Scripts\\python.exe",
+	"cSpell.words": [
+		"dotenv",
+		"genai",
+		"generativeai",
+		"icecream",
+		"jsonify",
+		"ollama",
+		"Stega"
+	],
+	"cSpell.enabledFileTypes": {
+		"properties": false
+	}
+}

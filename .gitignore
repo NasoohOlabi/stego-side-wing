@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+clean_dataset
+cache-directory
+datasets
+output-results
+_cache-directory
+.env
+kv_store*
+prompts.log
+logs

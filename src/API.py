@@ -727,10 +727,16 @@ def google_search():
     import hashlib
     from urllib.parse import parse_qsl, urlencode
 
+    print("=" * 100)
+    print("[DEBUG] google_search() called")
+    print(f"[DEBUG] Request URL: {request.url}")
+    print(f"[DEBUG] Request args: {dict(request.args)}")
+
     # Generate cache key the same way Flask-Caching does when query_string=True
     endpoint = request.endpoint or "google_search"
     func_name = "google_search"
     base_key = f"view/{endpoint}.{func_name}"
+    print(f"[DEBUG] Base cache key: {base_key}")
 
     # Build query string the same way Flask-Caching does
     query_params = dict(parse_qsl(request.query_string.decode("utf-8")))
@@ -739,11 +745,18 @@ def google_search():
         query_str = urlencode(sorted_params)
         query_hash = hashlib.md5(query_str.encode("utf-8")).hexdigest()
         cache_key = f"{base_key}?{query_hash}"
+        print(f"[DEBUG] Query params: {query_params}")
+        print(f"[DEBUG] Query hash: {query_hash}")
     else:
         cache_key = base_key
+        print("[DEBUG] No query params found")
+    print(f"[DEBUG] Final cache key: {cache_key}")
 
     # Check cache first (only for successful responses)
     cached_value = cache.get(cache_key)
+    print(
+        f"[DEBUG] Cache lookup result: {'HIT' if cached_value is not None else 'MISS'}"
+    )
     if cached_value is not None:
         # Return cached successful response
         if isinstance(cached_value, tuple):
@@ -758,22 +771,35 @@ def google_search():
         else:
             response_obj = make_response(cached_value)
         response_obj.headers["X-Cache-Status"] = "HIT"
+        print("[DEBUG] Returning cached response")
         return response_obj
 
     query = request.args.get("query", type=str)
     first = request.args.get("first", default=1, type=int)
     count = request.args.get("count", default=10, type=int)
+    print(
+        f"[DEBUG] Extracted params - query: '{query}', first: {first}, count: {count}"
+    )
 
     if not query:
+        print("[DEBUG] ERROR: Missing 'query' parameter")
         response = jsonify({"error": "Missing 'query' parameter"}), 400
         response_obj = make_response(response[0], response[1])
         response_obj.headers["X-Cache-Status"] = "MISS"
         return response_obj
 
     # Retrieve Custom Search Engine ID from environment or dotenv
+    print("[DEBUG] Retrieving CSE ID...")
     cse_id = os.environ.get("GOOGLE_CSE_ID")
     if not cse_id:
+        print("[DEBUG] CSE ID not in os.environ, checking .env file...")
         cse_id = dotenv.get_key(".env", "GOOGLE_CSE_ID")
+    if cse_id:
+        print(
+            f"[DEBUG] CSE ID found: {cse_id[:10]}...{cse_id[-10:] if len(cse_id) > 20 else ''}"
+        )
+    else:
+        print("[DEBUG] ERROR: CSE ID not found in environment or .env file")
     if not cse_id:
         response = (
             jsonify({"error": "Google Custom Search Engine ID not configured"}),
@@ -784,6 +810,7 @@ def google_search():
         return response_obj
 
     # Retrieve API keys from environment or dotenv (try GOOGLE_API_KEY_1 through GOOGLE_API_KEY_4)
+    print("[DEBUG] Retrieving API keys...")
     api_keys = []
     for i in range(1, 6):
         key_name = f"GOOGLE_API_KEY_{i}"
@@ -792,8 +819,13 @@ def google_search():
             api_key = dotenv.get_key(".env", key_name)
         if api_key:
             api_keys.append(api_key)
+            print(f"[DEBUG] Found {key_name} (length: {len(api_key)})")
+        else:
+            print(f"[DEBUG] {key_name} not found")
+    print(f"[DEBUG] Total API keys found: {len(api_keys)}")
 
     if not api_keys:
+        print("[DEBUG] ERROR: No API keys configured")
         response = jsonify({"error": "No Google API keys configured"}), 500
         response_obj = make_response(response[0], response[1])
         response_obj.headers["X-Cache-Status"] = "MISS"
@@ -801,7 +833,9 @@ def google_search():
 
     # Try each API key sequentially until one succeeds
     errors = []
-    for api_key in api_keys:
+    print(f"[DEBUG] Attempting to fetch results with {len(api_keys)} API key(s)...")
+    for idx, api_key in enumerate(api_keys, 1):
+        print(f"[DEBUG] Trying API key {idx}/{len(api_keys)}...")
         params = {
             "key": api_key,
             "cx": cse_id,
@@ -809,49 +843,73 @@ def google_search():
             "num": count,
             "start": first,
         }
+        print(
+            f"[DEBUG] Request params: q='{query}', num={count}, start={first}, cx={cse_id[:10]}..."
+        )
         data = None
         try:
+            print("[DEBUG] Sending GET request to Google Custom Search API...")
             resp = requests.get(
                 "https://www.googleapis.com/customsearch/v1", params=params, timeout=20
             )
+            print(f"[DEBUG] Response status code: {resp.status_code}")
+            print(f"[DEBUG] Response headers: {dict(resp.headers)}")
             data = resp.json()
+            print(f"[DEBUG] Response JSON keys: {list(data.keys())}")
             resp.raise_for_status()
 
             # Check for error in JSON response (Google API sometimes returns errors in JSON with 200 status)
             if "error" in data:
                 error_info = data.get("error", {})
                 error_message = error_info.get("message", "Unknown error")
+                error_code = error_info.get("code", "Unknown")
+                print(f"[DEBUG] ERROR in API response (key {idx}):")
+                print(f"[DEBUG]   Error code: {error_code}")
+                print(f"[DEBUG]   Error message: {error_message}")
+                print(f"[DEBUG]   Full error data: {data}")
                 errors.append(
                     {
-                        "key_index": api_keys.index(api_key) + 1,
+                        "key_index": idx,
                         "error": f"API error: {error_message}",
                         "data": data,
                     }
                 )
                 # log the data
                 print("-" * 100)
-                print("API error: {error_message}")
+                print(f"[DEBUG] API error: {error_message}")
                 print("-" * 100)
                 print(data)
                 print("-" * 100)
+                print("[DEBUG] Trying next API key...")
                 continue
 
             # Check if "items" key exists (may be missing if no results)
             if "items" not in data:
+                print(f"[DEBUG] WARNING: No 'items' key in response (key {idx})")
+                print(f"[DEBUG] Response data keys: {list(data.keys())}")
                 print("-" * 100)
-                print("No items found")
+                print("[DEBUG] No items found")
                 print("-" * 100)
                 print(data)
                 print("-" * 100)
                 # No results found - return empty results instead of error
+                print("[DEBUG] Returning empty results (no items found)")
                 response = jsonify({"results": []}), 200
                 # Cache successful response (200 status)
                 cache.set(cache_key, response, timeout=300)
+                print(f"[DEBUG] Cached empty results with key: {cache_key}")
                 response_obj = make_response(response[0], response[1])
                 response_obj.headers["X-Cache-Status"] = "MISS"
                 return response_obj
 
             # Success - return the results
+            num_items = len(data.get("items", []))
+            print(f"[DEBUG] SUCCESS with API key {idx}/{len(api_keys)}")
+            print(f"[DEBUG] Found {num_items} result(s)")
+            if num_items > 0:
+                print(
+                    f"[DEBUG] First result title: {data['items'][0].get('title', 'N/A')[:50]}..."
+                )
             response = (
                 jsonify(
                     {
@@ -869,21 +927,38 @@ def google_search():
             )
             # Cache successful response (200 status)
             cache.set(cache_key, response, timeout=300)
+            print(f"[DEBUG] Cached successful response with key: {cache_key}")
             response_obj = make_response(response[0], response[1])
             response_obj.headers["X-Cache-Status"] = "MISS"
+            print("[DEBUG] Returning successful response")
             return response_obj
         except requests.RequestException as e:
             # Store error and try next key
+            print(f"[DEBUG] RequestException with API key {idx}/{len(api_keys)}:")
+            print(f"[DEBUG]   Exception type: {type(e).__name__}")
+            print(f"[DEBUG]   Exception message: {str(e)}")
+            if hasattr(e, "response") and e.response is not None:
+                print(f"[DEBUG]   Response status: {e.response.status_code}")
+                try:
+                    error_data = e.response.json()
+                    print(f"[DEBUG]   Response JSON: {error_data}")
+                except Exception:
+                    print(f"[DEBUG]   Response text: {e.response.text[:200]}")
             errors.append(
                 {
-                    "key_index": api_keys.index(api_key) + 1,
+                    "key_index": idx,
                     "error": str(e),
                     "data": data,
                 }
             )
+            print("[DEBUG] Trying next API key...")
             continue
 
     # All API keys failed - DO NOT cache errors
+    print(f"[DEBUG] ERROR: All {len(api_keys)} API key(s) failed")
+    print("[DEBUG] Error summary:")
+    for err in errors:
+        print(f"[DEBUG]   Key {err['key_index']}: {err['error']}")
     response = (
         jsonify(
             {
@@ -895,6 +970,8 @@ def google_search():
     )
     response_obj = make_response(response[0], response[1])
     response_obj.headers["X-Cache-Status"] = "MISS"
+    print("[DEBUG] Returning error response")
+    print("=" * 100)
     return response_obj
 
 

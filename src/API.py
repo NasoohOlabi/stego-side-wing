@@ -97,6 +97,7 @@ def posts_list():
     """
     count = request.args.get("count", type=int)
     step = request.args.get("step", type=str)
+    tag = request.args.get("tag", type=str)
     offset = request.args.get("offset", type=int) or 0
     assert count
     assert step in steps
@@ -110,11 +111,18 @@ def posts_list():
             f"Post directory not found: {src_dir}. Please run data_nesting_script.py first."
         )
 
-    # Filter for files that end with .json
     json_files = [
         f
         for f in all_files
-        if f.endswith(".json") and (not is_file_in_folder(dest_dir, f))
+        if f.endswith(".json")
+        and (
+            not is_file_in_folder(
+                dest_dir,
+                f[:-5]
+                + str("_" + tag if (tag is not None) and (tag != "") else "")
+                + ".json",
+            )
+        )
     ]
 
     if not json_files:
@@ -431,12 +439,277 @@ def save_json():
         return jsonify({"error": f"Failed to save JSON: {str(e)}"}), 500
 
 
+# Global model instance for sentence transformers (lazy-loaded)
+_semantic_model = None
+
+
+def get_semantic_model():
+    """Lazy-load the sentence transformer model."""
+    global _semantic_model
+    if _semantic_model is None:
+        try:
+            import torch
+            from sentence_transformers import SentenceTransformer
+
+            print("Loading sentence transformer model 'all-MiniLM-L6-v2'...")
+
+            # Explicitly set device to avoid meta tensor issues
+            # This ensures the model is loaded on a real device, not a meta device
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            # Load model with explicit device specification
+            # The device parameter ensures the model is initialized on a real device
+            _semantic_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
+
+            # Verify model is on correct device and not meta
+            # Access a parameter to ensure it's properly initialized
+            try:
+                # This will raise an error if the model is on meta device
+                _ = next(_semantic_model.parameters()).device
+            except RuntimeError as e:
+                if "meta" in str(e).lower():
+                    # If we get a meta device error, force reload on CPU
+                    print("⚠️  Detected meta device issue, reloading on CPU...")
+                    _semantic_model = SentenceTransformer(
+                        "all-MiniLM-L6-v2", device="cpu"
+                    )
+
+            print(f"✅ Model loaded successfully on device: {device}")
+        except ImportError:
+            raise ImportError(
+                "sentence-transformers library not installed. Install it with: pip install sentence-transformers"
+            )
+    return _semantic_model
+
+
+@app.route("/semantic_search", methods=["POST"])
+def semantic_search():
+    """
+    API endpoint for semantic similarity search.
+
+    Expects JSON body:
+    {
+        "text": "query text to search for",
+        "objects": [
+            {
+                "category": "...",
+                "source_quote": "...",
+                "tangent": "...",
+                ... (any other fields)
+            },
+            ...
+        ],
+        "n": 5  # optional, number of top results to return (default: all)
+    }
+
+    Returns:
+    {
+        "results": [
+            {
+                "object": {...},  # original object
+                "score": 0.85,   # similarity score (0-1)
+                "rank": 1        # rank (1-based)
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "Invalid or missing JSON"}), 400
+
+        query_text = data.get("text")
+        objects_list = data.get("objects")
+        n = data.get("n")  # Optional: number of top results
+
+        if not query_text:
+            return jsonify({"error": "Missing 'text' field in request body"}), 400
+
+        if not objects_list or not isinstance(objects_list, list):
+            return jsonify(
+                {"error": "Missing or invalid 'objects' field (must be a list)"}
+            ), 400
+
+        if len(objects_list) == 0:
+            return jsonify({"results": []}), 200
+
+        # Validate and convert n to integer if provided
+        if n is not None:
+            try:
+                n = int(n)
+                if n < 1:
+                    return jsonify({"error": "'n' must be a positive integer"}), 400
+            except (ValueError, TypeError):
+                return jsonify({"error": "'n' must be a valid integer or None"}), 400
+
+        # Load the model
+        model = get_semantic_model()
+
+        # Import util for cosine similarity
+        from sentence_transformers import util
+
+        # Prepare the data for matching
+        # Combine relevant text fields to create rich context
+        # Try to extract common fields, but be flexible
+        doc_texts = []
+        for obj in objects_list:
+            # Build text representation from common fields
+            text_parts = []
+
+            # Try common field names
+            if "category" in obj:
+                text_parts.append(str(obj["category"]))
+            if "source_quote" in obj:
+                text_parts.append(str(obj["source_quote"]))
+            if "tangent" in obj:
+                text_parts.append(str(obj["tangent"]))
+            if "title" in obj:
+                text_parts.append(str(obj["title"]))
+            if "summary" in obj:
+                text_parts.append(str(obj["summary"]))
+            if "content" in obj:
+                text_parts.append(str(obj["content"]))
+
+            # If no common fields found, convert entire object to string (excluding non-text fields)
+            if not text_parts:
+                # Convert all string/number values to text
+                text_parts = [
+                    str(v) for v in obj.values() if isinstance(v, (str, int, float))
+                ]
+
+            doc_text = " ".join(text_parts) if text_parts else str(obj)
+            doc_texts.append(doc_text)
+
+        # Generate embeddings
+        query_embedding = model.encode(query_text, convert_to_tensor=True)
+        doc_embeddings = model.encode(doc_texts, convert_to_tensor=True)
+
+        # Calculate cosine similarity
+        cosine_scores = util.cos_sim(query_embedding, doc_embeddings)[0]
+
+        # Get scores as list and pair with indices
+        scores_with_indices = [
+            (float(cosine_scores[i].item()), i) for i in range(len(objects_list))
+        ]
+
+        # Sort by score (descending)
+        scores_with_indices.sort(reverse=True, key=lambda x: x[0])
+
+        # Get top N results (n is already validated as integer above)
+        if n is not None:
+            scores_with_indices = scores_with_indices[:n]
+
+        # Build response
+        results = []
+        for rank, (score, idx) in enumerate(scores_with_indices, start=1):
+            results.append(
+                {
+                    "object": objects_list[idx],
+                    "score": round(score, 4),
+                    "rank": rank,
+                }
+            )
+
+        return jsonify({"results": results}), 200
+
+    except ImportError as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": f"Error processing semantic search: {str(e)}"}), 500
+
+
+@app.route("/needle_finder", methods=["POST"])
+def needle_finder():
+    """
+    Find the best matching document from an array using semantic similarity.
+
+    Expects JSON body:
+    {
+        "needle": "search text to find",
+        "haystack": ["document 1 text", "document 2 text", ...]
+    }
+
+    Returns:
+    {
+        "best_match": "document 2 text",
+        "index": 1,
+        "score": 0.87
+    }
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "Invalid or missing JSON"}), 400
+
+        needle = data.get("needle")
+        haystack = data.get("haystack")
+
+        if not needle or not isinstance(needle, str):
+            return jsonify(
+                {"error": "Missing or invalid 'needle' field (must be a string)"}
+            ), 400
+
+        if not haystack or not isinstance(haystack, list):
+            return jsonify(
+                {"error": "Missing or invalid 'haystack' field (must be a list)"}
+            ), 400
+
+        if len(haystack) == 0:
+            return jsonify({"error": "Haystack cannot be empty"}), 400
+
+        # Convert all haystack items to strings
+        haystack_strings = [str(doc) if doc is not None else "" for doc in haystack]
+
+        # Filter out empty strings
+        if not any(haystack_strings):
+            return jsonify({"error": "All haystack items are empty"}), 400
+
+        # Load the model
+        model = get_semantic_model()
+
+        # Import util for cosine similarity
+        from sentence_transformers import util
+
+        # Generate embeddings
+        needle_embedding = model.encode(needle, convert_to_tensor=True)
+        haystack_embeddings = model.encode(haystack_strings, convert_to_tensor=True)
+
+        # Calculate cosine similarity
+        cosine_scores = util.cos_sim(needle_embedding, haystack_embeddings)[0]
+
+        # Find the best match (highest score)
+        best_score = float(cosine_scores[0].item())
+        best_index = 0
+
+        for i in range(1, len(haystack_strings)):
+            score = float(cosine_scores[i].item())
+            if score > best_score:
+                best_score = score
+                best_index = i
+
+        return jsonify(
+            {
+                "best_match": haystack_strings[best_index],
+                "index": best_index,
+                "score": round(best_score, 4),
+            }
+        ), 200
+
+    except ImportError as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": f"Error processing needle finder: {str(e)}"}), 500
+
+
 @app.route("/", methods=["GET"])
 def index():
     """
     Simple welcome message for the API root.
     """
-    return "Welcome to the Reddit Post API. Available endpoints: /random_post (GET), /process_file (POST), /generate_keywords (POST)"
+    return "Welcome to the Reddit Post API. Available endpoints: /random_post (GET), /process_file (POST), /generate_keywords (POST), /semantic_search (POST), /needle_finder (POST)"
 
 
 DB_FILE = "kv_store.db"

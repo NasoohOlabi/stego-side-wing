@@ -2,11 +2,11 @@ import json
 import os
 
 files_to_delete = []
-for file in os.listdir("datasets/news_researched"):
+for file in os.listdir("datasets/news_angles"):
     # if the file is not a json file, skip it
     if not file.endswith(".json"):
         continue
-    file_path = os.path.join("datasets/news_researched", file)
+    file_path = os.path.join("datasets/news_angles", file)
     file_content = None
     with open(file_path, "r", encoding="utf-8") as f:
         file_content = json.load(f)
@@ -22,12 +22,40 @@ for file in os.listdir("datasets/news_researched"):
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(file_content, f, indent=4)
         print(f"File {file} cleaned")
-    elif len(file_content["search_results"]) == 0:
-        files_to_delete.append(file_path)
-        print(f"File {file} will be deleted")
+
     elif isinstance(file_content["search_results"], dict) and all(
         len(v) == 0 for v in file_content["search_results"].values()
     ):
+        files_to_delete.append(file_path)
+        print(f"File {file} will be deleted")
+    elif isinstance(file_content["search_results"], dict) and all(
+        (isinstance(v, str) and len(v) == 0)
+        for v in file_content["search_results"].values()
+    ):
+        # convert it to a list
+        file_content["search_results"] = [
+            item
+            for sublist in file_content["search_results"].values()
+            for item in sublist
+        ]
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(file_content, f, indent=4)
+        print(f"File {file} cleaned")
+    elif isinstance(file_content["search_results"], list) and all(
+        not isinstance(x, str) for x in file_content["search_results"]
+    ):
+        file_content["search_results"] = [
+            (
+                item.get(
+                    "content_analysis", item.get("snippet", item.get("fetched_content"))
+                )
+            )
+            for item in file_content["search_results"]
+        ]
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(file_content, f, indent=4)
+        print(f"File {file} cleaned")
+    elif len(file_content["search_results"]) == 0:
         files_to_delete.append(file_path)
         print(f"File {file} will be deleted")
 

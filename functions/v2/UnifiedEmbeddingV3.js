@@ -4,9 +4,8 @@
  * High-performance single n8n Code node that performs two-level steganographic
  * embedding.
  *
- * OPTIMIZATIONS:
- * - Pre-calculated byte-width lookups (removes repeated UTF-8 conversions in DP loop).
- * - Fallback to standard encoding if dictionary compression is inefficient.
+ * FIXES:
+ * - Resolved comment chain breakage by normalizing ID prefixes (e.g., t1_) during parent lookup.
  */
 
 /* ============================================================
@@ -168,7 +167,6 @@ function compressPayload(payload, dictionary) {
 	);
 
 	// Optimization: Precompute byte offsets for O(1) literal cost calculation
-	// byteOffsets[i] = number of bytes in payload.substring(0, i)
 	const byteOffsets = new Int32Array(n + 1);
 	let byteCount = 0;
 	for (let i = 0; i < n; i++) {
@@ -178,11 +176,7 @@ function compressPayload(payload, dictionary) {
 			byteCount += 4;
 			i++;
 			byteOffsets[i] = byteCount;
-		} // handle surrogate in loop?
-		// Note: Simple indexing is tricky with surrogates.
-		// For safety/speed balance on normal text, we'll re-calculate byte length for the literal
-		// or just use a helper if MAX_LITERAL_LEN is small (250).
-		// Since 250 is small, calling getUtf8ByteLength on substring is fast enough ($O(250)$).
+		}
 	}
 
 	// Precompute Matches
@@ -221,9 +215,6 @@ function compressPayload(payload, dictionary) {
 		}
 		if (matchesAtI.length) matches.set(i, matchesAtI);
 	}
-	console.log(
-		`[compressPayload] Precomputed matches for ${matches.size} positions`
-	);
 
 	console.log("[compressPayload] Step 2.3: Running DP algorithm...");
 	const dp = Array(n + 1).fill(Infinity);
@@ -243,21 +234,15 @@ function compressPayload(payload, dictionary) {
 			);
 		}
 		// Option A: Literal
-		// Try reasonably sized chunks for literals to reduce loop overhead
-		// We only check 1..MAX_LITERAL_LEN
 		const maxL = Math.min(MAX_LITERAL_LEN, n - i);
 
-		// Optimization: Just check a few specific lengths or step?
-		// No, we need optimal. But we can optimize cost calc.
 		for (let L = 1; L <= maxL; L++) {
-			// Cost = Flag(1) + LenBits + (Bytes * 8)
-			// We calculate bytes on the fly for small L
 			const subStr = payload.substr(i, L);
 			const byteLen = getUtf8ByteLength(subStr);
 
 			const cost = 1 + BIT_WIDTH_LITERAL_LEN + byteLen * 8 + dp[i + L];
 			if (cost < dp[i]) {
-				choice[i] = { kind: "literal", len: L, subStr }; // cache subStr to avoid re-slicing later
+				choice[i] = { kind: "literal", len: L, subStr };
 				dp[i] = cost;
 			}
 		}
@@ -266,7 +251,6 @@ function compressPayload(payload, dictionary) {
 		const mList = matches.get(i);
 		if (mList) {
 			for (const m of mList) {
-				// Cost = Flag(1) + DocIdxBits + OffsetBits + LenBits
 				const docLenBits = getBitWidth(dictionary[m.doc].length);
 				const cost =
 					1 +
@@ -296,11 +280,9 @@ function compressPayload(payload, dictionary) {
 			len: 1,
 			subStr: payload[currI]
 		};
-		// Guard: Ensure len is always positive to prevent infinite loop
 		const safeLen = Math.max(1, ch.len || 1);
 
 		if (ch.kind === "literal") {
-			// Re-calc binary here only for selected chunks
 			const bin = toBinaryUtf8(ch.subStr || payload.substr(currI, safeLen));
 			dictBinary += "0" + encodeInt(safeLen, MAX_LITERAL_LEN) + bin;
 			references.push({ doc: null, idx: currI, len: safeLen });
@@ -314,33 +296,25 @@ function compressPayload(payload, dictionary) {
 		}
 		currI += safeLen;
 	}
-	console.log(
-		`[compressPayload] Dictionary path reconstructed: ${references.length} references`
-	);
 
-	const dictLength = 1 + dictBinary.length; // '1' + bits
+	const dictLength = 1 + dictBinary.length;
 	console.log(`[compressPayload] Dictionary encoding length: ${dictLength}`);
-
-	// 3. Efficiency Check & Selection
-	// If Dictionary method is worse or equal to Standard, use Standard.
-	// "way less than 1" efficiency logic interpreted as: if it doesn't compress, don't use it.
-	console.log("[compressPayload] Step 3: Comparing compression methods...");
 
 	if (dictLength >= stdLength) {
 		return {
 			method: "standard",
 			payload,
-			compressed: "0" + stdBinary, // Prepended '0'
+			compressed: "0" + stdBinary,
 			compressedLength: stdLength,
 			originalLength: stdBinary.length,
-			ratio: stdLength / (stdBinary.length || 1), // > 1 due to flag
+			ratio: stdLength / (stdBinary.length || 1),
 			references: []
 		};
 	} else {
 		return {
 			method: "dictionary",
 			payload,
-			compressed: "1" + dictBinary, // Prepended '1'
+			compressed: "1" + dictBinary,
 			compressedLength: dictLength,
 			originalLength: stdBinary.length,
 			ratio: dictLength / (stdBinary.length || 1),
@@ -350,7 +324,7 @@ function compressPayload(payload, dictionary) {
 }
 
 /* ============================================================
-   EMBEDDING LOGIC (Unchanged but utilizes optimized Inputs)
+   EMBEDDING LOGIC
    ============================================================ */
 
 function embedInCommentSelection(bits, post) {
@@ -379,9 +353,8 @@ function embedInCommentSelection(bits, post) {
 		for (const c of flattenedComments) commentMap.set(c.id, c);
 
 		let current = pickedComment;
-		const visitedIds = new Set(); // Guard: Track visited comments to prevent circular references
+		const visitedIds = new Set();
 		while (current) {
-			// Guard: Break if we've already visited this comment (circular reference)
 			if (visitedIds.has(current.id)) break;
 			visitedIds.add(current.id);
 
@@ -393,7 +366,21 @@ function embedInCommentSelection(bits, post) {
 				permalink: current.permalink
 			});
 			if (current.parent_id === current.link_id) break;
-			const parent = commentMap.get(current.parent_id);
+
+			// --- FIX START: Handle Parent ID Lookup Mismatch ---
+			let parent = commentMap.get(current.parent_id);
+
+			// If direct lookup fails, try stripping typical prefixes (e.g. "t1_")
+			if (
+				!parent &&
+				typeof current.parent_id === "string" &&
+				current.parent_id.includes("_")
+			) {
+				const strippedId = current.parent_id.split("_").pop();
+				parent = commentMap.get(strippedId);
+			}
+			// --- FIX END ---
+
 			if (!parent || parent === current) break;
 			current = parent;
 		}
@@ -426,9 +413,6 @@ async function embedInAngleSelection(bits, nestedAngles) {
 		`[embedInAngleSelection] Found ${angles.length} angles from ${nestedAngles.length} documents`
 	);
 	if (angles.length === 0) {
-		console.log(
-			"[embedInAngleSelection] No angles found, returning empty result"
-		);
 		return {
 			bitsUsed: "",
 			remainingBits: bits,
@@ -443,12 +427,9 @@ async function embedInAngleSelection(bits, nestedAngles) {
 
 	let idx = parseInt(bitsUsed || "0", 2) || 0;
 	if (idx >= angles.length) idx = idx % angles.length;
-	console.log(`[embedInAngleSelection] Selected angle index: ${idx}`);
 
 	const selectedAngle = angles[idx];
 	const remainingAngles = angles.filter((_, i) => i !== idx);
-
-	console.log("[embedInAngleSelection] Angle embedding completed");
 
 	return {
 		bitsUsed,
@@ -470,52 +451,28 @@ console.log(`[MAIN] Starting processing of ${inputItems.length} item(s)`);
 
 const results = await Promise.all(
 	inputItems.map(async (item, itemIndex) => {
-		console.log(`\n[MAIN] ========================================`);
-		console.log(
-			`[MAIN] Processing item ${itemIndex + 1}/${inputItems.length}`
-		);
-		console.log(`[MAIN] ========================================`);
 		const warnings = [];
-
 		let data = item.json;
-		console.log(
-			`[MAIN] DEBUG item.json keys: ${Object.keys(data).join(", ")}`
-		);
 		if (data?.angles && data?.data) {
-			console.log(
-				"[MAIN] DEBUG Restructuring data: moving angles from root to data object"
-			);
 			data = { ...data.data, angles: data.angles };
 		}
 		const post = data?.post || data || {};
-		console.log(
-			`[MAIN] DEBUG post is using: ${data?.post ? "data.post" : "data"}`
-		);
-		console.log(
-			`[MAIN] DEBUG final post keys: ${Object.keys(post).join(", ")}`
-		);
 
-		console.log("[MAIN] Step 1: Extracting payload...");
 		let payload = $("SetSecretData").first()?.json?.payload;
 		if (payload?.payload) payload = payload.payload;
 
 		if (!isNonEmptyString(payload)) {
-			console.log("[MAIN] ERROR: No valid payload found");
 			return {
 				json: { error: "No payload", warnings: ["Invalid payload"] }
 			};
 		}
-		console.log(`[MAIN] Payload extracted: ${payload.length} characters`);
 
 		// Step 3: Angles
-		console.log("[MAIN] Step 2: Processing angles...");
 		const nestedAngles = (post?.angles || data?.angles || [])
 			.filter(Boolean)
 			.map((x) => (Array.isArray(x) ? x.filter(Boolean) : [x]));
-		console.log(`[MAIN] Found ${nestedAngles.length} angle groups`);
 
 		// Step 4: Dictionary & Compress
-		console.log("[MAIN] Step 3: Building dictionary and compressing...");
 		const dictionary = buildDictionary(post);
 		const compression = compressPayload(payload, dictionary);
 
@@ -524,21 +481,13 @@ const results = await Promise.all(
 				"Dictionary compression inefficient; used standard encoding."
 			);
 		}
-		console.log(
-			`[MAIN] Compression completed: method=${
-				compression.method
-			}, ratio=${compression.ratio.toFixed(3)}`
-		);
 
 		// Step 5: Embed Comments
-		console.log("[MAIN] Step 4: Embedding in comments...");
 		const commentEmb = embedInCommentSelection(compression.compressed, post);
 		if (commentEmb.result.insufficientBits)
 			warnings.push("Padding used in Comment Selection.");
-		console.log("[MAIN] Comment embedding completed");
 
 		// Step 6: Embed Angles
-		console.log("[MAIN] Step 5: Embedding in angles...");
 		const angleEmb = await embedInAngleSelection(
 			commentEmb.remainingBits,
 			nestedAngles
@@ -546,11 +495,6 @@ const results = await Promise.all(
 		if (angleEmb.insufficientBits)
 			warnings.push("Padding used in Angle Selection.");
 
-		console.log("[MAIN] Angle embedding completed");
-
-		console.log(
-			`[MAIN] Item ${itemIndex + 1} processing completed successfully`
-		);
 		return {
 			json: {
 				compression,
@@ -563,9 +507,5 @@ const results = await Promise.all(
 		};
 	})
 );
-
-console.log(`\n[MAIN] ========================================`);
-console.log(`[MAIN] All ${results.length} item(s) processed successfully`);
-console.log(`[MAIN] ========================================\n`);
 
 return results;

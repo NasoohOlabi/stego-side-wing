@@ -129,6 +129,12 @@ def posts_list():
         raise ValueError(
             f"No JSON post files found in {POSTS_DIRECTORY}. Check your data processing output."
         )
+
+    # Sort files by size (descending: largest first)
+    json_files.sort(
+        key=lambda f: os.path.getsize(os.path.join(src_dir, f)), reverse=True
+    )
+
     return jsonify({"fileNames": json_files[offset : offset + count]}), 200
 
 

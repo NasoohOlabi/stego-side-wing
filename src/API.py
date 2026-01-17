@@ -30,6 +30,7 @@ from util.newsApi import (
     NewsApiSuccessResponse,
     fetch_everything,
 )
+from angles.angle_runner import analyze_angles_from_texts
 
 dotenv.load_dotenv()
 
@@ -1252,6 +1253,36 @@ def google_search():
     print("[DEBUG] Returning error response")
     print("=" * 100)
     return response_obj
+
+
+@app.route("/angles/analyze", methods=["POST"])
+def analyze_angles_endpoint():
+    """
+    Proxy endpoint that runs the angles analysis script.
+
+    Expects JSON payload: {"texts": ["text chunk 1", "text chunk 2", ...]}
+    """
+    payload = request.get_json(force=True, silent=True)
+    if not payload:
+        return jsonify({"error": "Missing payload"}), 400
+
+    texts = payload.get("texts")
+    if not isinstance(texts, list) or not all(isinstance(x, str) for x in texts):
+        return jsonify({"error": "'texts' must be a list of strings"}), 400
+
+    if not texts:
+        return jsonify({"error": "Provide at least one text block"}), 400
+
+    try:
+        results = analyze_angles_from_texts(texts)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except requests.RequestException as exc:
+        return jsonify({"error": f"LM Studio request failed: {exc}"}), 502
+    except Exception as exc:  # pragma: no cover
+        return jsonify({"error": f"Angles analysis failed: {exc}"}), 500
+
+    return jsonify({"results": results}), 200
 
 
 # Cleanup on app shutdown

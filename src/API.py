@@ -17,6 +17,7 @@ from icecream import ic
 from pydantic import BaseModel, Field
 
 from ai_analyze import process_file
+from angles.angle_runner import analyze_angles_from_texts
 from event_loop_manager import run_async, start_event_loop, stop_event_loop
 from headless_browser_analyzer import (
     WebAnalyzer,
@@ -30,7 +31,6 @@ from util.newsApi import (
     NewsApiSuccessResponse,
     fetch_everything,
 )
-from angles.angle_runner import analyze_angles_from_texts
 
 dotenv.load_dotenv()
 
@@ -627,6 +627,71 @@ def semantic_search():
         return jsonify({"error": f"Error processing semantic search: {str(e)}"}), 500
 
 
+def find_best_match(needle: str, haystack: list):
+    """
+    Core utility function to find the best matching document using semantic similarity.
+
+    Args:
+        needle (str): The search text to find
+        haystack (list): List of documents to search through
+
+    Returns:
+        dict: {
+            "best_match": "best matching document text",
+            "index": index of best match in haystack,
+            "score": similarity score (0-1)
+        }
+
+    Raises:
+        ValueError: If inputs are invalid
+        ImportError: If required libraries are not available
+    """
+    if not needle or not isinstance(needle, str):
+        raise ValueError("Missing or invalid 'needle' field (must be a string)")
+
+    if not haystack or not isinstance(haystack, list):
+        raise ValueError("Missing or invalid 'haystack' field (must be a list)")
+
+    if len(haystack) == 0:
+        raise ValueError("Haystack cannot be empty")
+
+    # Convert all haystack items to strings
+    haystack_strings = [str(doc) if doc is not None else "" for doc in haystack]
+
+    # Filter out empty strings
+    if not any(haystack_strings):
+        raise ValueError("All haystack items are empty")
+
+    # Load the model
+    model = get_semantic_model()
+
+    # Import util for cosine similarity
+    from sentence_transformers import util
+
+    # Generate embeddings
+    needle_embedding = model.encode(needle, convert_to_tensor=True)
+    haystack_embeddings = model.encode(haystack_strings, convert_to_tensor=True)
+
+    # Calculate cosine similarity
+    cosine_scores = util.cos_sim(needle_embedding, haystack_embeddings)[0]
+
+    # Find the best match (highest score)
+    best_score = float(cosine_scores[0].item())
+    best_index = 0
+
+    for i in range(1, len(haystack_strings)):
+        score = float(cosine_scores[i].item())
+        if score > best_score:
+            best_score = score
+            best_index = i
+
+    return {
+        "best_match": haystack_strings[best_index],
+        "index": best_index,
+        "score": round(best_score, 4),
+    }
+
+
 @app.route("/needle_finder", methods=["POST"])
 def needle_finder():
     """
@@ -654,9 +719,52 @@ def needle_finder():
         needle = data.get("needle")
         haystack = data.get("haystack")
 
-        if not needle or not isinstance(needle, str):
+        result = find_best_match(needle, haystack)
+        return jsonify(result), 200
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except ImportError as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": f"Error processing needle finder: {str(e)}"}), 500
+
+
+@app.route("/needle_finder_batch", methods=["POST"])
+def needle_finder_batch():
+    """
+    Find the best matching documents from an array using semantic similarity.
+
+    Expects JSON body:
+    {
+        "needles": ["search text to find", "search text to find", ...],
+        "haystack": ["document 1 text", "document 2 text", ...]
+    }
+
+    Returns:
+    {
+        "results": [
+            {
+                "best_match": "document 2 text",
+                "index": 1,
+                "score": 0.87
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "Invalid or missing JSON"}), 400
+
+        needles = data.get("needles")
+        haystack = data.get("haystack")
+
+        if not needles or not isinstance(needles, list):
             return jsonify(
-                {"error": "Missing or invalid 'needle' field (must be a string)"}
+                {"error": "Missing or invalid 'needles' field (must be a list)"}
             ), 400
 
         if not haystack or not isinstance(haystack, list):
@@ -664,51 +772,28 @@ def needle_finder():
                 {"error": "Missing or invalid 'haystack' field (must be a list)"}
             ), 400
 
-        if len(haystack) == 0:
-            return jsonify({"error": "Haystack cannot be empty"}), 400
+        results = []
+        for needle in needles:
+            try:
+                result = find_best_match(needle, haystack)
+                results.append(result)
+            except ValueError as e:
+                results.append(
+                    {"error": f"Failed to process needle '{needle}': {str(e)}"}
+                )
+            except Exception as e:
+                results.append(
+                    {
+                        "error": f"Unexpected error processing needle '{needle}': {str(e)}"
+                    }
+                )
 
-        # Convert all haystack items to strings
-        haystack_strings = [str(doc) if doc is not None else "" for doc in haystack]
+        return jsonify({"results": results}), 200
 
-        # Filter out empty strings
-        if not any(haystack_strings):
-            return jsonify({"error": "All haystack items are empty"}), 400
-
-        # Load the model
-        model = get_semantic_model()
-
-        # Import util for cosine similarity
-        from sentence_transformers import util
-
-        # Generate embeddings
-        needle_embedding = model.encode(needle, convert_to_tensor=True)
-        haystack_embeddings = model.encode(haystack_strings, convert_to_tensor=True)
-
-        # Calculate cosine similarity
-        cosine_scores = util.cos_sim(needle_embedding, haystack_embeddings)[0]
-
-        # Find the best match (highest score)
-        best_score = float(cosine_scores[0].item())
-        best_index = 0
-
-        for i in range(1, len(haystack_strings)):
-            score = float(cosine_scores[i].item())
-            if score > best_score:
-                best_score = score
-                best_index = i
-
-        return jsonify(
-            {
-                "best_match": haystack_strings[best_index],
-                "index": best_index,
-                "score": round(best_score, 4),
-            }
-        ), 200
-
-    except ImportError as e:
-        return jsonify({"error": str(e)}), 500
     except Exception as e:
-        return jsonify({"error": f"Error processing needle finder: {str(e)}"}), 500
+        return jsonify(
+            {"error": f"Error processing batch needle finder: {str(e)}"}
+        ), 500
 
 
 @app.route("/", methods=["GET"])

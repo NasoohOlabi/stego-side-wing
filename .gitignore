@@ -8,7 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
-clean_dataset
 cache-directory
 datasets
 output-results

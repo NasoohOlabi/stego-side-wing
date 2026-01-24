@@ -1,0 +1,2095 @@
+{
+  "$schema": "http://json-schema.org/schema#",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "stegoText": {
+        "type": "string"
+      },
+      "embedding": {
+        "type": "object",
+        "properties": {
+          "compression": {
+            "type": "object",
+            "properties": {
+              "payload": {
+                "type": "string"
+              },
+              "compressed": {
+                "type": "string"
+              },
+              "compressedLength": {
+                "type": "integer"
+              },
+              "originalLength": {
+                "type": "integer"
+              },
+              "usedDict": {
+                "type": "boolean"
+              },
+              "ratio": {
+                "type": "number"
+              },
+              "references": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "doc": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "idx": {
+                      "type": "integer"
+                    },
+                    "len": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "doc",
+                    "idx",
+                    "len"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "compressed",
+              "compressedLength",
+              "originalLength",
+              "payload",
+              "ratio",
+              "references",
+              "usedDict"
+            ]
+          },
+          "commentEmbedding": {
+            "type": "object",
+            "properties": {
+              "bitsUsed": {
+                "type": "string"
+              },
+              "bitsCount": {
+                "type": "integer"
+              },
+              "flatCommentsLength": {
+                "type": "integer"
+              },
+              "selectionIndex": {
+                "type": "integer"
+              },
+              "targetType": {
+                "type": "string"
+              },
+              "context": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "author": {
+                    "type": "string"
+                  },
+                  "selftext": {
+                    "type": "string"
+                  },
+                  "subreddit": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "permalink": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "author",
+                  "id",
+                  "permalink",
+                  "selftext",
+                  "subreddit",
+                  "title",
+                  "url"
+                ]
+              },
+              "pickedCommentChain": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "parent_id": {
+                      "type": "string"
+                    },
+                    "permalink": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "body",
+                    "id",
+                    "name",
+                    "parent_id",
+                    "permalink"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "bitsCount",
+              "bitsUsed",
+              "context",
+              "flatCommentsLength",
+              "pickedCommentChain",
+              "selectionIndex",
+              "targetType"
+            ]
+          },
+          "angleEmbedding": {
+            "type": "object",
+            "properties": {
+              "bitsUsed": {
+                "type": "string"
+              },
+              "bitsCount": {
+                "type": "integer"
+              },
+              "remainingBits": {
+                "type": "string"
+              },
+              "selectedAngle": {
+                "type": "object",
+                "properties": {
+                  "category": {
+                    "type": "string"
+                  },
+                  "source_quote": {
+                    "type": "string"
+                  },
+                  "tangent": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "category",
+                  "source_quote",
+                  "tangent"
+                ]
+              },
+              "remainingAngles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string"
+                    },
+                    "source_quote": {
+                      "type": "string"
+                    },
+                    "tangent": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "category",
+                    "source_quote",
+                    "tangent"
+                  ]
+                }
+              },
+              "totalAnglesSelectedFirst": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string"
+                    },
+                    "source_quote": {
+                      "type": "string"
+                    },
+                    "tangent": {
+                      "type": "string"
+                    },
+                    "source_document": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "category",
+                    "source_document",
+                    "source_quote",
+                    "tangent"
+                  ]
+                }
+              },
+              "snippet": {
+                "type": "null"
+              },
+              "selectedSourceDocumentIndex": {
+                "type": "integer"
+              },
+              "selectedSourceDocument": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "bitsCount",
+              "bitsUsed",
+              "remainingAngles",
+              "remainingBits",
+              "selectedAngle",
+              "selectedSourceDocument",
+              "selectedSourceDocumentIndex",
+              "snippet",
+              "totalAnglesSelectedFirst"
+            ]
+          },
+          "totalBitsEmbedded": {
+            "type": "integer"
+          },
+          "fullEncodedBits": {
+            "type": "string"
+          },
+          "warnings": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "angleEmbedding",
+          "commentEmbedding",
+          "compression",
+          "fullEncodedBits",
+          "totalBitsEmbedded",
+          "warnings"
+        ]
+      },
+      "post": {
+        "type": "object",
+        "properties": {
+          "analysis_timestamp": {
+            "type": "string"
+          },
+          "angles": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "category": {
+                        "type": "string"
+                      },
+                      "source_quote": {
+                        "type": "string"
+                      },
+                      "tangent": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "category",
+                      "source_quote",
+                      "tangent"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "author": {
+            "type": "string"
+          },
+          "author_fullname": {
+            "type": "string"
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "_meta": {
+                  "type": "object",
+                  "properties": {
+                    "retrieved_2nd_on": {
+                      "type": "integer"
+                    },
+                    "is_edited": {
+                      "type": "boolean"
+                    },
+                    "removal_type": {
+                      "type": "string"
+                    },
+                    "was_deleted_later": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "retrieved_2nd_on"
+                  ]
+                },
+                "author": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "author_fullname": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "comment_type": {
+                  "type": "null"
+                },
+                "controversiality": {
+                  "type": "integer"
+                },
+                "created": {
+                  "type": "integer"
+                },
+                "created_utc": {
+                  "type": "integer"
+                },
+                "distinguished": {
+                  "type": "null"
+                },
+                "downs": {
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "link_id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "parent_id": {
+                  "type": "string"
+                },
+                "permalink": {
+                  "type": "string"
+                },
+                "replies": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "_meta": {
+                            "type": "object",
+                            "properties": {
+                              "retrieved_2nd_on": {
+                                "type": "integer"
+                              },
+                              "is_edited": {
+                                "type": "boolean"
+                              },
+                              "removal_type": {
+                                "type": "string"
+                              },
+                              "was_deleted_later": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "retrieved_2nd_on"
+                            ]
+                          },
+                          "author": {
+                            "type": [
+                              "null",
+                              "string"
+                            ]
+                          },
+                          "author_fullname": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": [
+                              "null",
+                              "string"
+                            ]
+                          },
+                          "comment_type": {
+                            "type": "null"
+                          },
+                          "controversiality": {
+                            "type": "integer"
+                          },
+                          "created": {
+                            "type": "integer"
+                          },
+                          "created_utc": {
+                            "type": "integer"
+                          },
+                          "distinguished": {
+                            "type": "null"
+                          },
+                          "downs": {
+                            "type": "integer"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "link_id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "parent_id": {
+                            "type": "string"
+                          },
+                          "permalink": {
+                            "type": "string"
+                          },
+                          "replies": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "_meta": {
+                                      "type": "object",
+                                      "properties": {
+                                        "retrieved_2nd_on": {
+                                          "type": "integer"
+                                        },
+                                        "removal_type": {
+                                          "type": "string"
+                                        },
+                                        "was_deleted_later": {
+                                          "type": "boolean"
+                                        },
+                                        "is_edited": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "retrieved_2nd_on"
+                                      ]
+                                    },
+                                    "author": {
+                                      "type": [
+                                        "null",
+                                        "string"
+                                      ]
+                                    },
+                                    "author_fullname": {
+                                      "type": "string"
+                                    },
+                                    "body": {
+                                      "type": [
+                                        "null",
+                                        "string"
+                                      ]
+                                    },
+                                    "comment_type": {
+                                      "type": "null"
+                                    },
+                                    "controversiality": {
+                                      "type": "integer"
+                                    },
+                                    "created": {
+                                      "type": "integer"
+                                    },
+                                    "created_utc": {
+                                      "type": "integer"
+                                    },
+                                    "distinguished": {
+                                      "type": "null"
+                                    },
+                                    "downs": {
+                                      "type": "integer"
+                                    },
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "link_id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "parent_id": {
+                                      "type": "string"
+                                    },
+                                    "permalink": {
+                                      "type": "string"
+                                    },
+                                    "replies": {
+                                      "anyOf": [
+                                        {
+                                          "type": "null"
+                                        },
+                                        {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "_meta": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "retrieved_2nd_on": {
+                                                    "type": "integer"
+                                                  },
+                                                  "is_edited": {
+                                                    "type": "boolean"
+                                                  },
+                                                  "removal_type": {
+                                                    "type": "string"
+                                                  },
+                                                  "was_initially_deleted": {
+                                                    "type": "boolean"
+                                                  },
+                                                  "was_deleted_later": {
+                                                    "type": "boolean"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "retrieved_2nd_on"
+                                                ]
+                                              },
+                                              "author": {
+                                                "type": [
+                                                  "null",
+                                                  "string"
+                                                ]
+                                              },
+                                              "author_fullname": {
+                                                "type": "string"
+                                              },
+                                              "body": {
+                                                "type": [
+                                                  "null",
+                                                  "string"
+                                                ]
+                                              },
+                                              "comment_type": {
+                                                "type": "null"
+                                              },
+                                              "controversiality": {
+                                                "type": "integer"
+                                              },
+                                              "created": {
+                                                "type": "integer"
+                                              },
+                                              "created_utc": {
+                                                "type": "integer"
+                                              },
+                                              "distinguished": {
+                                                "type": "null"
+                                              },
+                                              "downs": {
+                                                "type": "integer"
+                                              },
+                                              "id": {
+                                                "type": "string"
+                                              },
+                                              "link_id": {
+                                                "type": "string"
+                                              },
+                                              "name": {
+                                                "type": "string"
+                                              },
+                                              "parent_id": {
+                                                "type": "string"
+                                              },
+                                              "permalink": {
+                                                "type": "string"
+                                              },
+                                              "replies": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "null"
+                                                  },
+                                                  {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "_meta": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "retrieved_2nd_on": {
+                                                              "type": "integer"
+                                                            },
+                                                            "is_edited": {
+                                                              "type": "boolean"
+                                                            },
+                                                            "removal_type": {
+                                                              "type": "string"
+                                                            },
+                                                            "was_deleted_later": {
+                                                              "type": "boolean"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "retrieved_2nd_on"
+                                                          ]
+                                                        },
+                                                        "author": {
+                                                          "type": [
+                                                            "null",
+                                                            "string"
+                                                          ]
+                                                        },
+                                                        "author_fullname": {
+                                                          "type": "string"
+                                                        },
+                                                        "body": {
+                                                          "type": [
+                                                            "null",
+                                                            "string"
+                                                          ]
+                                                        },
+                                                        "comment_type": {
+                                                          "type": "null"
+                                                        },
+                                                        "controversiality": {
+                                                          "type": "integer"
+                                                        },
+                                                        "created": {
+                                                          "type": "integer"
+                                                        },
+                                                        "created_utc": {
+                                                          "type": "integer"
+                                                        },
+                                                        "distinguished": {
+                                                          "type": "null"
+                                                        },
+                                                        "downs": {
+                                                          "type": "integer"
+                                                        },
+                                                        "id": {
+                                                          "type": "string"
+                                                        },
+                                                        "link_id": {
+                                                          "type": "string"
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "parent_id": {
+                                                          "type": "string"
+                                                        },
+                                                        "permalink": {
+                                                          "type": "string"
+                                                        },
+                                                        "replies": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "null"
+                                                            },
+                                                            {
+                                                              "type": "array",
+                                                              "items": {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                  "_meta": {
+                                                                    "type": "object",
+                                                                    "properties": {
+                                                                      "retrieved_2nd_on": {
+                                                                        "type": "integer"
+                                                                      },
+                                                                      "is_edited": {
+                                                                        "type": "boolean"
+                                                                      },
+                                                                      "removal_type": {
+                                                                        "type": "string"
+                                                                      },
+                                                                      "was_deleted_later": {
+                                                                        "type": "boolean"
+                                                                      }
+                                                                    },
+                                                                    "required": [
+                                                                      "retrieved_2nd_on"
+                                                                    ]
+                                                                  },
+                                                                  "author": {
+                                                                    "type": [
+                                                                      "null",
+                                                                      "string"
+                                                                    ]
+                                                                  },
+                                                                  "author_fullname": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "body": {
+                                                                    "type": [
+                                                                      "null",
+                                                                      "string"
+                                                                    ]
+                                                                  },
+                                                                  "comment_type": {
+                                                                    "type": "null"
+                                                                  },
+                                                                  "controversiality": {
+                                                                    "type": "integer"
+                                                                  },
+                                                                  "created": {
+                                                                    "type": "integer"
+                                                                  },
+                                                                  "created_utc": {
+                                                                    "type": "integer"
+                                                                  },
+                                                                  "distinguished": {
+                                                                    "type": "null"
+                                                                  },
+                                                                  "downs": {
+                                                                    "type": "integer"
+                                                                  },
+                                                                  "id": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "link_id": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "name": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "parent_id": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "permalink": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "replies": {
+                                                                    "anyOf": [
+                                                                      {
+                                                                        "type": "null"
+                                                                      },
+                                                                      {
+                                                                        "type": "array",
+                                                                        "items": {
+                                                                          "type": "object",
+                                                                          "properties": {
+                                                                            "_meta": {
+                                                                              "type": "object",
+                                                                              "properties": {
+                                                                                "retrieved_2nd_on": {
+                                                                                  "type": "integer"
+                                                                                },
+                                                                                "is_edited": {
+                                                                                  "type": "boolean"
+                                                                                },
+                                                                                "removal_type": {
+                                                                                  "type": "string"
+                                                                                },
+                                                                                "was_deleted_later": {
+                                                                                  "type": "boolean"
+                                                                                }
+                                                                              },
+                                                                              "required": [
+                                                                                "retrieved_2nd_on"
+                                                                              ]
+                                                                            },
+                                                                            "author": {
+                                                                              "type": [
+                                                                                "null",
+                                                                                "string"
+                                                                              ]
+                                                                            },
+                                                                            "author_fullname": {
+                                                                              "type": "string"
+                                                                            },
+                                                                            "body": {
+                                                                              "type": [
+                                                                                "null",
+                                                                                "string"
+                                                                              ]
+                                                                            },
+                                                                            "comment_type": {
+                                                                              "type": "null"
+                                                                            },
+                                                                            "controversiality": {
+                                                                              "type": "integer"
+                                                                            },
+                                                                            "created": {
+                                                                              "type": "integer"
+                                                                            },
+                                                                            "created_utc": {
+                                                                              "type": "integer"
+                                                                            },
+                                                                            "distinguished": {
+                                                                              "type": "null"
+                                                                            },
+                                                                            "downs": {
+                                                                              "type": "integer"
+                                                                            },
+                                                                            "id": {
+                                                                              "type": "string"
+                                                                            },
+                                                                            "link_id": {
+                                                                              "type": "string"
+                                                                            },
+                                                                            "name": {
+                                                                              "type": "string"
+                                                                            },
+                                                                            "parent_id": {
+                                                                              "type": "string"
+                                                                            },
+                                                                            "permalink": {
+                                                                              "type": "string"
+                                                                            },
+                                                                            "replies": {
+                                                                              "anyOf": [
+                                                                                {
+                                                                                  "type": "null"
+                                                                                },
+                                                                                {
+                                                                                  "type": "array",
+                                                                                  "items": {
+                                                                                    "type": "object",
+                                                                                    "properties": {
+                                                                                      "_meta": {
+                                                                                        "type": "object",
+                                                                                        "properties": {
+                                                                                          "retrieved_2nd_on": {
+                                                                                            "type": "integer"
+                                                                                          },
+                                                                                          "is_edited": {
+                                                                                            "type": "boolean"
+                                                                                          },
+                                                                                          "removal_type": {
+                                                                                            "type": "string"
+                                                                                          },
+                                                                                          "was_deleted_later": {
+                                                                                            "type": "boolean"
+                                                                                          }
+                                                                                        },
+                                                                                        "required": [
+                                                                                          "retrieved_2nd_on"
+                                                                                        ]
+                                                                                      },
+                                                                                      "author": {
+                                                                                        "type": [
+                                                                                          "null",
+                                                                                          "string"
+                                                                                        ]
+                                                                                      },
+                                                                                      "author_fullname": {
+                                                                                        "type": "string"
+                                                                                      },
+                                                                                      "body": {
+                                                                                        "type": [
+                                                                                          "null",
+                                                                                          "string"
+                                                                                        ]
+                                                                                      },
+                                                                                      "comment_type": {
+                                                                                        "type": "null"
+                                                                                      },
+                                                                                      "controversiality": {
+                                                                                        "type": "integer"
+                                                                                      },
+                                                                                      "created": {
+                                                                                        "type": "integer"
+                                                                                      },
+                                                                                      "created_utc": {
+                                                                                        "type": "integer"
+                                                                                      },
+                                                                                      "distinguished": {
+                                                                                        "type": "null"
+                                                                                      },
+                                                                                      "downs": {
+                                                                                        "type": "integer"
+                                                                                      },
+                                                                                      "id": {
+                                                                                        "type": "string"
+                                                                                      },
+                                                                                      "link_id": {
+                                                                                        "type": "string"
+                                                                                      },
+                                                                                      "name": {
+                                                                                        "type": "string"
+                                                                                      },
+                                                                                      "parent_id": {
+                                                                                        "type": "string"
+                                                                                      },
+                                                                                      "permalink": {
+                                                                                        "type": "string"
+                                                                                      },
+                                                                                      "replies": {
+                                                                                        "anyOf": [
+                                                                                          {
+                                                                                            "type": "null"
+                                                                                          },
+                                                                                          {
+                                                                                            "type": "array",
+                                                                                            "items": {
+                                                                                              "type": "object",
+                                                                                              "properties": {
+                                                                                                "_meta": {
+                                                                                                  "type": "object",
+                                                                                                  "properties": {
+                                                                                                    "retrieved_2nd_on": {
+                                                                                                      "type": "integer"
+                                                                                                    },
+                                                                                                    "removal_type": {
+                                                                                                      "type": "string"
+                                                                                                    },
+                                                                                                    "was_deleted_later": {
+                                                                                                      "type": "boolean"
+                                                                                                    }
+                                                                                                  },
+                                                                                                  "required": [
+                                                                                                    "retrieved_2nd_on"
+                                                                                                  ]
+                                                                                                },
+                                                                                                "author": {
+                                                                                                  "type": [
+                                                                                                    "null",
+                                                                                                    "string"
+                                                                                                  ]
+                                                                                                },
+                                                                                                "author_fullname": {
+                                                                                                  "type": "string"
+                                                                                                },
+                                                                                                "body": {
+                                                                                                  "type": [
+                                                                                                    "null",
+                                                                                                    "string"
+                                                                                                  ]
+                                                                                                },
+                                                                                                "comment_type": {
+                                                                                                  "type": "null"
+                                                                                                },
+                                                                                                "controversiality": {
+                                                                                                  "type": "integer"
+                                                                                                },
+                                                                                                "created": {
+                                                                                                  "type": "integer"
+                                                                                                },
+                                                                                                "created_utc": {
+                                                                                                  "type": "integer"
+                                                                                                },
+                                                                                                "distinguished": {
+                                                                                                  "type": "null"
+                                                                                                },
+                                                                                                "downs": {
+                                                                                                  "type": "integer"
+                                                                                                },
+                                                                                                "id": {
+                                                                                                  "type": "string"
+                                                                                                },
+                                                                                                "link_id": {
+                                                                                                  "type": "string"
+                                                                                                },
+                                                                                                "name": {
+                                                                                                  "type": "string"
+                                                                                                },
+                                                                                                "parent_id": {
+                                                                                                  "type": "string"
+                                                                                                },
+                                                                                                "permalink": {
+                                                                                                  "type": "string"
+                                                                                                },
+                                                                                                "replies": {
+                                                                                                  "anyOf": [
+                                                                                                    {
+                                                                                                      "type": "null"
+                                                                                                    },
+                                                                                                    {
+                                                                                                      "type": "array",
+                                                                                                      "items": {
+                                                                                                        "type": "object",
+                                                                                                        "properties": {
+                                                                                                          "_meta": {
+                                                                                                            "type": "object",
+                                                                                                            "properties": {
+                                                                                                              "retrieved_2nd_on": {
+                                                                                                                "type": "integer"
+                                                                                                              },
+                                                                                                              "removal_type": {
+                                                                                                                "type": "string"
+                                                                                                              },
+                                                                                                              "was_deleted_later": {
+                                                                                                                "type": "boolean"
+                                                                                                              }
+                                                                                                            },
+                                                                                                            "required": [
+                                                                                                              "retrieved_2nd_on"
+                                                                                                            ]
+                                                                                                          },
+                                                                                                          "author": {
+                                                                                                            "type": [
+                                                                                                              "null",
+                                                                                                              "string"
+                                                                                                            ]
+                                                                                                          },
+                                                                                                          "author_fullname": {
+                                                                                                            "type": "string"
+                                                                                                          },
+                                                                                                          "body": {
+                                                                                                            "type": [
+                                                                                                              "null",
+                                                                                                              "string"
+                                                                                                            ]
+                                                                                                          },
+                                                                                                          "comment_type": {
+                                                                                                            "type": "null"
+                                                                                                          },
+                                                                                                          "controversiality": {
+                                                                                                            "type": "integer"
+                                                                                                          },
+                                                                                                          "created": {
+                                                                                                            "type": "integer"
+                                                                                                          },
+                                                                                                          "created_utc": {
+                                                                                                            "type": "integer"
+                                                                                                          },
+                                                                                                          "distinguished": {
+                                                                                                            "type": "null"
+                                                                                                          },
+                                                                                                          "downs": {
+                                                                                                            "type": "integer"
+                                                                                                          },
+                                                                                                          "id": {
+                                                                                                            "type": "string"
+                                                                                                          },
+                                                                                                          "link_id": {
+                                                                                                            "type": "string"
+                                                                                                          },
+                                                                                                          "name": {
+                                                                                                            "type": "string"
+                                                                                                          },
+                                                                                                          "parent_id": {
+                                                                                                            "type": "string"
+                                                                                                          },
+                                                                                                          "permalink": {
+                                                                                                            "type": "string"
+                                                                                                          },
+                                                                                                          "replies": {
+                                                                                                            "anyOf": [
+                                                                                                              {
+                                                                                                                "type": "null"
+                                                                                                              },
+                                                                                                              {
+                                                                                                                "type": "array",
+                                                                                                                "items": {
+                                                                                                                  "type": "object",
+                                                                                                                  "properties": {
+                                                                                                                    "_meta": {
+                                                                                                                      "type": "object",
+                                                                                                                      "properties": {
+                                                                                                                        "retrieved_2nd_on": {
+                                                                                                                          "type": "integer"
+                                                                                                                        },
+                                                                                                                        "removal_type": {
+                                                                                                                          "type": "string"
+                                                                                                                        },
+                                                                                                                        "was_deleted_later": {
+                                                                                                                          "type": "boolean"
+                                                                                                                        }
+                                                                                                                      },
+                                                                                                                      "required": [
+                                                                                                                        "retrieved_2nd_on"
+                                                                                                                      ]
+                                                                                                                    },
+                                                                                                                    "author": {
+                                                                                                                      "type": "string"
+                                                                                                                    },
+                                                                                                                    "author_fullname": {
+                                                                                                                      "type": "string"
+                                                                                                                    },
+                                                                                                                    "body": {
+                                                                                                                      "type": "string"
+                                                                                                                    },
+                                                                                                                    "comment_type": {
+                                                                                                                      "type": "null"
+                                                                                                                    },
+                                                                                                                    "controversiality": {
+                                                                                                                      "type": "integer"
+                                                                                                                    },
+                                                                                                                    "created": {
+                                                                                                                      "type": "integer"
+                                                                                                                    },
+                                                                                                                    "created_utc": {
+                                                                                                                      "type": "integer"
+                                                                                                                    },
+                                                                                                                    "distinguished": {
+                                                                                                                      "type": "null"
+                                                                                                                    },
+                                                                                                                    "downs": {
+                                                                                                                      "type": "integer"
+                                                                                                                    },
+                                                                                                                    "id": {
+                                                                                                                      "type": "string"
+                                                                                                                    },
+                                                                                                                    "link_id": {
+                                                                                                                      "type": "string"
+                                                                                                                    },
+                                                                                                                    "name": {
+                                                                                                                      "type": "string"
+                                                                                                                    },
+                                                                                                                    "parent_id": {
+                                                                                                                      "type": "string"
+                                                                                                                    },
+                                                                                                                    "permalink": {
+                                                                                                                      "type": "string"
+                                                                                                                    },
+                                                                                                                    "replies": {
+                                                                                                                      "anyOf": [
+                                                                                                                        {
+                                                                                                                          "type": "null"
+                                                                                                                        },
+                                                                                                                        {
+                                                                                                                          "type": "array",
+                                                                                                                          "items": {
+                                                                                                                            "type": "object",
+                                                                                                                            "properties": {
+                                                                                                                              "_meta": {
+                                                                                                                                "type": "object",
+                                                                                                                                "properties": {
+                                                                                                                                  "retrieved_2nd_on": {
+                                                                                                                                    "type": "integer"
+                                                                                                                                  },
+                                                                                                                                  "removal_type": {
+                                                                                                                                    "type": "string"
+                                                                                                                                  },
+                                                                                                                                  "was_deleted_later": {
+                                                                                                                                    "type": "boolean"
+                                                                                                                                  }
+                                                                                                                                },
+                                                                                                                                "required": [
+                                                                                                                                  "retrieved_2nd_on"
+                                                                                                                                ]
+                                                                                                                              },
+                                                                                                                              "author": {
+                                                                                                                                "type": "string"
+                                                                                                                              },
+                                                                                                                              "author_fullname": {
+                                                                                                                                "type": "string"
+                                                                                                                              },
+                                                                                                                              "body": {
+                                                                                                                                "type": "string"
+                                                                                                                              },
+                                                                                                                              "comment_type": {
+                                                                                                                                "type": "null"
+                                                                                                                              },
+                                                                                                                              "controversiality": {
+                                                                                                                                "type": "integer"
+                                                                                                                              },
+                                                                                                                              "created": {
+                                                                                                                                "type": "integer"
+                                                                                                                              },
+                                                                                                                              "created_utc": {
+                                                                                                                                "type": "integer"
+                                                                                                                              },
+                                                                                                                              "distinguished": {
+                                                                                                                                "type": "null"
+                                                                                                                              },
+                                                                                                                              "downs": {
+                                                                                                                                "type": "integer"
+                                                                                                                              },
+                                                                                                                              "id": {
+                                                                                                                                "type": "string"
+                                                                                                                              },
+                                                                                                                              "link_id": {
+                                                                                                                                "type": "string"
+                                                                                                                              },
+                                                                                                                              "name": {
+                                                                                                                                "type": "string"
+                                                                                                                              },
+                                                                                                                              "parent_id": {
+                                                                                                                                "type": "string"
+                                                                                                                              },
+                                                                                                                              "permalink": {
+                                                                                                                                "type": "string"
+                                                                                                                              },
+                                                                                                                              "replies": {
+                                                                                                                                "anyOf": [
+                                                                                                                                  {
+                                                                                                                                    "type": "null"
+                                                                                                                                  },
+                                                                                                                                  {
+                                                                                                                                    "type": "array",
+                                                                                                                                    "items": {
+                                                                                                                                      "type": "object",
+                                                                                                                                      "properties": {
+                                                                                                                                        "_meta": {
+                                                                                                                                          "type": "object",
+                                                                                                                                          "properties": {
+                                                                                                                                            "retrieved_2nd_on": {
+                                                                                                                                              "type": "integer"
+                                                                                                                                            },
+                                                                                                                                            "removal_type": {
+                                                                                                                                              "type": "string"
+                                                                                                                                            },
+                                                                                                                                            "was_deleted_later": {
+                                                                                                                                              "type": "boolean"
+                                                                                                                                            }
+                                                                                                                                          },
+                                                                                                                                          "required": [
+                                                                                                                                            "retrieved_2nd_on"
+                                                                                                                                          ]
+                                                                                                                                        },
+                                                                                                                                        "author": {
+                                                                                                                                          "type": "string"
+                                                                                                                                        },
+                                                                                                                                        "author_fullname": {
+                                                                                                                                          "type": "string"
+                                                                                                                                        },
+                                                                                                                                        "body": {
+                                                                                                                                          "type": "string"
+                                                                                                                                        },
+                                                                                                                                        "comment_type": {
+                                                                                                                                          "type": "null"
+                                                                                                                                        },
+                                                                                                                                        "controversiality": {
+                                                                                                                                          "type": "integer"
+                                                                                                                                        },
+                                                                                                                                        "created": {
+                                                                                                                                          "type": "integer"
+                                                                                                                                        },
+                                                                                                                                        "created_utc": {
+                                                                                                                                          "type": "integer"
+                                                                                                                                        },
+                                                                                                                                        "distinguished": {
+                                                                                                                                          "type": "null"
+                                                                                                                                        },
+                                                                                                                                        "downs": {
+                                                                                                                                          "type": "integer"
+                                                                                                                                        },
+                                                                                                                                        "id": {
+                                                                                                                                          "type": "string"
+                                                                                                                                        },
+                                                                                                                                        "link_id": {
+                                                                                                                                          "type": "string"
+                                                                                                                                        },
+                                                                                                                                        "name": {
+                                                                                                                                          "type": "string"
+                                                                                                                                        },
+                                                                                                                                        "parent_id": {
+                                                                                                                                          "type": "string"
+                                                                                                                                        },
+                                                                                                                                        "permalink": {
+                                                                                                                                          "type": "string"
+                                                                                                                                        },
+                                                                                                                                        "replies": {
+                                                                                                                                          "anyOf": [
+                                                                                                                                            {
+                                                                                                                                              "type": "null"
+                                                                                                                                            },
+                                                                                                                                            {
+                                                                                                                                              "type": "array",
+                                                                                                                                              "items": {
+                                                                                                                                                "type": "object",
+                                                                                                                                                "properties": {
+                                                                                                                                                  "_meta": {
+                                                                                                                                                    "type": "object",
+                                                                                                                                                    "properties": {
+                                                                                                                                                      "is_edited": {
+                                                                                                                                                        "type": "boolean"
+                                                                                                                                                      },
+                                                                                                                                                      "retrieved_2nd_on": {
+                                                                                                                                                        "type": "integer"
+                                                                                                                                                      }
+                                                                                                                                                    },
+                                                                                                                                                    "required": [
+                                                                                                                                                      "is_edited",
+                                                                                                                                                      "retrieved_2nd_on"
+                                                                                                                                                    ]
+                                                                                                                                                  },
+                                                                                                                                                  "author": {
+                                                                                                                                                    "type": "string"
+                                                                                                                                                  },
+                                                                                                                                                  "author_fullname": {
+                                                                                                                                                    "type": "string"
+                                                                                                                                                  },
+                                                                                                                                                  "body": {
+                                                                                                                                                    "type": "string"
+                                                                                                                                                  },
+                                                                                                                                                  "comment_type": {
+                                                                                                                                                    "type": "null"
+                                                                                                                                                  },
+                                                                                                                                                  "controversiality": {
+                                                                                                                                                    "type": "integer"
+                                                                                                                                                  },
+                                                                                                                                                  "created": {
+                                                                                                                                                    "type": "integer"
+                                                                                                                                                  },
+                                                                                                                                                  "created_utc": {
+                                                                                                                                                    "type": "integer"
+                                                                                                                                                  },
+                                                                                                                                                  "distinguished": {
+                                                                                                                                                    "type": "null"
+                                                                                                                                                  },
+                                                                                                                                                  "downs": {
+                                                                                                                                                    "type": "integer"
+                                                                                                                                                  },
+                                                                                                                                                  "id": {
+                                                                                                                                                    "type": "string"
+                                                                                                                                                  },
+                                                                                                                                                  "link_id": {
+                                                                                                                                                    "type": "string"
+                                                                                                                                                  },
+                                                                                                                                                  "name": {
+                                                                                                                                                    "type": "string"
+                                                                                                                                                  },
+                                                                                                                                                  "parent_id": {
+                                                                                                                                                    "type": "string"
+                                                                                                                                                  },
+                                                                                                                                                  "permalink": {
+                                                                                                                                                    "type": "string"
+                                                                                                                                                  },
+                                                                                                                                                  "replies": {
+                                                                                                                                                    "type": "null"
+                                                                                                                                                  },
+                                                                                                                                                  "retrieved_on": {
+                                                                                                                                                    "type": "integer"
+                                                                                                                                                  },
+                                                                                                                                                  "score": {
+                                                                                                                                                    "type": "integer"
+                                                                                                                                                  },
+                                                                                                                                                  "ups": {
+                                                                                                                                                    "type": "integer"
+                                                                                                                                                  }
+                                                                                                                                                },
+                                                                                                                                                "required": [
+                                                                                                                                                  "_meta",
+                                                                                                                                                  "author",
+                                                                                                                                                  "author_fullname",
+                                                                                                                                                  "body",
+                                                                                                                                                  "comment_type",
+                                                                                                                                                  "controversiality",
+                                                                                                                                                  "created",
+                                                                                                                                                  "created_utc",
+                                                                                                                                                  "distinguished",
+                                                                                                                                                  "downs",
+                                                                                                                                                  "id",
+                                                                                                                                                  "link_id",
+                                                                                                                                                  "name",
+                                                                                                                                                  "parent_id",
+                                                                                                                                                  "permalink",
+                                                                                                                                                  "replies",
+                                                                                                                                                  "retrieved_on",
+                                                                                                                                                  "score",
+                                                                                                                                                  "ups"
+                                                                                                                                                ]
+                                                                                                                                              }
+                                                                                                                                            }
+                                                                                                                                          ]
+                                                                                                                                        },
+                                                                                                                                        "retrieved_on": {
+                                                                                                                                          "type": "integer"
+                                                                                                                                        },
+                                                                                                                                        "score": {
+                                                                                                                                          "type": "integer"
+                                                                                                                                        },
+                                                                                                                                        "ups": {
+                                                                                                                                          "type": "integer"
+                                                                                                                                        }
+                                                                                                                                      },
+                                                                                                                                      "required": [
+                                                                                                                                        "_meta",
+                                                                                                                                        "author",
+                                                                                                                                        "author_fullname",
+                                                                                                                                        "body",
+                                                                                                                                        "comment_type",
+                                                                                                                                        "controversiality",
+                                                                                                                                        "created",
+                                                                                                                                        "created_utc",
+                                                                                                                                        "distinguished",
+                                                                                                                                        "downs",
+                                                                                                                                        "id",
+                                                                                                                                        "link_id",
+                                                                                                                                        "name",
+                                                                                                                                        "parent_id",
+                                                                                                                                        "permalink",
+                                                                                                                                        "replies",
+                                                                                                                                        "retrieved_on",
+                                                                                                                                        "score",
+                                                                                                                                        "ups"
+                                                                                                                                      ]
+                                                                                                                                    }
+                                                                                                                                  }
+                                                                                                                                ]
+                                                                                                                              },
+                                                                                                                              "retrieved_on": {
+                                                                                                                                "type": "integer"
+                                                                                                                              },
+                                                                                                                              "score": {
+                                                                                                                                "type": "integer"
+                                                                                                                              },
+                                                                                                                              "ups": {
+                                                                                                                                "type": "integer"
+                                                                                                                              }
+                                                                                                                            },
+                                                                                                                            "required": [
+                                                                                                                              "_meta",
+                                                                                                                              "author",
+                                                                                                                              "author_fullname",
+                                                                                                                              "body",
+                                                                                                                              "comment_type",
+                                                                                                                              "controversiality",
+                                                                                                                              "created",
+                                                                                                                              "created_utc",
+                                                                                                                              "distinguished",
+                                                                                                                              "downs",
+                                                                                                                              "id",
+                                                                                                                              "link_id",
+                                                                                                                              "name",
+                                                                                                                              "parent_id",
+                                                                                                                              "permalink",
+                                                                                                                              "replies",
+                                                                                                                              "retrieved_on",
+                                                                                                                              "score",
+                                                                                                                              "ups"
+                                                                                                                            ]
+                                                                                                                          }
+                                                                                                                        }
+                                                                                                                      ]
+                                                                                                                    },
+                                                                                                                    "retrieved_on": {
+                                                                                                                      "type": "integer"
+                                                                                                                    },
+                                                                                                                    "score": {
+                                                                                                                      "type": "integer"
+                                                                                                                    },
+                                                                                                                    "ups": {
+                                                                                                                      "type": "integer"
+                                                                                                                    }
+                                                                                                                  },
+                                                                                                                  "required": [
+                                                                                                                    "_meta",
+                                                                                                                    "author",
+                                                                                                                    "author_fullname",
+                                                                                                                    "body",
+                                                                                                                    "comment_type",
+                                                                                                                    "controversiality",
+                                                                                                                    "created",
+                                                                                                                    "created_utc",
+                                                                                                                    "distinguished",
+                                                                                                                    "downs",
+                                                                                                                    "id",
+                                                                                                                    "link_id",
+                                                                                                                    "name",
+                                                                                                                    "parent_id",
+                                                                                                                    "permalink",
+                                                                                                                    "replies",
+                                                                                                                    "retrieved_on",
+                                                                                                                    "score",
+                                                                                                                    "ups"
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              }
+                                                                                                            ]
+                                                                                                          },
+                                                                                                          "retrieved_on": {
+                                                                                                            "type": "integer"
+                                                                                                          },
+                                                                                                          "score": {
+                                                                                                            "type": "integer"
+                                                                                                          },
+                                                                                                          "ups": {
+                                                                                                            "type": "integer"
+                                                                                                          }
+                                                                                                        },
+                                                                                                        "required": [
+                                                                                                          "_meta",
+                                                                                                          "author",
+                                                                                                          "body",
+                                                                                                          "comment_type",
+                                                                                                          "controversiality",
+                                                                                                          "created",
+                                                                                                          "created_utc",
+                                                                                                          "distinguished",
+                                                                                                          "downs",
+                                                                                                          "id",
+                                                                                                          "link_id",
+                                                                                                          "name",
+                                                                                                          "parent_id",
+                                                                                                          "permalink",
+                                                                                                          "replies",
+                                                                                                          "retrieved_on",
+                                                                                                          "score",
+                                                                                                          "ups"
+                                                                                                        ]
+                                                                                                      }
+                                                                                                    }
+                                                                                                  ]
+                                                                                                },
+                                                                                                "retrieved_on": {
+                                                                                                  "type": "integer"
+                                                                                                },
+                                                                                                "score": {
+                                                                                                  "type": "integer"
+                                                                                                },
+                                                                                                "ups": {
+                                                                                                  "type": "integer"
+                                                                                                }
+                                                                                              },
+                                                                                              "required": [
+                                                                                                "_meta",
+                                                                                                "author",
+                                                                                                "body",
+                                                                                                "comment_type",
+                                                                                                "controversiality",
+                                                                                                "created",
+                                                                                                "created_utc",
+                                                                                                "distinguished",
+                                                                                                "downs",
+                                                                                                "id",
+                                                                                                "link_id",
+                                                                                                "name",
+                                                                                                "parent_id",
+                                                                                                "permalink",
+                                                                                                "replies",
+                                                                                                "retrieved_on",
+                                                                                                "score",
+                                                                                                "ups"
+                                                                                              ]
+                                                                                            }
+                                                                                          }
+                                                                                        ]
+                                                                                      },
+                                                                                      "retrieved_on": {
+                                                                                        "type": "integer"
+                                                                                      },
+                                                                                      "score": {
+                                                                                        "type": "integer"
+                                                                                      },
+                                                                                      "ups": {
+                                                                                        "type": "integer"
+                                                                                      }
+                                                                                    },
+                                                                                    "required": [
+                                                                                      "_meta",
+                                                                                      "author",
+                                                                                      "body",
+                                                                                      "comment_type",
+                                                                                      "controversiality",
+                                                                                      "created",
+                                                                                      "created_utc",
+                                                                                      "distinguished",
+                                                                                      "downs",
+                                                                                      "id",
+                                                                                      "link_id",
+                                                                                      "name",
+                                                                                      "parent_id",
+                                                                                      "permalink",
+                                                                                      "replies",
+                                                                                      "retrieved_on",
+                                                                                      "score",
+                                                                                      "ups"
+                                                                                    ]
+                                                                                  }
+                                                                                }
+                                                                              ]
+                                                                            },
+                                                                            "retrieved_on": {
+                                                                              "type": "integer"
+                                                                            },
+                                                                            "score": {
+                                                                              "type": "integer"
+                                                                            },
+                                                                            "ups": {
+                                                                              "type": "integer"
+                                                                            }
+                                                                          },
+                                                                          "required": [
+                                                                            "_meta",
+                                                                            "author",
+                                                                            "body",
+                                                                            "comment_type",
+                                                                            "controversiality",
+                                                                            "created",
+                                                                            "created_utc",
+                                                                            "distinguished",
+                                                                            "downs",
+                                                                            "id",
+                                                                            "link_id",
+                                                                            "name",
+                                                                            "parent_id",
+                                                                            "permalink",
+                                                                            "replies",
+                                                                            "retrieved_on",
+                                                                            "score",
+                                                                            "ups"
+                                                                          ]
+                                                                        }
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  "retrieved_on": {
+                                                                    "type": "integer"
+                                                                  },
+                                                                  "score": {
+                                                                    "type": "integer"
+                                                                  },
+                                                                  "ups": {
+                                                                    "type": "integer"
+                                                                  }
+                                                                },
+                                                                "required": [
+                                                                  "_meta",
+                                                                  "author",
+                                                                  "body",
+                                                                  "comment_type",
+                                                                  "controversiality",
+                                                                  "created",
+                                                                  "created_utc",
+                                                                  "distinguished",
+                                                                  "downs",
+                                                                  "id",
+                                                                  "link_id",
+                                                                  "name",
+                                                                  "parent_id",
+                                                                  "permalink",
+                                                                  "replies",
+                                                                  "retrieved_on",
+                                                                  "score",
+                                                                  "ups"
+                                                                ]
+                                                              }
+                                                            }
+                                                          ]
+                                                        },
+                                                        "retrieved_on": {
+                                                          "type": "integer"
+                                                        },
+                                                        "score": {
+                                                          "type": "integer"
+                                                        },
+                                                        "ups": {
+                                                          "type": "integer"
+                                                        },
+                                                        "author_cakeday": {
+                                                          "type": "boolean"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "_meta",
+                                                        "author",
+                                                        "body",
+                                                        "comment_type",
+                                                        "controversiality",
+                                                        "created",
+                                                        "created_utc",
+                                                        "distinguished",
+                                                        "downs",
+                                                        "id",
+                                                        "link_id",
+                                                        "name",
+                                                        "parent_id",
+                                                        "permalink",
+                                                        "replies",
+                                                        "retrieved_on",
+                                                        "score",
+                                                        "ups"
+                                                      ]
+                                                    }
+                                                  }
+                                                ]
+                                              },
+                                              "retrieved_on": {
+                                                "type": "integer"
+                                              },
+                                              "score": {
+                                                "type": "integer"
+                                              },
+                                              "ups": {
+                                                "type": "integer"
+                                              },
+                                              "editable": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "_meta",
+                                              "author",
+                                              "body",
+                                              "comment_type",
+                                              "controversiality",
+                                              "created",
+                                              "created_utc",
+                                              "distinguished",
+                                              "downs",
+                                              "id",
+                                              "link_id",
+                                              "name",
+                                              "parent_id",
+                                              "permalink",
+                                              "replies",
+                                              "retrieved_on",
+                                              "score",
+                                              "ups"
+                                            ]
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    "retrieved_on": {
+                                      "type": "integer"
+                                    },
+                                    "score": {
+                                      "type": "integer"
+                                    },
+                                    "ups": {
+                                      "type": "integer"
+                                    },
+                                    "author_cakeday": {
+                                      "type": "boolean"
+                                    },
+                                    "editable": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "_meta",
+                                    "author",
+                                    "body",
+                                    "comment_type",
+                                    "controversiality",
+                                    "created",
+                                    "created_utc",
+                                    "distinguished",
+                                    "downs",
+                                    "id",
+                                    "link_id",
+                                    "name",
+                                    "parent_id",
+                                    "permalink",
+                                    "replies",
+                                    "retrieved_on",
+                                    "score",
+                                    "ups"
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          "retrieved_on": {
+                            "type": "integer"
+                          },
+                          "score": {
+                            "type": "integer"
+                          },
+                          "ups": {
+                            "type": "integer"
+                          },
+                          "editable": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "_meta",
+                          "author",
+                          "body",
+                          "comment_type",
+                          "controversiality",
+                          "created",
+                          "created_utc",
+                          "distinguished",
+                          "downs",
+                          "id",
+                          "link_id",
+                          "name",
+                          "parent_id",
+                          "permalink",
+                          "replies",
+                          "retrieved_on",
+                          "score",
+                          "ups"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                "retrieved_on": {
+                  "type": "integer"
+                },
+                "score": {
+                  "type": "integer"
+                },
+                "ups": {
+                  "type": "integer"
+                },
+                "author_cakeday": {
+                  "type": "boolean"
+                },
+                "editable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "_meta",
+                "author",
+                "body",
+                "comment_type",
+                "controversiality",
+                "created",
+                "created_utc",
+                "distinguished",
+                "downs",
+                "id",
+                "link_id",
+                "name",
+                "parent_id",
+                "permalink",
+                "replies",
+                "retrieved_on",
+                "score",
+                "ups"
+              ]
+            }
+          },
+          "created": {
+            "type": "integer"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "downs": {
+            "type": "integer"
+          },
+          "edited": {
+            "type": "boolean"
+          },
+          "extracted_topics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "likes": {
+            "type": "null"
+          },
+          "name": {
+            "type": "string"
+          },
+          "num_comments": {
+            "type": "integer"
+          },
+          "options_count": {
+            "type": "null"
+          },
+          "permalink": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "removed_by": {
+            "type": "null"
+          },
+          "retrieved_on": {
+            "type": "integer"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "score": {
+            "type": "integer"
+          },
+          "search_results": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "content_analysis": {
+                    "type": "string"
+                  },
+                  "content_fetched": {
+                    "type": "boolean"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "displayed_link": {
+                    "type": "string"
+                  },
+                  "extended_sitelinks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "link": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "link",
+                        "title"
+                      ]
+                    }
+                  },
+                  "favicon": {
+                    "type": "string"
+                  },
+                  "fetched_content": {
+                    "type": "string"
+                  },
+                  "link": {
+                    "type": "string"
+                  },
+                  "missing": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "page_rank": {
+                    "type": "integer"
+                  },
+                  "rank": {
+                    "type": "integer"
+                  },
+                  "snippet": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "date",
+                  "displayed_link",
+                  "favicon",
+                  "link",
+                  "missing",
+                  "page_rank",
+                  "rank",
+                  "snippet",
+                  "title"
+                ]
+              }
+            }
+          },
+          "selftext": {
+            "type": "string"
+          },
+          "send_replies": {
+            "type": "boolean"
+          },
+          "subreddit": {
+            "type": "string"
+          },
+          "subreddit_id": {
+            "type": "string"
+          },
+          "subreddit_name_prefixed": {
+            "type": "string"
+          },
+          "subreddit_subscribers": {
+            "type": "integer"
+          },
+          "subreddit_type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "ups": {
+            "type": "integer"
+          },
+          "upvote_ratio": {
+            "type": "number"
+          },
+          "url": {
+            "type": "string"
+          },
+          "url_overridden_by_dest": {
+            "type": "string"
+          },
+          "user_reports": {
+            "type": "array"
+          },
+          "view_count": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "analysis_timestamp",
+          "angles",
+          "author",
+          "author_fullname",
+          "comments",
+          "created",
+          "domain",
+          "downs",
+          "edited",
+          "extracted_topics",
+          "id",
+          "likes",
+          "name",
+          "num_comments",
+          "options_count",
+          "permalink",
+          "pinned",
+          "removed_by",
+          "retrieved_on",
+          "saved",
+          "score",
+          "search_results",
+          "selftext",
+          "send_replies",
+          "subreddit",
+          "subreddit_id",
+          "subreddit_name_prefixed",
+          "subreddit_subscribers",
+          "subreddit_type",
+          "title",
+          "ups",
+          "upvote_ratio",
+          "url",
+          "url_overridden_by_dest",
+          "user_reports",
+          "view_count"
+        ]
+      }
+    },
+    "required": [
+      "embedding",
+      "post",
+      "stegoText"
+    ]
+  }
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,8 +14,21 @@ REPO_ROOT = ANGLES_DIR.parent.parent
 SYSTEM_PROMPT_PATH = ANGLES_DIR / "systemPrompt.txt"
 USER_PROMPT_PATH = ANGLES_DIR / "userPrompt.txt"
 
+ANGLES_CACHE_DIR = REPO_ROOT / "datasets" / "angles_cache"
+
 SYSTEM_PROMPT = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 USER_PROMPT_TEMPLATE = USER_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def deterministic_hash_sha256(input_string: str) -> str:
+    """
+    Hashes a string deterministically using SHA-256.
+    """
+    encoded_string = input_string.encode("utf-8")
+    hasher = hashlib.sha256()
+    hasher.update(encoded_string)
+    return hasher.hexdigest()
+
 
 LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.100.136:1234/v1")
 LM_STUDIO_API_TOKEN = os.environ.get("LM_STUDIO_API_TOKEN", "lm-studio")
@@ -163,9 +177,7 @@ def _call_llm_with_messages(messages: List[Dict[str, str]]) -> str:
         "Content-Type": "application/json",
     }
 
-    response = requests.post(
-        CHAT_ENDPOINT, json=payload, headers=headers, timeout=REQUEST_TIMEOUT
-    )
+    response = requests.post(CHAT_ENDPOINT, json=payload, headers=headers)
     response.raise_for_status()
     data = response.json()
 
@@ -234,24 +246,56 @@ def _parse_or_repair(raw_text: str) -> List[Dict[str, str]]:
 
 
 def analyze_angles_from_texts(texts: List[str]) -> List[Dict[str, str]]:
-    segments: List[str] = []
+    all_responses: List[Dict[str, str]] = []
+
+    # Ensure cache directory exists
+    ANGLES_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
     for text in texts:
-        segments.extend(_split_long_text(text, MAX_CHARS_PER_TEXT))
+        text = text.strip()
+        if not text:
+            continue
 
-    if not segments:
-        raise ValueError("No valid text chunks found for analysis")
+        cache_key = deterministic_hash_sha256(text)
+        cache_file = ANGLES_CACHE_DIR / f"{cache_key}.json"
 
-    batches = _make_batches(segments, MAX_CHARS_PER_PROMPT)
-    responses: List[Dict[str, str]] = []
+        if cache_file.exists():
+            print(f"📂 Cache HIT for angles analysis (text hash: {cache_key[:10]}...)")
+            try:
+                cached_data = json.loads(cache_file.read_text(encoding="utf-8"))
+                all_responses.extend(cached_data)
+                continue
+            except Exception as e:
+                print(f"⚠️ Error reading cache for text {cache_key}: {e}")
 
-    for idx, batch in enumerate(batches, start=1):
-        user_prompt = _build_user_prompt(batch)
-        _log_prompt(user_prompt, idx, len(batches))
-        answer = _call_llm(user_prompt)
-        validated = _parse_or_repair(answer)
-        responses.extend(validated)
+        print(f"📂 Cache MISS for angles analysis (text hash: {cache_key[:10]}...)")
 
-    return responses
+        segments = _split_long_text(text, MAX_CHARS_PER_TEXT)
+        if not segments:
+            continue
+
+        batches = _make_batches(segments, MAX_CHARS_PER_PROMPT)
+        text_responses: List[Dict[str, str]] = []
+
+        for idx, batch in enumerate(batches, start=1):
+            user_prompt = _build_user_prompt(batch)
+            _log_prompt(user_prompt, idx, len(batches))
+            answer = _call_llm(user_prompt)
+            validated = _parse_or_repair(answer)
+            text_responses.extend(validated)
+
+        # Cache results for this specific text
+        try:
+            cache_file.write_text(
+                json.dumps(text_responses, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            print(f"⚠️ Error saving cache for text {cache_key}: {e}")
+
+        all_responses.extend(text_responses)
+
+    return all_responses
 
 
 __all__ = ["analyze_angles_from_texts"]

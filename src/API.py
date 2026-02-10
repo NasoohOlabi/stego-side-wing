@@ -136,7 +136,7 @@ def posts_list():
         key=lambda f: os.path.getsize(os.path.join(src_dir, f)), reverse=True
     )
 
-    return jsonify({"fileNames": json_files[offset : offset + count]}), 200
+    return jsonify({"fileNames": json_files[offset: offset + count]}), 200
 
 
 @app.route("/search", methods=["GET"])
@@ -265,7 +265,8 @@ async def main():
 
 class ArticleData(BaseModel):
     title: str = Field(..., description="The main headline of the article")
-    summary: str = Field(..., description="A 2-sentence summary of the content")
+    summary: str = Field(...,
+                         description="A 2-sentence summary of the content")
     key_points: list[str] = Field(..., description="List of 3-5 key takeaways")
     author: str = Field(
         default="Unknown", description="Name of the author if available"
@@ -466,7 +467,8 @@ def get_semantic_model():
 
             # Load model with explicit device specification
             # The device parameter ensures the model is initialized on a real device
-            _semantic_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
+            _semantic_model = SentenceTransformer(
+                "all-MiniLM-L6-v2", device=device)
 
             # Verify model is on correct device and not meta
             # Access a parameter to ensure it's properly initialized
@@ -647,16 +649,19 @@ def find_best_match(needle: str, haystack: list):
         ImportError: If required libraries are not available
     """
     if not needle or not isinstance(needle, str):
-        raise ValueError("Missing or invalid 'needle' field (must be a string)")
+        raise ValueError(
+            "Missing or invalid 'needle' field (must be a string)")
 
     if not haystack or not isinstance(haystack, list):
-        raise ValueError("Missing or invalid 'haystack' field (must be a list)")
+        raise ValueError(
+            "Missing or invalid 'haystack' field (must be a list)")
 
     if len(haystack) == 0:
         raise ValueError("Haystack cannot be empty")
 
     # Convert all haystack items to strings
-    haystack_strings = [str(doc) if doc is not None else "" for doc in haystack]
+    haystack_strings = [
+        str(doc) if doc is not None else "" for doc in haystack]
 
     # Filter out empty strings
     if not any(haystack_strings):
@@ -670,7 +675,8 @@ def find_best_match(needle: str, haystack: list):
 
     # Generate embeddings
     needle_embedding = model.encode(needle, convert_to_tensor=True)
-    haystack_embeddings = model.encode(haystack_strings, convert_to_tensor=True)
+    haystack_embeddings = model.encode(
+        haystack_strings, convert_to_tensor=True)
 
     # Calculate cosine similarity
     cosine_scores = util.cos_sim(needle_embedding, haystack_embeddings)[0]
@@ -857,7 +863,8 @@ def migrate_json_to_sqlite():
         conn.commit()
         conn.close()
 
-        print(f"Successfully migrated {migrated_count} key-value pairs to SQLite.")
+        print(
+            f"Successfully migrated {migrated_count} key-value pairs to SQLite.")
 
         # Backup the old file by renaming it
         backup_file = f"{OLD_DB_FILE}.backup"
@@ -875,7 +882,8 @@ def init_db():
     """Initialize the SQLite database and create the kv table if it doesn't exist."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
     conn.commit()
     conn.close()
 
@@ -901,7 +909,8 @@ def set_value():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value_json)
+        "INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key,
+                                                                 value_json)
     )
     conn.commit()
     conn.close()
@@ -996,7 +1005,8 @@ def bing_search():
     if not api_key:
         return jsonify({"error": "ScrapingDog API key not configured"}), 500
 
-    params = {"query": query, "first": first, "count": count, "api_key": api_key}
+    params = {"query": query, "first": first,
+              "count": count, "api_key": api_key}
 
     try:
         resp = requests.get(
@@ -1007,7 +1017,8 @@ def bing_search():
         return jsonify(
             {
                 "results": [
-                    {"title": x["title"], "link": x["link"], "snippet": x["snippet"]}
+                    {"title": x["title"], "link": x["link"],
+                        "snippet": x["snippet"]}
                     for x in data["bing_data"]
                 ]
             }
@@ -1062,7 +1073,8 @@ def add_cache_header(func):
                 response_obj = make_response(response[0], response[1])
             elif len(response) == 3:
                 # (data, status_code, headers)
-                response_obj = make_response(response[0], response[1], response[2])
+                response_obj = make_response(
+                    response[0], response[1], response[2])
             else:
                 response_obj = make_response(response[0])
         else:
@@ -1198,7 +1210,8 @@ def google_search():
 
     # Try each API key sequentially until one succeeds
     errors = []
-    print(f"[DEBUG] Attempting to fetch results with {len(api_keys)} API key(s)...")
+    print(
+        f"[DEBUG] Attempting to fetch results with {len(api_keys)} API key(s)...")
     for idx, api_key in enumerate(api_keys, 1):
         print(f"[DEBUG] Trying API key {idx}/{len(api_keys)}...")
         params = {
@@ -1250,7 +1263,8 @@ def google_search():
 
             # Check if "items" key exists (may be missing if no results)
             if "items" not in data:
-                print(f"[DEBUG] WARNING: No 'items' key in response (key {idx})")
+                print(
+                    f"[DEBUG] WARNING: No 'items' key in response (key {idx})")
                 print(f"[DEBUG] Response data keys: {list(data.keys())}")
                 print("-" * 100)
                 print("[DEBUG] No items found")
@@ -1299,7 +1313,8 @@ def google_search():
             return response_obj
         except requests.RequestException as e:
             # Store error and try next key
-            print(f"[DEBUG] RequestException with API key {idx}/{len(api_keys)}:")
+            print(
+                f"[DEBUG] RequestException with API key {idx}/{len(api_keys)}:")
             print(f"[DEBUG]   Exception type: {type(e).__name__}")
             print(f"[DEBUG]   Exception message: {str(e)}")
             if hasattr(e, "response") and e.response is not None:
@@ -1387,6 +1402,6 @@ if __name__ == "__main__":
     print(f"Database file: {os.path.abspath(DB_FILE)}")
     print("Starting server...")
     try:
-        app.run(debug=False, port=5000)
+        app.run(host="192.168.100.136", port=5001, debug=False)
     finally:
         stop_event_loop()

@@ -240,6 +240,35 @@ def save_post():
     )
 
 
+@app.route("/save_object", methods=["POST"])
+def save_object():
+    """
+    Saves the request JSON body as-is to step's dest_dir with provided filename.
+    """
+    step = request.args.get("step", type=str)
+    if not step or step not in steps:
+        return jsonify({"error": "Missing or invalid 'step' query param"}), 400
+
+    filename = request.args.get("filename", type=str)
+    if not filename:
+        return jsonify({"error": "Missing 'filename' query param"}), 400
+    if os.path.basename(filename) != filename:
+        return jsonify({"error": "'filename' must not contain directory separators"}), 400
+
+    data = request.get_json()
+    if data is None:
+        return jsonify({"error": "Invalid or missing JSON body"}), 400
+
+    dest_dir = steps[step]["dest_dir"]
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_file_path = os.path.join(dest_dir, filename)
+
+    with open(dest_file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    return jsonify({"success": True, "filename": filename, "path": dest_file_path}), 200
+
+
 @app.route("/fetch_url_content", methods=["POST"])
 async def fetch_url_content():
     url = request.args.get("url", type=str)

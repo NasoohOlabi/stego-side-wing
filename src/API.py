@@ -203,6 +203,43 @@ def get_post():
         return jsonify(post), 200
 
 
+@app.route("/save_post", methods=["POST"])
+def save_post():
+    """
+    Saves a post JSON to the step's dest_dir. Filename is {post_id}.json.
+    Requires step (query param) and JSON body with post (must include id).
+    """
+    step = request.args.get("step", type=str)
+    if not step or step not in steps:
+        return jsonify({"error": "Missing or invalid 'step' query param"}), 400
+
+    post = request.get_json()
+    if post is None:
+        return jsonify({"error": "Invalid or missing JSON body"}), 400
+
+    post_id = post.get("id")
+    if not post_id:
+        return jsonify({"error": "Post must include 'id' field"}), 400
+
+    dest_dir = steps[step]["dest_dir"]
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_file_path = os.path.join(dest_dir, f"{post_id}.json")
+
+    with open(dest_file_path, "w", encoding="utf-8") as f:
+        json.dump(post, f, indent=2, ensure_ascii=False)
+
+    return (
+        jsonify(
+            {
+                "success": True,
+                "filename": f"{post_id}.json",
+                "path": dest_file_path,
+            }
+        ),
+        200,
+    )
+
+
 @app.route("/fetch_url_content", methods=["POST"])
 async def fetch_url_content():
     url = request.args.get("url", type=str)

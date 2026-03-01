@@ -183,6 +183,57 @@ def search():
         return jsonify(e), 500
 
 
+def cleanup_post_data(post_data):
+    """Clean up post data dynamically."""
+    if not post_data:
+        return post_data
+        
+    target_obj = post_data.get("data", post_data)
+    
+    # Clean search_results to be strictly string[]
+    if "search_results" in target_obj:
+        search_results = target_obj["search_results"]
+        if isinstance(search_results, dict):
+            flat_list = []
+            for k, v in search_results.items():
+                if isinstance(v, list):
+                    flat_list.extend(v)
+                else:
+                    flat_list.append(v)
+            search_results = flat_list
+            
+        if isinstance(search_results, list):
+            cleaned_results = []
+            for item in search_results:
+                if isinstance(item, str):
+                    if item.strip():
+                        cleaned_results.append(item.strip())
+                elif isinstance(item, dict):
+                    cleaned_results.append(json.dumps(item))
+                else:
+                    cleaned_results.append(str(item))
+            target_obj["search_results"] = cleaned_results
+
+    # Clean angles to be a flat list
+    if "angles" in target_obj:
+        angles = target_obj["angles"]
+        if isinstance(angles, dict):
+            if all(isinstance(item, list) for item in angles.values()):
+                angles = [
+                    item
+                    for sublist in angles.values()
+                    for item in sublist
+                    if item != ""
+                ]
+            else:
+                pass
+        
+        if isinstance(angles, list):
+            target_obj["angles"] = [item for item in angles if item != ""]
+
+    return post_data
+
+
 @app.route("/get_post", methods=["GET"])
 def get_post():
     """
@@ -200,6 +251,7 @@ def get_post():
         encoding="utf-8",
     ) as f:
         post = json.load(f)
+        post = cleanup_post_data(post)
         return jsonify(post), 200
 
 
@@ -1163,7 +1215,7 @@ def google_search():
       - query: the search query string (required)
       - first: starting index (optional, default 1)
       - count: number of results to return (optional, default 10)
-    Requires Google API key and Custom Search Engine ID via GOOGLE_API_KEY_1-4 and GOOGLE_CSE_ID env vars (or in .env).
+    Requires Google API key and Custom Search Engine ID via GOOGLE_API_KEY_1-6 and GOOGLE_CSE_ID env vars (or in .env).
     Tries each API key sequentially until one succeeds.
     Only caches successful responses (200 status), not errors.
     """
@@ -1252,10 +1304,10 @@ def google_search():
         response_obj.headers["X-Cache-Status"] = "MISS"
         return response_obj
 
-    # Retrieve API keys from environment or dotenv (try GOOGLE_API_KEY_1 through GOOGLE_API_KEY_4)
+    # Retrieve API keys from environment or dotenv (try GOOGLE_API_KEY_1 through GOOGLE_API_KEY_6)
     print("[DEBUG] Retrieving API keys...")
     api_keys = []
-    for i in range(1, 6):
+    for i in range(1, 4):
         key_name = f"GOOGLE_API_KEY_{i}"
         api_key = os.environ.get(key_name)
         if not api_key:
@@ -1273,6 +1325,36 @@ def google_search():
         response_obj = make_response(response[0], response[1])
         response_obj.headers["X-Cache-Status"] = "MISS"
         return response_obj
+
+    def _extract_google_error(error_payload):
+        """Return compact error details from Google error payloads."""
+        if not isinstance(error_payload, dict):
+            return None, "UNKNOWN", "Unknown upstream error"
+
+        google_error = error_payload.get("error", {})
+        if not isinstance(google_error, dict):
+            return None, "UNKNOWN", "Unknown upstream error"
+
+        code = google_error.get("code")
+        message = google_error.get("message", "Unknown upstream error")
+
+        reason = None
+        errors_list = google_error.get("errors")
+        if isinstance(errors_list, list) and errors_list:
+            first_error = errors_list[0]
+            if isinstance(first_error, dict):
+                reason = first_error.get("reason")
+
+        if not reason:
+            details = google_error.get("details")
+            if isinstance(details, list):
+                for detail in details:
+                    if isinstance(detail, dict) and detail.get("reason"):
+                        reason = detail.get("reason")
+                        break
+
+        reason = reason or google_error.get("status") or "UNKNOWN"
+        return code, reason, message
 
     # Try each API key sequentially until one succeeds
     errors = []
@@ -1304,18 +1386,19 @@ def google_search():
 
             # Check for error in JSON response (Google API sometimes returns errors in JSON with 200 status)
             if "error" in data:
-                error_info = data.get("error", {})
-                error_message = error_info.get("message", "Unknown error")
-                error_code = error_info.get("code", "Unknown")
+                error_code, error_reason, error_message = _extract_google_error(
+                    data)
                 print(f"[DEBUG] ERROR in API response (key {idx}):")
                 print(f"[DEBUG]   Error code: {error_code}")
+                print(f"[DEBUG]   Error reason: {error_reason}")
                 print(f"[DEBUG]   Error message: {error_message}")
                 print(f"[DEBUG]   Full error data: {data}")
                 errors.append(
                     {
                         "key_index": idx,
-                        "error": f"API error: {error_message}",
-                        "data": data,
+                        "status_code": error_code,
+                        "reason": error_reason,
+                        "message": error_message,
                     }
                 )
                 # log the data
@@ -1383,18 +1466,30 @@ def google_search():
                 f"[DEBUG] RequestException with API key {idx}/{len(api_keys)}:")
             print(f"[DEBUG]   Exception type: {type(e).__name__}")
             print(f"[DEBUG]   Exception message: {str(e)}")
+            status_code = None
+            error_reason = type(e).__name__
+            error_message = str(e)
             if hasattr(e, "response") and e.response is not None:
                 print(f"[DEBUG]   Response status: {e.response.status_code}")
+                status_code = e.response.status_code
                 try:
                     error_data = e.response.json()
                     print(f"[DEBUG]   Response JSON: {error_data}")
+                    parsed_code, parsed_reason, parsed_message = _extract_google_error(
+                        error_data
+                    )
+                    if parsed_code is not None:
+                        status_code = parsed_code
+                    error_reason = parsed_reason
+                    error_message = parsed_message
                 except Exception:
                     print(f"[DEBUG]   Response text: {e.response.text[:200]}")
             errors.append(
                 {
                     "key_index": idx,
-                    "error": str(e),
-                    "data": data,
+                    "status_code": status_code,
+                    "reason": error_reason,
+                    "message": error_message,
                 }
             )
             print("[DEBUG] Trying next API key...")
@@ -1404,15 +1499,27 @@ def google_search():
     print(f"[DEBUG] ERROR: All {len(api_keys)} API key(s) failed")
     print("[DEBUG] Error summary:")
     for err in errors:
-        print(f"[DEBUG]   Key {err['key_index']}: {err['error']}")
+        print(
+            f"[DEBUG]   Key {err['key_index']}: "
+            f"{err.get('status_code')} {err.get('reason')} - {err.get('message')}"
+        )
+
+    reason_counts = {}
+    for err in errors:
+        reason = err.get("reason", "UNKNOWN")
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
     response = (
         jsonify(
             {
-                "error": f"All API {len(api_keys)} keys failed to fetch results",
+                "error": "Google Custom Search failed for all configured API keys",
+                "attempted_keys": len(api_keys),
+                "failure_reasons": reason_counts,
                 "errors": errors,
+                "hint": "Check key validity/expiry, API enablement, and key restrictions for customsearch.googleapis.com.",
             }
         ),
-        500,
+        502,
     )
     response_obj = make_response(response[0], response[1])
     response_obj.headers["X-Cache-Status"] = "MISS"

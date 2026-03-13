@@ -16,6 +16,18 @@ Optional global logging flag:
 uv run python src/scripts/workflow_cli.py --log-level DEBUG <command> [options]
 ```
 
+File logging (default behavior):
+
+```bash
+uv run python src/scripts/workflow_cli.py --log-file logs/workflow_cli.log <command> [options]
+```
+
+Console logging (optional):
+
+```bash
+uv run python src/scripts/workflow_cli.py --log-console <command> [options]
+```
+
 Show built-in help:
 
 ```bash
@@ -90,4 +102,6 @@ uv run python src/scripts/workflow_cli.py <command> -h
 ## Output and Errors
 
 - Success output is printed as formatted JSON to stdout.
+- Runtime logs are written to `logs/workflow_cli.log` by default.
+- Use `--log-console` if you also want logs printed in terminal.
 - If an error occurs, the CLI prints `Error: <message>` to stderr and exits with code `1`.

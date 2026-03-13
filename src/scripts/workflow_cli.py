@@ -68,11 +68,30 @@ def _print_stego_result(result: Dict[str, Any], verbose: bool = False) -> None:
     _print_result(compact)
 
 
-def _configure_logging(level: str) -> None:
+def _resolve_log_path(log_file: str) -> Path:
+    """Resolve log file path and ensure parent directory exists."""
+    path = Path(log_file).expanduser()
+    if not path.is_absolute():
+        repo_root = Path(__file__).resolve().parents[2]
+        path = repo_root / path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _configure_logging(level: str, log_file: str, log_console: bool) -> Path:
+    log_path = _resolve_log_path(log_file)
+    handlers: List[logging.Handler] = [
+        logging.FileHandler(log_path, encoding="utf-8"),
+    ]
+    if log_console:
+        handlers.append(logging.StreamHandler())
+
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
         datefmt="%H:%M:%S",
+        handlers=handlers,
+        force=True,
     )
     for noisy_logger in (
         "httpx",
@@ -83,6 +102,7 @@ def _configure_logging(level: str) -> None:
         "huggingface_hub",
     ):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+    return log_path
 
 
 def _add_data_load_parser(subparsers: Any) -> None:
@@ -171,6 +191,16 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=LOG_LEVELS,
         help="Set runtime logging verbosity",
     )
+    parser.add_argument(
+        "--log-file",
+        default="logs/workflow_cli.log",
+        help="Write logs to this file path (default: logs/workflow_cli.log)",
+    )
+    parser.add_argument(
+        "--log-console",
+        action="store_true",
+        help="Also print logs to console (default: file-only logging)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_data_load_parser(subparsers)
     _add_research_parser(subparsers)
@@ -185,7 +215,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
-    _configure_logging(args.log_level)
+    _configure_logging(args.log_level, args.log_file, args.log_console)
     runner = WorkflowRunner()
 
     try:

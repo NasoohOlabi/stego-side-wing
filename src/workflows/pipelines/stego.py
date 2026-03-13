@@ -16,6 +16,29 @@ MAX_LITERAL_LEN = 250
 STEGO_WORKFLOW_ID = "27rZrYtywu3k9e7Q"
 STEGO_DEFAULT_OFFSET = 1
 logger = logging.getLogger(__name__)
+N8N_STEGO_SYSTEM_TEMPLATE = (
+    "ROLE: Human Redditor — stay in character at all times.\n\n"
+    "MISSION: Write three short, natural Reddit-style comments reacting to the Original Post.\n"
+    "Each comment must explore the perspective derived from “{tangent}”, "
+    "and feel emotionally consistent with {category}.\n"
+    "The writing should sound human, grounded, and reflective — never robotic or abstract.\n\n"
+    "---\n\n"
+    "RULES\n\n"
+    "1. Output one JSON array of exactly three text strings.\n"
+    "   No markdown, no bullets, no lists.\n"
+    "2. No labels or explanations. Only the comments themselves.\n"
+    "3. Human tone: casual, spontaneous, slightly imperfect.\n"
+    "4. Clear intent: Each comment must naturally express\n\n"
+    "   * who is reacting (subject),\n"
+    "   * what they are thinking or doing (action),\n"
+    "   * how they feel about it (emotion).\n"
+    "     Do not force grammar; keep phrasing natural.\n"
+    "5. Banned words: Do not use specific keywords, names, or jargon found in the provided content. "
+    "Paraphrase those ideas in everyday language.\n"
+    "6. Priority rule: If any rules conflict, prioritize thematic accuracy and natural human expression.\n\n"
+    "IMPORTANT: Your final response must be formatted as valid JSON and returned using the required "
+    "response-formatting tool.\n"
+)
 
 
 def _is_non_empty_string(value: Any) -> bool:
@@ -304,8 +327,17 @@ class StegoPipeline:
                 picked_chain.insert(
                     0,
                     {
-                        "name": current.get("author", "Unknown"),
-                        "body": current.get("body", ""),
+                        "name": (
+                            current.get("author")
+                            if isinstance(current.get("author"), str)
+                            and current.get("author").strip()
+                            else "Unknown"
+                        ),
+                        "body": (
+                            current.get("body")
+                            if isinstance(current.get("body"), str)
+                            else ""
+                        ),
                         "id": current.get("id"),
                         "parent_id": current.get("parent_id"),
                         "permalink": current.get("permalink"),
@@ -331,6 +363,7 @@ class StegoPipeline:
                     "id": post.get("id"),
                     "title": post.get("title"),
                     "author": post.get("author"),
+                    "selftext": post.get("selftext", ""),
                     "permalink": post.get("permalink"),
                 },
                 "pickedCommentChain": picked_chain,
@@ -455,17 +488,26 @@ class StegoPipeline:
         title = context.get("title", "")
         author = context.get("author", "")
         selftext = context.get("selftext", "")
+        title = title if isinstance(title, str) else ""
+        author = author if isinstance(author, str) else ""
+        selftext = selftext if isinstance(selftext, str) else ""
 
         picked_chain = comment_embedding.get("pickedCommentChain", [])
         chain_section = ""
         if isinstance(picked_chain, list) and picked_chain:
             rendered: List[str] = []
-            for idx, comment in enumerate(picked_chain):
+            for comment in picked_chain:
                 if not isinstance(comment, dict):
                     continue
-                name = comment.get("name", "Unknown")
-                body = comment.get("body", "")
-                label = "commented" if idx == 0 else "replyed"
+                raw_name = comment.get("name")
+                raw_body = comment.get("body")
+                body = raw_body.strip() if isinstance(raw_body, str) else ""
+                if not body:
+                    continue
+                name = raw_name.strip() if isinstance(raw_name, str) else ""
+                if not name:
+                    name = "Unknown"
+                label = "commented" if not rendered else "replyed"
                 rendered.append(f"{name} {label}:\n{body}")
             if rendered:
                 chain_section = "\n---\n" + "\n---\n".join(rendered)
@@ -482,28 +524,9 @@ class StegoPipeline:
             f"{selftext}{chain_section}"
         )
 
-        system_message = (
-            "ROLE: Human Redditor - stay in character at all times.\n\n"
-            "MISSION: Write three short, natural Reddit-style comments reacting to the Original Post.\n"
-            f"Each comment must explore the perspective derived from \"{sample.get('tangent', '')}\", "
-            f"and feel emotionally consistent with {sample.get('category', '')}.\n"
-            "The writing should sound human, grounded, and reflective - never robotic or abstract.\n\n"
-            "---\n\n"
-            "RULES\n\n"
-            "1. Output one JSON array of exactly three text strings.\n"
-            "   No markdown, no bullets, no lists.\n"
-            "2. No labels or explanations. Only the comments themselves.\n"
-            "3. Human tone: casual, spontaneous, slightly imperfect.\n"
-            "4. Clear intent: Each comment must naturally express\n\n"
-            "   * who is reacting (subject),\n"
-            "   * what they are thinking or doing (action),\n"
-            "   * how they feel about it (emotion).\n"
-            "     Do not force grammar; keep phrasing natural.\n"
-            "5. Banned words: Do not use specific keywords, names, or jargon found in the provided content. "
-            "Paraphrase those ideas in everyday language.\n"
-            "6. Priority rule: If any rules conflict, prioritize thematic accuracy and natural human expression.\n\n"
-            "IMPORTANT: Your final response must be formatted as valid JSON and returned using the required "
-            "response-formatting tool.\n"
+        system_message = N8N_STEGO_SYSTEM_TEMPLATE.format(
+            tangent=sample.get("tangent", ""),
+            category=sample.get("category", ""),
         )
         return prompt, system_message
 
@@ -528,6 +551,14 @@ class StegoPipeline:
             return stripped
 
         prompt, system_message = self._build_prompt(sample, comment_embedding)
+        logger.info(
+            "[STEGO][PROMPT][ENCODE] category=%s tangent=%s source_quote=%s",
+            sample.get("category"),
+            _text_preview(sample.get("tangent", ""), max_len=120),
+            _text_preview(sample.get("source_quote", ""), max_len=120),
+        )
+        logger.info("[STEGO][PROMPT][ENCODE][SYSTEM]\n%s", system_message)
+        logger.info("[STEGO][PROMPT][ENCODE][USER]\n%s", prompt)
         response = self.llm.call_llm(
             prompt=prompt,
             system_message=system_message,
@@ -536,6 +567,7 @@ class StegoPipeline:
             temperature=0.7,
         )
         text = response.strip()
+        logger.info("[STEGO][LLM][ENCODE][RAW]\n%s", text)
 
         # Accept plain JSON and markdown-fenced JSON payloads.
         json_candidates = [text, _extract_json_block(text)]
@@ -549,14 +581,27 @@ class StegoPipeline:
 
             direct = _clean_text_list(parsed)
             if direct:
+                logger.info(
+                    "[STEGO][LLM][ENCODE][PARSED] extracted=%s mode=array",
+                    len(direct),
+                )
                 return direct
 
             if isinstance(parsed, dict):
                 for key in ("texts", "comments", "items", "output"):
                     clean = _clean_text_list(parsed.get(key))
                     if clean:
+                        logger.info(
+                            "[STEGO][LLM][ENCODE][PARSED] extracted=%s mode=%s",
+                            len(clean),
+                            key,
+                        )
                         return clean
 
+        logger.warning(
+            "[STEGO][LLM][ENCODE][PARSE] Falling back to raw text payload for sample tangent=%s",
+            _text_preview(sample.get("tangent", ""), max_len=120),
+        )
         return [text] if text else []
 
     def _cross_validate(

@@ -1,4 +1,5 @@
 """Decode steganographic text back to angle index."""
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -106,36 +107,43 @@ class DecodePipeline:
 
             # Build few-shot prompt section.
             few_shot_text = ""
-            if few_shots:
-                few_shot_examples = []
-                for shot in few_shots[:3]:
-                    text_list = shot.get("texts", []) if isinstance(shot, dict) else []
-                    if isinstance(text_list, list) and text_list:
-                        first = text_list[0]
-                        if isinstance(first, str) and first.strip():
-                            few_shot_examples.append(first.strip())
-                if few_shot_examples:
-                    few_shot_text = "\n\nFew-shot examples:\n" + "\n".join(
-                        f"- {example}" for example in few_shot_examples
-                    )
+            if isinstance(few_shots, list):
+                few_shot_text = json.dumps(
+                    few_shots,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            else:
+                few_shot_text = "[]"
 
-            candidate_lines = "\n".join(
-                f"- index={c['index']} | rank={c['rank']} | score={c.get('score')} | tangent={c['tangent']}"
-                for c in top_candidates
+            semantic_objects = [
+                result.get("object")
+                for result in results[:top_n]
+                if isinstance(result, dict) and isinstance(result.get("object"), dict)
+            ]
+            system_candidates_text = json.dumps(
+                semantic_objects,
+                ensure_ascii=False,
+                indent=2,
             )
             allowed_indices = {c["index"] for c in top_candidates}
 
             prompt = (
-                "Given the steganographic text below, pick the best matching angle index.\n\n"
-                f"Stego text:\n{stego_text}\n\n"
-                "Top semantic candidates (global angle indices):\n"
-                f"{candidate_lines}"
+                "### FEW-SHOT EXAMPLES:\n"
                 f"{few_shot_text}\n\n"
-                "Return ONLY one integer index chosen from the listed indices."
+                "### INPUT TEXT:\n"
+                f"{stego_text}\n\n"
+                "### OUTPUT (idx only):"
             )
             system_message = (
-                "You are a steganographic decoder. Return exactly one integer index."
+                "You Job is to identify the angle/tangent from given texts from the given predefined list\n\n"
+                "return the angle/tangent index only! (OUTPUT: MUST BE A SINGLE NUMBER)\n\n"
+                "the index must be within the following list size, please make sure to return one number "
+                f"thats smaller than {len(angles)} and larger than 0 (0 <= x < {len(angles)})!\n\n\n"
+                f"{system_candidates_text}"
             )
+            logger.info("[DECODE][PROMPT][SYSTEM]\n%s", system_message)
+            logger.info("[DECODE][PROMPT][USER]\n%s", prompt)
 
             response = self.llm.call_llm(
                 prompt=prompt,
@@ -144,6 +152,7 @@ class DecodePipeline:
                 provider="lm_studio",
                 temperature=0.0,
             )
+            logger.info("[DECODE][LLM][RAW] %s", response.strip())
 
             numbers = [int(x) for x in re.findall(r"\d+", response.strip())]
             for number in numbers:

@@ -113,9 +113,9 @@ Services contain business logic and orchestrate:
 
 ## Backward Compatibility
 
-- **`API.py`**: Maintains the same entrypoint, imports from new structure
+- **`API.py`**: Maintains the same entrypoint, now a thin wrapper over `app_factory`
 - **`util/__init__.py`**: Provides import shims for old `util.*` imports
-- **Old pipeline imports**: Updated to use `pipelines.*` but old files remain for compatibility
+- **CLI compatibility**: `main.py` forwards to `src/scripts/workflow_cli.py`
 
 ## Testing
 
@@ -126,7 +126,7 @@ Basic parity tests added in `tests/test_parity.py` to verify:
 
 ## Migration Notes
 
-1. **Import Updates**: Update imports from:
+1. **Import Updates**:
    - `from util.newsApi import ...` → `from integrations.news_api import ...`
    - `from ai_analyze import ...` → `from pipelines.ai_analyze import ...`
    - `from headless_browser_analyzer import ...` → `from pipelines.headless_browser_analyzer import ...`
@@ -141,7 +141,7 @@ Basic parity tests added in `tests/test_parity.py` to verify:
 
 ## Next Steps
 
-1. Remove old duplicate files after verifying compatibility
+1. Keep deleting remaining duplicates after each import/test verification pass
 2. Add comprehensive unit tests for services
 3. Add integration tests for external APIs
 4. Consider adding request/response models using Pydantic

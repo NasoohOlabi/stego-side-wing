@@ -1,34 +1,22 @@
 """LLM adapter for multiple providers."""
 import json
-import os
 from typing import Any, Dict, List, Optional
 
-import dotenv
 import openai
 import requests
 
-dotenv.load_dotenv()
+from infrastructure.config import get_env
 
 
 class LLMAdapter:
     """Adapter for LLM providers (OpenAI, Gemini, Groq, LM Studio)."""
     
     def __init__(self):
-        self.openai_api_key = os.environ.get("OPENAI_API_KEY") or dotenv.get_key(
-            ".env", "OPENAI_API_KEY"
-        )
-        self.google_palm_api_key = os.environ.get(
-            "GOOGLE_PALM_API_KEY"
-        ) or dotenv.get_key(".env", "GOOGLE_PALM_API_KEY")
-        self.groq_api_key = os.environ.get("GROQ_API_KEY") or dotenv.get_key(
-            ".env", "GROQ_API_KEY"
-        )
-        self.lm_studio_url = os.environ.get(
-            "LM_STUDIO_URL", "http://192.168.100.136:1234/v1"
-        )
-        self.lm_studio_api_token = os.environ.get(
-            "LM_STUDIO_API_TOKEN", "lm-studio"
-        )
+        self.openai_api_key = get_env("OPENAI_API_KEY")
+        self.google_palm_api_key = get_env("GOOGLE_PALM_API_KEY")
+        self.groq_api_key = get_env("GROQ_API_KEY")
+        self.lm_studio_url = get_env("LM_STUDIO_URL", "http://192.168.100.136:1234/v1")
+        self.lm_studio_api_token = get_env("LM_STUDIO_API_TOKEN", "lm-studio")
     
     def call_llm(
         self,

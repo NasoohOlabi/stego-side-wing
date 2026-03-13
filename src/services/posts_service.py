@@ -1,9 +1,11 @@
 """Posts management service."""
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from infrastructure.config import STEPS
+
+_LIST_CACHE: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
 
 
 def is_file_in_folder(folder_path: str, file_name: str) -> bool:
@@ -44,26 +46,12 @@ def list_posts(count: int, step: str, tag: Optional[str] = None, offset: int = 0
     src_dir = STEPS[step]["source_dir"]
     dest_dir = STEPS[step]["dest_dir"]
     
-    try:
-        all_files = os.listdir(src_dir)
-    except FileNotFoundError:
+    if not os.path.isdir(src_dir):
         raise FileNotFoundError(
             f"Post directory not found: {src_dir}. Please run data_nesting_script.py first."
         )
-
-    json_files = [
-        f
-        for f in all_files
-        if f.endswith(".json")
-        and (
-            not is_file_in_folder(
-                dest_dir,
-                f[:-5]
-                + str("_" + tag if (tag is not None) and (tag != "") else "")
-                + ".json",
-            )
-        )
-    ]
+    os.makedirs(dest_dir, exist_ok=True)
+    json_files = _get_unprocessed_sorted_files(src_dir=src_dir, dest_dir=dest_dir, tag=tag)
 
     if not json_files:
         raise ValueError(
@@ -71,11 +59,41 @@ def list_posts(count: int, step: str, tag: Optional[str] = None, offset: int = 0
         )
 
     # Sort files by size (descending: largest first)
-    json_files.sort(
-        key=lambda f: os.path.getsize(os.path.join(src_dir, f)), reverse=True
-    )
-
     return {"fileNames": json_files[offset: offset + count]}
+
+
+def _get_unprocessed_sorted_files(src_dir: str, dest_dir: str, tag: Optional[str]) -> List[str]:
+    """Return cached list of source JSON files not yet present in destination."""
+    tag_suffix = f"_{tag}" if tag else ""
+    cache_key = (src_dir, dest_dir, tag_suffix)
+    src_mtime = os.stat(src_dir).st_mtime_ns
+    dest_mtime = os.stat(dest_dir).st_mtime_ns
+    cached = _LIST_CACHE.get(cache_key)
+    if cached and cached["src_mtime"] == src_mtime and cached["dest_mtime"] == dest_mtime:
+        return list(cached["files"])
+
+    dest_files = {entry.name for entry in os.scandir(dest_dir) if entry.is_file()}
+    candidates: List[Tuple[str, int]] = []
+    for entry in os.scandir(src_dir):
+        if not entry.is_file() or not entry.name.endswith(".json"):
+            continue
+        dest_name = f"{entry.name[:-5]}{tag_suffix}.json"
+        if dest_name in dest_files:
+            continue
+        try:
+            size = entry.stat().st_size
+        except OSError:
+            size = 0
+        candidates.append((entry.name, size))
+
+    candidates.sort(key=lambda item: item[1], reverse=True)
+    ordered = [name for name, _ in candidates]
+    _LIST_CACHE[cache_key] = {
+        "src_mtime": src_mtime,
+        "dest_mtime": dest_mtime,
+        "files": ordered,
+    }
+    return ordered
 
 
 def get_post(post: str, step: str) -> Dict[str, Any]:

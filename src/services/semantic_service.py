@@ -1,9 +1,13 @@
 """Semantic search and similarity services."""
+import logging
 from typing import Any, Dict, List, Optional
 
+logger = logging.getLogger(__name__)
 
 # Global model instance for sentence transformers (lazy-loaded)
 _semantic_model = None
+_single_text_embedding_cache: Dict[str, Any] = {}
+_list_embedding_cache: Dict[tuple[str, ...], Any] = {}
 
 
 def get_semantic_model():
@@ -14,7 +18,7 @@ def get_semantic_model():
             import torch
             from sentence_transformers import SentenceTransformer
 
-            print("Loading sentence transformer model 'all-MiniLM-L6-v2'...")
+            logger.info("[SEMANTIC][MODEL] Loading sentence transformer model 'all-MiniLM-L6-v2'")
 
             # Explicitly set device to avoid meta tensor issues
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -28,12 +32,12 @@ def get_semantic_model():
                 _ = next(_semantic_model.parameters()).device
             except RuntimeError as e:
                 if "meta" in str(e).lower():
-                    print("Warning: Detected meta device issue, reloading on CPU...")
+                    logger.warning("[SEMANTIC][MODEL] Meta device issue detected; reloading on CPU")
                     _semantic_model = SentenceTransformer(
                         "all-MiniLM-L6-v2", device="cpu"
                     )
 
-            print(f"Model loaded successfully on device: {device}")
+            logger.info("[SEMANTIC][MODEL] Loaded successfully on device=%s", device)
         except ImportError:
             raise ImportError(
                 "sentence-transformers library not installed. Install it with: pip install sentence-transformers"
@@ -103,9 +107,9 @@ def semantic_search(
         doc_text = " ".join(text_parts) if text_parts else str(obj)
         doc_texts.append(doc_text)
 
-    # Generate embeddings
-    query_embedding = model.encode(query_text, convert_to_tensor=True)
-    doc_embeddings = model.encode(doc_texts, convert_to_tensor=True)
+    # Generate embeddings (cached for repeated queries/doc sets)
+    query_embedding = _encode_single_cached(model, query_text)
+    doc_embeddings = _encode_list_cached(model, doc_texts)
 
     # Calculate cosine similarity
     cosine_scores = util.cos_sim(query_embedding, doc_embeddings)[0]
@@ -170,11 +174,9 @@ def find_best_match(needle: object, haystack: object) -> Dict[str, Any]:
     # Import util for cosine similarity
     from sentence_transformers import util
 
-    # Generate embeddings
-    needle_embedding = model.encode(needle, convert_to_tensor=True)
-    haystack_embeddings = model.encode(
-        haystack_strings, convert_to_tensor=True
-    )
+    # Generate embeddings (cached for repeated queries/doc sets)
+    needle_embedding = _encode_single_cached(model, needle)
+    haystack_embeddings = _encode_list_cached(model, haystack_strings)
 
     # Calculate cosine similarity
     cosine_scores = util.cos_sim(needle_embedding, haystack_embeddings)[0]
@@ -194,3 +196,24 @@ def find_best_match(needle: object, haystack: object) -> Dict[str, Any]:
         "index": best_index,
         "score": round(best_score, 4),
     }
+
+
+def _encode_single_cached(model: Any, text: str) -> Any:
+    """Encode one string and reuse embedding across repeated calls."""
+    cached = _single_text_embedding_cache.get(text)
+    if cached is not None:
+        return cached
+    embedding = model.encode(text, convert_to_tensor=True)
+    _single_text_embedding_cache[text] = embedding
+    return embedding
+
+
+def _encode_list_cached(model: Any, texts: List[str]) -> Any:
+    """Encode list of strings and cache by exact ordered tuple."""
+    key = tuple(texts)
+    cached = _list_embedding_cache.get(key)
+    if cached is not None:
+        return cached
+    embeddings = model.encode(texts, convert_to_tensor=True)
+    _list_embedding_cache[key] = embeddings
+    return embeddings

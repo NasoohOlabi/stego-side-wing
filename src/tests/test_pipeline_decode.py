@@ -8,7 +8,7 @@ def test_decode_returns_none_when_no_angles():
     assert pipeline.decode("stego", []) is None
 
 
-def test_decode_uses_llm_integer_when_valid():
+def test_decode_uses_llm_integer_when_valid_candidate():
     angles = [
         {"source_quote": "q0", "tangent": "t0"},
         {"source_quote": "q1", "tangent": "t1"},
@@ -18,7 +18,25 @@ def test_decode_uses_llm_integer_when_valid():
     pipeline.backend = SimpleNamespace(
         semantic_search=lambda text, objects, n: {"results": [{"object": angles[1]}]}
     )
-    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "2")
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "1")
+    pipeline.config = SimpleNamespace(model="dummy")
+
+    assert pipeline.decode("message", angles) == 1
+
+
+def test_decode_interprets_rank_when_llm_returns_rank_not_index():
+    angles = [
+        {"source_quote": "q0", "tangent": "t0"},
+        {"source_quote": "q1", "tangent": "t1"},
+        {"source_quote": "q2", "tangent": "t2"},
+    ]
+    pipeline = DecodePipeline.__new__(DecodePipeline)
+    pipeline.backend = SimpleNamespace(
+        semantic_search=lambda text, objects, n: {
+            "results": [{"object": angles[2]}, {"object": angles[0]}]
+        }
+    )
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "1")
     pipeline.config = SimpleNamespace(model="dummy")
 
     assert pipeline.decode("message", angles) == 2

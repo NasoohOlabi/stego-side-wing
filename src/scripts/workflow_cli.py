@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,9 @@ if str(REPO_SRC) not in sys.path:
     sys.path.insert(0, str(REPO_SRC))
 
 from workflows.runner import WorkflowRunner  # noqa: E402
+
+
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
 
 def _read_json_file(path: str) -> Any:
@@ -44,6 +48,43 @@ def _print_result(result: Any) -> None:
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+def _print_stego_result(result: Dict[str, Any], verbose: bool = False) -> None:
+    if verbose:
+        _print_result(result)
+        return
+
+    compact = {
+        "succeeded": result.get("succeeded"),
+        "retry_count": result.get("retry_count"),
+        "tag": result.get("tag"),
+        "angle_index": result.get("angle_index"),
+        "selected_angle": result.get("selected_angle"),
+        "stego_text": result.get("stego_text"),
+        "post_id": (result.get("post") or {}).get("id") if isinstance(result.get("post"), dict) else None,
+        "error": result.get("error"),
+        "error_details": result.get("error_details"),
+        "validation_details": result.get("validation_details"),
+    }
+    _print_result(compact)
+
+
+def _configure_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    for noisy_logger in (
+        "httpx",
+        "httpcore",
+        "urllib3",
+        "sentence_transformers",
+        "transformers",
+        "huggingface_hub",
+    ):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
+
 def _add_data_load_parser(subparsers: Any) -> None:
     parser = subparsers.add_parser("data-load", help="Run DataLoad pipeline")
     parser.add_argument("--count", type=int, default=100)
@@ -65,9 +106,27 @@ def _add_gen_angles_parser(subparsers: Any) -> None:
 
 def _add_stego_parser(subparsers: Any) -> None:
     parser = subparsers.add_parser("stego", help="Run Stego pipeline")
-    parser.add_argument("--post-id", required=True, help="Post ID (without .json)")
-    parser.add_argument("--payload", required=True, help="Secret payload to encode")
+    parser.add_argument("--post-id", default=None, help="Optional post ID (without .json)")
+    parser.add_argument(
+        "--payload",
+        default=None,
+        help=(
+            "Secret payload to encode; if omitted, use SetSecretData payload "
+            "from workflows/27rZrYtywu3k9e7Q.json"
+        ),
+    )
     parser.add_argument("--tag", default=None, help="Optional output tag")
+    parser.add_argument(
+        "--list-offset",
+        type=int,
+        default=1,
+        help="Offset when auto-selecting next unprocessed post",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print full stego result JSON (includes large fields)",
+    )
 
 
 def _add_decode_parser(subparsers: Any) -> None:
@@ -106,6 +165,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run stego-side-wing workflows from CLI",
     )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=LOG_LEVELS,
+        help="Set runtime logging verbosity",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_data_load_parser(subparsers)
     _add_research_parser(subparsers)
@@ -120,6 +185,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+    _configure_logging(args.log_level)
     runner = WorkflowRunner()
 
     try:
@@ -138,6 +204,7 @@ def main() -> int:
                 post_id=args.post_id,
                 payload=args.payload,
                 tag=args.tag,
+                list_offset=args.list_offset,
             )
         elif args.command == "decode":
             angles = _load_angles(args.angles_file)
@@ -168,7 +235,10 @@ def main() -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    _print_result(result)
+    if args.command == "stego" and isinstance(result, dict):
+        _print_stego_result(result, verbose=args.verbose)
+    else:
+        _print_result(result)
     return 0
 
 

@@ -1,4 +1,5 @@
 """Research pipeline: generate search terms, search, and fetch content."""
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
 
 from workflows.adapters.backend_api import BackendAPIAdapter
@@ -111,19 +112,22 @@ class ResearchPipeline:
         
         for i in range(0, len(all_search_results), batch_size):
             batch = all_search_results[i : i + batch_size]
-            
-            for result in batch:
-                url = result.get("link")
-                if not url:
-                    continue
-                
-                try:
-                    fetch_result = self.fetch_content.fetch(url, use_cache=True)
-                    if fetch_result.success and fetch_result.text:
-                        fetched_texts.append(fetch_result.text)
-                except Exception as e:
-                    print(f"Error fetching URL {url}: {e}")
-                    continue
+            urls = [result.get("link") for result in batch if result.get("link")]
+            if not urls:
+                continue
+            with ThreadPoolExecutor(max_workers=batch_size) as pool:
+                futures = {
+                    pool.submit(self.fetch_content.fetch, url, True): url
+                    for url in urls
+                }
+                for future in as_completed(futures):
+                    url = futures[future]
+                    try:
+                        fetch_result = future.result()
+                        if fetch_result.success and fetch_result.text:
+                            fetched_texts.append(fetch_result.text)
+                    except Exception as e:
+                        print(f"Error fetching URL {url}: {e}")
         
         # Update post with search results
         post["search_results"] = fetched_texts
@@ -154,32 +158,33 @@ class ResearchPipeline:
         if not file_names:
             return []
         
-        researched_posts = []
-        
+        posts: List[Dict[str, Any]] = []
         for file_name in file_names:
             try:
-                # Get post
-                post = self.backend.get_post_local(file_name, step)
+                posts.append(self.backend.get_post_local(file_name, step))
+            except Exception as e:
+                print(f"Error loading post {file_name}: {e}")
+        return self.process_post_objects(posts=posts, step=step)
 
+    def process_post_objects(
+        self,
+        posts: List[Dict[str, Any]],
+        step: str = "filter-researched",
+    ) -> List[Dict[str, Any]]:
+        """Process already-loaded post objects and persist researched versions."""
+        researched_posts: List[Dict[str, Any]] = []
+        for post in posts:
+            post_id = post.get("id", "<unknown>")
+            try:
                 was_new = self._is_new_post(post)
-
-                # Research post
                 researched = self.research_post(post, step)
-
-                # Both n8n branches persist to dataset file.
                 self.backend.save_post_local(researched, step=step)
-
-                # Only "new" branch calls backend /save_post.
                 if was_new:
                     try:
                         self.backend.save_post(researched, step=step)
                     except Exception as e:
-                        print(f"Error saving post to backend for {file_name}: {e}")
-
+                        print(f"Error saving post to backend for {post_id}: {e}")
                 researched_posts.append(researched)
-                
             except Exception as e:
-                print(f"Error processing post {file_name}: {e}")
-                continue
-        
+                print(f"Error processing post {post_id}: {e}")
         return researched_posts

@@ -1,11 +1,26 @@
 """Configuration management."""
 import os
-from typing import Optional
+from pathlib import Path
+from typing import Dict, Optional
 
 import dotenv
 
-# Load .env file once at module level
-dotenv.load_dotenv()
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+ENV_FILE_PATH = REPO_ROOT / ".env"
+
+# Load .env file once at module level.
+dotenv.load_dotenv(dotenv_path=ENV_FILE_PATH if ENV_FILE_PATH.exists() else None)
+_DOTENV_VALUES: Optional[Dict[str, Optional[str]]] = None
+
+
+def _load_dotenv_values() -> Dict[str, Optional[str]]:
+    """Load and cache .env key-values without printing missing-key warnings."""
+    global _DOTENV_VALUES
+    if _DOTENV_VALUES is None:
+        _DOTENV_VALUES = (
+            dotenv.dotenv_values(str(ENV_FILE_PATH)) if ENV_FILE_PATH.exists() else {}
+        )
+    return _DOTENV_VALUES
 
 
 def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -20,8 +35,10 @@ def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
         Environment variable value or default
     """
     value = os.environ.get(key)
-    if not value:
-        value = dotenv.get_key(".env", key)
+    if value:
+        return value
+
+    value = _load_dotenv_values().get(key)
     return value if value else default
 
 
@@ -65,3 +82,17 @@ STEPS = {
         "dest_dir": "./output-results",
     },
 }
+
+def resolve_path(path_str: str) -> Path:
+    """Resolve a project-relative path to absolute Path."""
+    normalized = path_str[2:] if path_str.startswith("./") else path_str
+    return REPO_ROOT / normalized
+
+
+def get_step_dirs(step: str) -> tuple[Path, Path]:
+    """Return absolute source/destination directories for a configured step."""
+    if step not in STEPS:
+        raise ValueError(f"Invalid step: {step}")
+    source_dir = resolve_path(STEPS[step]["source_dir"])
+    dest_dir = resolve_path(STEPS[step]["dest_dir"])
+    return source_dir, dest_dir

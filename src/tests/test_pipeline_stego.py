@@ -99,3 +99,42 @@ def test_process_post_falls_back_to_angles_step_and_persists_on_success():
 
     assert result["succeeded"] is True
     assert calls == [("final-step", "p9_v1.json", True)]
+
+
+def test_process_post_auto_selects_next_unprocessed_post_with_tag():
+    calls = []
+    selected = {}
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+
+    def fake_posts_list(step, count, offset, tag):
+        selected.update(
+            {"step": step, "count": count, "offset": offset, "tag": tag}
+        )
+        return {"fileNames": ["p10.json"]}
+
+    pipeline.backend = SimpleNamespace(
+        posts_list=fake_posts_list,
+        get_post_local=lambda filename, step: {
+            "id": "p10",
+            "angles": [{"source_quote": "q", "tangent": "t", "category": "c"}],
+        },
+        save_object_local=lambda data, step, filename: calls.append((step, filename)),
+    )
+    pipeline._load_default_payload_and_tag = lambda: ("default payload", "same-tag")
+    pipeline.encode = lambda payload, post, tag: {
+        "succeeded": True,
+        "post": post,
+        "stego_text": "ok",
+        "tag": tag,
+    }
+
+    result = pipeline.process_post()
+
+    assert result["succeeded"] is True
+    assert selected == {
+        "step": "final-step",
+        "count": 1,
+        "offset": 1,
+        "tag": "same-tag",
+    }
+    assert calls == [("final-step", "p10_same-tag.json")]

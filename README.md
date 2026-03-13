@@ -21,12 +21,21 @@ This project uses `pyproject.toml` + `uv.lock`; dependencies are tracked and rep
 uv run python src/API.py
 ```
 
-Server defaults to `192.168.100.136:5001` (see `src/API.py`).
+`src/API.py` is a compatibility wrapper over the app factory in `src/app/app_factory.py`.
+Defaults: `API_HOST=192.168.100.136`, `API_PORT=5001`.
+
+## Run workflow CLI
+
+```bash
+uv run python src/scripts/workflow_cli.py -h
+```
+
+`main.py` is a wrapper that forwards to this CLI.
 
 ## Run tests
 
 ```bash
-uv run pytest -q src/tests/test_parity.py
+uv run pytest -q
 ```
 
 ## Strict type checking
@@ -46,15 +55,11 @@ Current strict pyright config is in `pyrightconfig.json`.
 - `src/infrastructure`
 - `src/workflows`
 
-### Explicit exclusions (legacy/duplicate backlog)
+### Explicit exclusions
 
 - `src/util`
 - `src/angles`
 - `src/**/__pycache__`
-- `src/ai_analyze.py`
-- `src/headless_browser_analyzer.py`
-- `src/scraper.py`
-- `src/nest.py`
 
 ## Optional env vars
 

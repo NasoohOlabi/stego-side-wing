@@ -5,6 +5,11 @@ from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
 from workflows.contracts import AngleResult
+from workflows.utils.text_utils import (
+    build_post_text_dictionary,
+    flatten_comments,
+    parse_json_array_response,
+)
 
 
 class GenAnglesPipeline:
@@ -17,42 +22,11 @@ class GenAnglesPipeline:
     
     def _flatten_comments(self, comments: List[Dict]) -> List[Dict]:
         """Flatten nested comment structure."""
-        result = []
-        for comment in comments:
-            result.append(comment)
-            if comment.get("replies"):
-                result.extend(self._flatten_comments(comment["replies"]))
-        return result
+        return flatten_comments(comments)
     
     def _build_dictionary(self, post: Dict) -> List[str]:
         """Build dictionary of texts from post."""
-        dictionary = []
-        
-        # Add post content
-        selftext = post.get("selftext") or post.get("text", "")
-        if selftext:
-            dictionary.append(selftext)
-        
-        # Add search results
-        search_results = post.get("search_results", [])
-        if isinstance(search_results, list):
-            for result in search_results:
-                if isinstance(result, str):
-                    dictionary.append(result)
-                elif isinstance(result, dict):
-                    text = result.get("text") or result.get("snippet", "")
-                    if text:
-                        dictionary.append(text)
-        
-        # Add comments
-        comments = post.get("comments", [])
-        flattened_comments = self._flatten_comments(comments)
-        for comment in flattened_comments:
-            body = comment.get("body", "")
-            if body:
-                dictionary.append(body)
-        
-        return [d for d in dictionary if d and isinstance(d, str)]
+        return build_post_text_dictionary(post)
     
     def generate_angles(self, post: Dict) -> List[Dict[str, Any]]:
         """
@@ -131,37 +105,16 @@ The entire output **MUST** be the raw JSON array beginning with `[` and ending w
                 temperature=0.0,
             )
             
-            # Parse JSON array
-            import json
-            import re
-            
-            # Remove markdown fences if present
-            response = response.strip()
-            if response.startswith("```"):
-                lines = response.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].strip().startswith("```"):
-                    lines = lines[:-1]
-                response = "\n".join(lines).strip()
-            
-            # Try to parse JSON
-            try:
-                angles = json.loads(response)
-                if isinstance(angles, list):
-                    return [
-                        {
-                            "source_quote": a.get("source_quote", ""),
-                            "tangent": a.get("tangent", ""),
-                            "category": a.get("category", ""),
-                        }
-                        for a in angles
-                        if isinstance(a, dict)
-                    ]
-            except json.JSONDecodeError:
-                pass
-            
-            return []
+            parsed_items = parse_json_array_response(response)
+            return [
+                {
+                    "source_quote": a.get("source_quote", ""),
+                    "tangent": a.get("tangent", ""),
+                    "category": a.get("category", ""),
+                }
+                for a in parsed_items
+                if isinstance(a, dict)
+            ]
             
         except Exception as e:
             print(f"Error generating angles with LLM: {e}")
@@ -215,22 +168,27 @@ The entire output **MUST** be the raw JSON array beginning with `[` and ending w
         if not file_names:
             return []
         
-        processed_posts = []
-        
+        posts: List[Dict[str, Any]] = []
         for file_name in file_names:
             try:
-                # Get post
-                post = self.backend.get_post_local(file_name, step)
-                
-                # Generate angles
-                processed = self.process_post(post, step)
-                
-                # Save post
-                self.backend.save_post_local(processed, step="angles-step")
-                processed_posts.append(processed)
-                
+                posts.append(self.backend.get_post_local(file_name, step))
             except Exception as e:
-                print(f"Error processing post {file_name}: {e}")
-                continue
-        
+                print(f"Error loading post {file_name}: {e}")
+        return self.process_post_objects(posts=posts, step=step)
+
+    def process_post_objects(
+        self,
+        posts: List[Dict[str, Any]],
+        step: str = "angles-step",
+    ) -> List[Dict[str, Any]]:
+        """Process already-loaded post objects and persist angle-enriched versions."""
+        processed_posts: List[Dict[str, Any]] = []
+        for post in posts:
+            post_id = post.get("id", "<unknown>")
+            try:
+                processed = self.process_post(post, step)
+                self.backend.save_post_local(processed, step=step)
+                processed_posts.append(processed)
+            except Exception as e:
+                print(f"Error processing post {post_id}: {e}")
         return processed_posts

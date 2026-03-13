@@ -10,6 +10,12 @@ From repo root:
 uv run python src/scripts/workflow_cli.py <command> [options]
 ```
 
+Optional global logging flag:
+
+```bash
+uv run python src/scripts/workflow_cli.py --log-level DEBUG <command> [options]
+```
+
 Show built-in help:
 
 ```bash
@@ -41,11 +47,17 @@ uv run python src/scripts/workflow_cli.py <command> -h
     ```
 
 - `stego` - Encode a payload for a post.
-  - Required: `--post-id`, `--payload`
-  - Optional: `--tag`
+  - Optional: `--post-id`, `--payload`, `--tag`, `--list-offset` (default `1`)
+  - Uses structured logs (`[STEGO][...]` / `[DECODE][...]`) and returns `error_details` + `validation_details` on decode-validation failures.
+  - If `--post-id` is omitted, it auto-selects the next unprocessed `final-step` post for the same tag.
+  - If `--payload` is omitted, it falls back to `SetSecretData.payload` in `workflows/27rZrYtywu3k9e7Q.json`.
   - Example:
     ```bash
     uv run python src/scripts/workflow_cli.py stego --post-id 1ne9f7n --payload "secret message" --tag demo
+    ```
+  - No-arg workflow-parity example:
+    ```bash
+    uv run python src/scripts/workflow_cli.py stego
     ```
 
 - `decode` - Decode index from stego text.

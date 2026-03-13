@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
+from workflows.utils.text_utils import parse_json_array_response
 
 
 class GenSearchTermsPipeline:
@@ -151,38 +152,9 @@ class GenSearchTermsPipeline:
     
     def _parse_terms(self, response: str) -> List[str]:
         """Parse search terms from LLM response."""
-        # Try to extract JSON array
-        response = response.strip()
-        
-        # Remove markdown code fences if present
-        if response.startswith("```"):
-            lines = response.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip().startswith("```"):
-                lines = lines[:-1]
-            response = "\n".join(lines).strip()
-        
-        # Try to parse as JSON
-        try:
-            terms = json.loads(response)
-            if isinstance(terms, list):
-                return [str(t) for t in terms if t]
-        except json.JSONDecodeError:
-            pass
-        
-        # Fallback: try to extract array-like structure
-        # Look for [ ... ] pattern
-        start_idx = response.find("[")
-        end_idx = response.rfind("]")
-        if start_idx >= 0 and end_idx > start_idx:
-            try:
-                array_str = response[start_idx : end_idx + 1]
-                terms = json.loads(array_str)
-                if isinstance(terms, list):
-                    return [str(t) for t in terms if t]
-            except json.JSONDecodeError:
-                pass
+        terms = parse_json_array_response(response)
+        if terms:
+            return [str(t) for t in terms if t]
         
         # Last resort: split by newlines and commas
         terms = []

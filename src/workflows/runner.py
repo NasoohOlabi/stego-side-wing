@@ -62,15 +62,17 @@ class WorkflowRunner:
     
     def run_stego(
         self,
-        post_id: str,
-        payload: str,
+        post_id: Optional[str] = None,
+        payload: Optional[str] = None,
         tag: Optional[str] = None,
+        list_offset: int = 1,
     ) -> Dict[str, Any]:
         """Run Stego pipeline."""
         return self.stego.process_post(
             post_id=post_id,
             payload=payload,
             tag=tag,
+            list_offset=list_offset,
         )
     
     def run_decode(
@@ -118,21 +120,35 @@ class WorkflowRunner:
         """
         results = []
         
-        # Step 1: DataLoad (if starting from unresolved)
         if start_step == "filter-url-unresolved":
             data_results = self.run_data_load(count=count)
             if not data_results:
                 return results
-        
-        # Step 2: Research
-        research_results = self.run_research(count=count)
-        if not research_results:
-            return results
-        
-        # Step 3: GenAngles
-        angles_results = self.run_gen_angles(count=count)
-        if not angles_results:
-            return results
-        
-        results = angles_results
-        return results
+
+            # Explicit stage handoff: research what we just loaded.
+            research_results = self.research.process_post_objects(
+                posts=data_results,
+                step="filter-researched",
+            )
+            if not research_results:
+                return results
+
+            # Explicit stage handoff: angle what we just researched.
+            return self.gen_angles.process_post_objects(
+                posts=research_results,
+                step="angles-step",
+            )
+
+        if start_step == "filter-researched":
+            research_results = self.run_research(count=count)
+            if not research_results:
+                return results
+            return self.gen_angles.process_post_objects(
+                posts=research_results,
+                step="angles-step",
+            )
+
+        if start_step == "angles-step":
+            return self.run_gen_angles(count=count)
+
+        raise ValueError(f"Unsupported start_step: {start_step}")

@@ -28,12 +28,12 @@ def get_semantic_model():
                 _ = next(_semantic_model.parameters()).device
             except RuntimeError as e:
                 if "meta" in str(e).lower():
-                    print("⚠️  Detected meta device issue, reloading on CPU...")
+                    print("Warning: Detected meta device issue, reloading on CPU...")
                     _semantic_model = SentenceTransformer(
                         "all-MiniLM-L6-v2", device="cpu"
                     )
 
-            print(f"✅ Model loaded successfully on device: {device}")
+            print(f"Model loaded successfully on device: {device}")
         except ImportError:
             raise ImportError(
                 "sentence-transformers library not installed. Install it with: pip install sentence-transformers"

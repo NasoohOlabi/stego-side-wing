@@ -1,13 +1,10 @@
 """Adapter for content fetching and summarization."""
 import json
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 import requests
 
-from event_loop_manager import run_async
 from headless_browser_analyzer import deterministic_hash_sha256, normalize_url
-from scraper import extract_structured_data
 from workflows.config import get_config
 from workflows.contracts import FetchUrlResult
 
@@ -38,41 +35,46 @@ class ContentAdapter:
             if cached:
                 return cached
         
-        # Fetch via backend API
+        # Prefer direct in-process service call (same behavior as API route).
         try:
-            params = {"url": url}
-            response = requests.post(
-                f"{self.base_url}/fetch_url_content_crawl4ai",
-                params=params,
-                timeout=100,
-            )
-            response.raise_for_status()
-            api_response = response.json()
-            
-            result_data = api_response.get("result", {})
-            success = result_data.get("success", False)
-            text = result_data.get("text")
-            content_type = result_data.get("content_type")
-            error = result_data.get("error")
-            
-            result = FetchUrlResult(
-                url=url,
-                success=success,
-                text=text,
-                content_type=content_type,
-                error=error,
-            )
-            
-            # Cache successful results
-            if success and text:
-                self._cache_content(url, api_response)
-            
-            return result
-            
-        except Exception as e:
-            return FetchUrlResult(
-                url=url, success=False, error=f"Fetch error: {str(e)}"
-            )
+            from services.analysis_service import fetch_url_content_crawl4ai
+
+            api_response = fetch_url_content_crawl4ai(url)
+        except Exception:
+            # Fallback to HTTP when direct call is unavailable.
+            try:
+                params = {"url": url}
+                response = requests.post(
+                    f"{self.base_url}/fetch_url_content_crawl4ai",
+                    params=params,
+                    timeout=100,
+                )
+                response.raise_for_status()
+                api_response = response.json()
+            except Exception as e:
+                return FetchUrlResult(
+                    url=url, success=False, error=f"Fetch error: {str(e)}"
+                )
+
+        result_data = api_response.get("result", {})
+        success = result_data.get("success", False)
+        text = result_data.get("text")
+        content_type = result_data.get("content_type")
+        error = result_data.get("error")
+
+        result = FetchUrlResult(
+            url=url,
+            success=success,
+            text=text,
+            content_type=content_type,
+            error=error,
+        )
+
+        # Cache successful results
+        if success and text:
+            self._cache_content(url, api_response)
+
+        return result
     
     def _get_cached_content(self, url: str) -> Optional[FetchUrlResult]:
         """Get cached content if available."""

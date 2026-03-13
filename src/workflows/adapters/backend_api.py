@@ -1,10 +1,9 @@
 """Adapter for backend API endpoints."""
 import json
-import os
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+from requests.exceptions import RequestException
 
 from workflows.config import get_config
 
@@ -24,53 +23,29 @@ class BackendAPIAdapter:
         tag: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get list of post filenames for a step."""
-        params = {
-            "count": count,
-            "step": step,
-            "offset": offset,
-        }
-        if tag:
-            params["tag"] = tag
-        
-        response = requests.get(f"{self.base_url}/posts_list", params=params, timeout=30)
-        response.raise_for_status()
-        return response.json()
+        from services.posts_service import list_posts
+
+        return list_posts(count=count, step=step, tag=tag, offset=offset)
     
     def get_post(self, post_filename: str, step: str) -> Dict[str, Any]:
         """Get a single post by filename."""
-        params = {
-            "post": post_filename,
-            "step": step,
-        }
-        response = requests.get(f"{self.base_url}/get_post", params=params, timeout=30)
-        response.raise_for_status()
-        return response.json()
+        from services.posts_service import get_post
+
+        return get_post(post=post_filename, step=step)
     
     def save_post(self, post: Dict[str, Any], step: str) -> Dict[str, Any]:
         """Save a post to the step's destination directory."""
-        params = {"step": step}
-        response = requests.post(
-            f"{self.base_url}/save_post",
-            params=params,
-            json=post,
-            timeout=30,
-        )
-        response.raise_for_status()
-        return response.json()
+        from services.posts_service import save_post
+
+        return save_post(post_data=post, step=step)
     
     def save_object(
         self, data: Dict[str, Any], step: str, filename: str
     ) -> Dict[str, Any]:
         """Save an object to the step's destination directory."""
-        params = {"step": step, "filename": filename}
-        response = requests.post(
-            f"{self.base_url}/save_object",
-            params=params,
-            json=data,
-            timeout=30,
-        )
-        response.raise_for_status()
-        return response.json()
+        from services.posts_service import save_object
+
+        return save_object(data=data, step=step, filename=filename)
     
     def google_search(
         self,
@@ -79,16 +54,9 @@ class BackendAPIAdapter:
         count: int = 10,
     ) -> Dict[str, Any]:
         """Perform Google search."""
-        params = {
-            "query": query,
-            "first": first,
-            "count": count,
-        }
-        response = requests.get(
-            f"{self.base_url}/google_search", params=params, timeout=60
-        )
-        response.raise_for_status()
-        return response.json()
+        from services.search_service import search_google
+
+        return search_google(query=query, first=first, count=count)
     
     def semantic_search(
         self,
@@ -97,18 +65,9 @@ class BackendAPIAdapter:
         n: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Perform semantic search."""
-        payload: Dict[str, Any] = {
-            "text": text,
-            "objects": objects,
-        }
-        if n is not None:
-            payload["n"] = n
-        
-        response = requests.post(
-            f"{self.base_url}/semantic_search", json=payload, timeout=60
-        )
-        response.raise_for_status()
-        return response.json()
+        from services.semantic_service import semantic_search
+
+        return semantic_search(query_text=text, objects_list=objects, n=n)
     
     def needle_finder_batch(
         self,
@@ -120,20 +79,20 @@ class BackendAPIAdapter:
             "needles": needles,
             "haystack": haystack,
         }
-        response = requests.post(
-            f"{self.base_url}/needle_finder_batch", json=payload, timeout=60
-        )
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = requests.post(
+                f"{self.base_url}/needle_finder_batch", json=payload, timeout=60
+            )
+            response.raise_for_status()
+            return response.json()
+        except RequestException:
+            return self._needle_finder_batch_local(needles=needles, haystack=haystack)
     
     def analyze_angles(self, texts: List[str]) -> Dict[str, Any]:
         """Analyze angles from texts."""
-        payload = {"texts": texts}
-        response = requests.post(
-            f"{self.base_url}/angles/analyze", json=payload, timeout=300
-        )
-        response.raise_for_status()
-        return response.json()
+        from services.angles_service import analyze_angles
+
+        return {"results": analyze_angles(texts)}
     
     # Direct filesystem methods (for local execution without HTTP)
     def get_post_local(self, post_filename: str, step: str) -> Dict[str, Any]:
@@ -168,3 +127,34 @@ class BackendAPIAdapter:
         
         with open(dest_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def _needle_finder_batch_local(
+        self,
+        needles: List[Any],
+        haystack: List[str],
+    ) -> Dict[str, Any]:
+        """
+        Local fallback for needle matching when backend HTTP is unavailable.
+        """
+        from services.semantic_service import find_best_match
+
+        results: List[Dict[str, Any]] = []
+        for needle in needles:
+            try:
+                if not isinstance(needle, str):
+                    raise ValueError("must be a string")
+                results.append(find_best_match(needle, haystack))
+            except ValueError as exc:
+                results.append(
+                    {"error": f"Failed to process needle '{needle}': {str(exc)}"}
+                )
+            except Exception as exc:
+                results.append(
+                    {
+                        "error": (
+                            f"Unexpected error processing needle '{needle}': {str(exc)}"
+                        )
+                    }
+                )
+
+        return {"results": results}

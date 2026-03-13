@@ -1,0 +1,51 @@
+from types import SimpleNamespace
+
+from workflows.pipelines.decode import DecodePipeline
+
+
+def test_decode_returns_none_when_no_angles():
+    pipeline = DecodePipeline.__new__(DecodePipeline)
+    assert pipeline.decode("stego", []) is None
+
+
+def test_decode_uses_llm_integer_when_valid():
+    angles = [
+        {"source_quote": "q0", "tangent": "t0"},
+        {"source_quote": "q1", "tangent": "t1"},
+        {"source_quote": "q2", "tangent": "t2"},
+    ]
+    pipeline = DecodePipeline.__new__(DecodePipeline)
+    pipeline.backend = SimpleNamespace(
+        semantic_search=lambda text, objects, n: {"results": [{"object": angles[1]}]}
+    )
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "2")
+    pipeline.config = SimpleNamespace(model="dummy")
+
+    assert pipeline.decode("message", angles) == 2
+
+
+def test_decode_falls_back_to_top_semantic_match_when_llm_invalid():
+    angles = [
+        {"source_quote": "q0", "tangent": "t0"},
+        {"source_quote": "q1", "tangent": "t1"},
+    ]
+    pipeline = DecodePipeline.__new__(DecodePipeline)
+    pipeline.backend = SimpleNamespace(
+        semantic_search=lambda text, objects, n: {"results": [{"object": angles[1]}]}
+    )
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "not a number")
+    pipeline.config = SimpleNamespace(model="dummy")
+
+    assert pipeline.decode("message", angles) == 1
+
+
+def test_decode_returns_none_on_runtime_error():
+    angles = [{"source_quote": "q0", "tangent": "t0"}]
+    pipeline = DecodePipeline.__new__(DecodePipeline)
+    pipeline.backend = SimpleNamespace(
+        semantic_search=lambda text, objects, n: (_ for _ in ()).throw(RuntimeError("down"))
+    )
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "0")
+    pipeline.config = SimpleNamespace(model="dummy")
+
+    assert pipeline.decode("message", angles) is None

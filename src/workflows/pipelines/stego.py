@@ -1,0 +1,656 @@
+"""Steganographic encoding pipeline with n8n parity logic."""
+import json
+import math
+from typing import Any, Dict, List, Optional, Tuple
+
+from workflows.adapters.backend_api import BackendAPIAdapter
+from workflows.adapters.llm import LLMAdapter
+from workflows.config import get_config
+from workflows.pipelines.decode import DecodePipeline
+
+
+MAX_LITERAL_LEN = 250
+
+
+def _is_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and len(value) > 0
+
+
+def _to_binary_utf8(text: str) -> str:
+    return "".join(format(b, "08b") for b in text.encode("utf-8"))
+
+
+def _get_bit_width(max_value: int) -> int:
+    return 1 if max_value <= 1 else math.ceil(math.log2(max_value + 1))
+
+
+def _encode_int(value: int, max_value: int) -> str:
+    return format(value, f"0{_get_bit_width(max_value)}b")
+
+
+def _take_bits(bits: str, count: int) -> Tuple[str, str, bool]:
+    if count <= 0:
+        return "", bits, False
+    if len(bits) >= count:
+        return bits[:count], bits[count:], False
+    return bits.ljust(count, "0"), "", True
+
+
+def _flatten_comments(comments: Any) -> List[Dict[str, Any]]:
+    if not isinstance(comments, list):
+        return []
+
+    flattened: List[Dict[str, Any]] = []
+
+    def walk(comment: Any) -> None:
+        if not isinstance(comment, dict):
+            return
+        flattened.append(comment)
+        replies = comment.get("replies", [])
+        if isinstance(replies, list):
+            for reply in replies:
+                walk(reply)
+
+    for top in comments:
+        walk(top)
+    return flattened
+
+
+def _eq_angle(lhs: Optional[Dict[str, Any]], rhs: Optional[Dict[str, Any]]) -> bool:
+    if lhs is None and rhs is None:
+        return True
+    if lhs is None or rhs is None:
+        return False
+    return (
+        lhs.get("category") == rhs.get("category")
+        and lhs.get("tangent") == rhs.get("tangent")
+        and lhs.get("source_quote") == rhs.get("source_quote")
+    )
+
+
+class StegoPipeline:
+    """Pipeline for steganographic encoding."""
+
+    def __init__(self):
+        self.backend = BackendAPIAdapter()
+        self.llm = LLMAdapter()
+        self.decode_pipeline = DecodePipeline()
+        self.config = get_config()
+
+    def _build_dictionary(self, post: Dict[str, Any]) -> List[str]:
+        search_results = post.get("search_results", [])
+        flattened_comments = _flatten_comments(post.get("comments", []))
+        dictionary: List[str] = []
+        candidates = [post.get("selftext", "")]
+        if isinstance(search_results, list):
+            candidates.extend(search_results)
+        candidates.extend(c.get("body", "") for c in flattened_comments)
+        for entry in candidates:
+            if _is_non_empty_string(entry):
+                dictionary.append(entry)
+        return dictionary
+
+    def _compress_payload(self, payload: str, dictionary: List[str]) -> Dict[str, Any]:
+        std_binary = _to_binary_utf8(payload)
+        std_length = 1 + len(std_binary)
+
+        n = len(payload)
+        max_dict_index = len(dictionary)
+        global_max_match = 0
+        for text in dictionary:
+            if len(text) > global_max_match:
+                global_max_match = len(text)
+
+        matches: Dict[int, List[Dict[str, int]]] = {}
+        if n > 0 and dictionary:
+            for i in range(n):
+                current_char = payload[i]
+                matches_at_i: List[Dict[str, int]] = []
+                for doc_idx, dict_text in enumerate(dictionary):
+                    start = dict_text.find(current_char)
+                    while start != -1:
+                        match_len = 1
+                        max_len = min(global_max_match, n - i, len(dict_text) - start)
+                        while (
+                            match_len < max_len
+                            and payload[i + match_len] == dict_text[start + match_len]
+                        ):
+                            match_len += 1
+                        if match_len > 2:
+                            matches_at_i.append(
+                                {"doc": doc_idx, "idx": start, "len": match_len}
+                            )
+                        start = dict_text.find(current_char, start + 1)
+                if matches_at_i:
+                    matches[i] = matches_at_i
+
+        dp = [float("inf")] * (n + 1)
+        choice: List[Optional[Dict[str, Any]]] = [None] * n
+        dp[n] = 0.0
+
+        bw_literal_len = _get_bit_width(MAX_LITERAL_LEN)
+        bw_dict_idx = _get_bit_width(max_dict_index)
+        bw_match_len = _get_bit_width(global_max_match)
+
+        for i in range(n - 1, -1, -1):
+            max_l = min(MAX_LITERAL_LEN, n - i)
+            for literal_len in range(1, max_l + 1):
+                substring = payload[i : i + literal_len]
+                byte_len = len(substring.encode("utf-8"))
+                cost = 1 + bw_literal_len + byte_len * 8 + dp[i + literal_len]
+                if cost < dp[i]:
+                    dp[i] = cost
+                    choice[i] = {
+                        "kind": "literal",
+                        "len": literal_len,
+                        "sub_str": substring,
+                    }
+
+            for match in matches.get(i, []):
+                doc_len_bits = _get_bit_width(len(dictionary[match["doc"]]))
+                cost = (
+                    1
+                    + bw_dict_idx
+                    + doc_len_bits
+                    + bw_match_len
+                    + dp[i + match["len"]]
+                )
+                if cost < dp[i]:
+                    dp[i] = cost
+                    choice[i] = {"kind": "dict", **match}
+
+        curr = 0
+        dict_binary_parts: List[str] = []
+        references: List[Dict[str, Any]] = []
+
+        while curr < n:
+            picked = choice[curr] or {
+                "kind": "literal",
+                "len": 1,
+                "sub_str": payload[curr : curr + 1],
+            }
+            safe_len = max(1, int(picked.get("len", 1)))
+            if picked["kind"] == "literal":
+                literal = str(picked.get("sub_str", payload[curr : curr + safe_len]))
+                bin_value = _to_binary_utf8(literal)
+                dict_binary_parts.append("0")
+                dict_binary_parts.append(_encode_int(safe_len, MAX_LITERAL_LEN))
+                dict_binary_parts.append(bin_value)
+                references.append({"doc": None, "idx": curr, "len": safe_len})
+            else:
+                doc = int(picked["doc"])
+                idx = int(picked["idx"])
+                dict_binary_parts.append("1")
+                dict_binary_parts.append(_encode_int(doc, max_dict_index))
+                dict_binary_parts.append(_encode_int(idx, len(dictionary[doc])))
+                dict_binary_parts.append(_encode_int(safe_len, global_max_match))
+                references.append({"doc": doc, "idx": idx, "len": safe_len})
+            curr += safe_len
+
+        dict_binary = "".join(dict_binary_parts)
+        dict_length = 1 + len(dict_binary)
+        if dict_length >= std_length:
+            return {
+                "method": "standard",
+                "payload": payload,
+                "compressed": "0" + std_binary,
+                "compressedLength": std_length,
+                "originalLength": len(std_binary),
+                "ratio": std_length / (len(std_binary) or 1),
+                "references": [],
+            }
+
+        return {
+            "method": "dictionary",
+            "payload": payload,
+            "compressed": "1" + dict_binary,
+            "compressedLength": dict_length,
+            "originalLength": len(std_binary),
+            "ratio": dict_length / (len(std_binary) or 1),
+            "references": references,
+        }
+
+    def _embed_in_comment_selection(
+        self, bits: str, post: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        flattened_comments = _flatten_comments(post.get("comments", []))
+        n = len(flattened_comments)
+        bits_count = _get_bit_width(n)
+        bits_used, remaining, insufficient = _take_bits(bits, bits_count)
+        selection_index = int(bits_used or "0", 2)
+        if selection_index > n:
+            selection_index %= (n + 1)
+
+        picked_chain: List[Dict[str, Any]] = []
+        if selection_index > 0 and n > 0:
+            picked_comment = flattened_comments[selection_index - 1]
+            comment_map: Dict[str, Dict[str, Any]] = {}
+            for comment in flattened_comments:
+                cid = comment.get("id")
+                if isinstance(cid, str):
+                    comment_map[cid] = comment
+                    if "_" in cid:
+                        comment_map[cid.split("_", 1)[1]] = comment
+
+            current = picked_comment
+            visited: set[str] = set()
+            while True:
+                current_id = str(current.get("id", ""))
+                if current_id in visited:
+                    break
+                visited.add(current_id)
+                picked_chain.insert(
+                    0,
+                    {
+                        "name": current.get("author", "Unknown"),
+                        "body": current.get("body", ""),
+                        "id": current.get("id"),
+                        "parent_id": current.get("parent_id"),
+                        "permalink": current.get("permalink"),
+                    },
+                )
+                parent_id = current.get("parent_id")
+                link_id = current.get("link_id")
+                if parent_id == link_id:
+                    break
+                parent = comment_map.get(str(parent_id))
+                if parent is None and isinstance(parent_id, str) and "_" in parent_id:
+                    parent = comment_map.get(parent_id.split("_", 1)[1])
+                if parent is None or parent is current:
+                    break
+                current = parent
+
+        return {
+            "result": {
+                "bitsUsed": bits_used,
+                "bitsCount": bits_count,
+                "targetType": "post" if selection_index == 0 else "comment",
+                "context": {
+                    "id": post.get("id"),
+                    "title": post.get("title"),
+                    "author": post.get("author"),
+                    "permalink": post.get("permalink"),
+                },
+                "pickedCommentChain": picked_chain,
+                "insufficientBits": insufficient,
+            },
+            "remainingBits": remaining,
+        }
+
+    def _embed_in_angle_selection(
+        self, bits: str, nested_angles: List[List[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
+        angles: List[Dict[str, Any]] = []
+        for angle_group in nested_angles:
+            for angle in angle_group:
+                with_idx = dict(angle)
+                with_idx["idx"] = len(angles)
+                angles.append(with_idx)
+
+        if not angles:
+            return {
+                "bitsUsed": "",
+                "bitsCount": 0,
+                "remainingBits": bits,
+                "selectedAngle": {},
+                "remainingAngles": [],
+                "totalAnglesSelectedFirst": [],
+                "TangentsDB": [],
+                "insufficientBits": False,
+            }
+
+        bits_count = _get_bit_width(len(angles) - 1)
+        bits_used, remaining, insufficient = _take_bits(bits, bits_count)
+        idx = int(bits_used or "0", 2)
+        if idx >= len(angles):
+            idx %= len(angles)
+
+        selected_angle = angles[idx]
+        remaining_angles = [a for i, a in enumerate(angles) if i != idx]
+        return {
+            "bitsUsed": bits_used,
+            "bitsCount": bits_count,
+            "remainingBits": remaining,
+            "selectedAngle": selected_angle,
+            "remainingAngles": remaining_angles,
+            "totalAnglesSelectedFirst": [selected_angle, *remaining_angles],
+            "TangentsDB": angles,
+            "insufficientBits": insufficient,
+        }
+
+    def _augment_post(self, payload: str, post: Dict[str, Any]) -> Dict[str, Any]:
+        nested_angles = [
+            x if isinstance(x, list) else [x]
+            for x in post.get("angles", [])
+            if x is not None
+        ]
+        dictionary = self._build_dictionary(post)
+        compression = self._compress_payload(payload, dictionary)
+        warnings: List[str] = []
+        if compression.get("method") == "standard":
+            warnings.append("Dictionary compression inefficient; used standard encoding.")
+
+        comment_emb = self._embed_in_comment_selection(compression["compressed"], post)
+        if comment_emb["result"].get("insufficientBits"):
+            warnings.append("Padding used in Comment Selection.")
+
+        angle_emb = self._embed_in_angle_selection(
+            comment_emb["remainingBits"], nested_angles
+        )
+        if angle_emb.get("insufficientBits"):
+            warnings.append("Padding used in Angle Selection.")
+
+        return {
+            "compression": compression,
+            "commentEmbedding": comment_emb["result"],
+            "angleEmbedding": angle_emb,
+            "totalBitsEmbedded": comment_emb["result"]["bitsCount"]
+            + angle_emb["bitsCount"],
+            "fullEncodedBits": comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"],
+            "warnings": warnings,
+        }
+
+    def _build_samples(
+        self, post_augmentation: Dict[str, Any], post: Dict[str, Any]
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        angle_embedding = post_augmentation.get("angleEmbedding", {})
+        candidate_angles = angle_embedding.get("totalAnglesSelectedFirst", [])[:4]
+        needles = [
+            str(a.get("source_quote", ""))
+            for a in candidate_angles
+            if isinstance(a, dict)
+        ]
+        haystack = post.get("search_results", [])
+        if not isinstance(haystack, list):
+            haystack = []
+
+        source_response = self.backend.needle_finder_batch(needles=needles, haystack=haystack)
+        source_results = source_response.get("results", [])
+
+        samples: List[Dict[str, Any]] = []
+        for idx, angle in enumerate(candidate_angles):
+            if not isinstance(angle, dict):
+                continue
+            match_data = source_results[idx] if idx < len(source_results) else {}
+            best_match = (
+                match_data.get("best_match", "")
+                if isinstance(match_data, dict)
+                else ""
+            )
+            sample = dict(angle)
+            sample["best_match"] = best_match
+            samples.append(sample)
+
+        tangents_db = angle_embedding.get("TangentsDB", [])
+        if not isinstance(tangents_db, list):
+            tangents_db = []
+        return samples, tangents_db
+
+    def _build_prompt(
+        self, sample: Dict[str, Any], comment_embedding: Dict[str, Any]
+    ) -> Tuple[str, str]:
+        context = comment_embedding.get("context", {})
+        title = context.get("title", "")
+        author = context.get("author", "")
+        selftext = context.get("selftext", "")
+
+        picked_chain = comment_embedding.get("pickedCommentChain", [])
+        chain_section = ""
+        if isinstance(picked_chain, list) and picked_chain:
+            rendered: List[str] = []
+            for idx, comment in enumerate(picked_chain):
+                if not isinstance(comment, dict):
+                    continue
+                name = comment.get("name", "Unknown")
+                body = comment.get("body", "")
+                label = "commented" if idx == 0 else "replyed"
+                rendered.append(f"{name} {label}:\n{body}")
+            if rendered:
+                chain_section = "\n---\n" + "\n---\n".join(rendered)
+
+        prompt = (
+            "## Context to React To\n\n"
+            "### Relevant Research / Domain Info\n"
+            f"{sample.get('best_match', '')}\n\n"
+            "---\n\n"
+            "### Original Post / Comments\n\n"
+            f"Title: {title}\n"
+            f"Author: {author}\n\n"
+            "Content:\n"
+            f"{selftext}{chain_section}"
+        )
+
+        system_message = (
+            "ROLE: Human Redditor - stay in character at all times.\n\n"
+            "MISSION: Write three short, natural Reddit-style comments reacting to the Original Post.\n"
+            f"Each comment must explore the perspective derived from \"{sample.get('tangent', '')}\", "
+            f"and feel emotionally consistent with {sample.get('category', '')}.\n"
+            "The writing should sound human, grounded, and reflective - never robotic or abstract.\n\n"
+            "---\n\n"
+            "RULES\n\n"
+            "1. Output one JSON array of exactly three text strings.\n"
+            "   No markdown, no bullets, no lists.\n"
+            "2. No labels or explanations. Only the comments themselves.\n"
+            "3. Human tone: casual, spontaneous, slightly imperfect.\n"
+            "4. Clear intent: Each comment must naturally express\n\n"
+            "   * who is reacting (subject),\n"
+            "   * what they are thinking or doing (action),\n"
+            "   * how they feel about it (emotion).\n"
+            "     Do not force grammar; keep phrasing natural.\n"
+            "5. Banned words: Do not use specific keywords, names, or jargon found in the provided content. "
+            "Paraphrase those ideas in everyday language.\n"
+            "6. Priority rule: If any rules conflict, prioritize thematic accuracy and natural human expression.\n\n"
+            "IMPORTANT: Your final response must be formatted as valid JSON and returned using the required "
+            "response-formatting tool.\n"
+        )
+        return prompt, system_message
+
+    def _generate_stego_texts(
+        self,
+        sample: Dict[str, Any],
+        comment_embedding: Dict[str, Any],
+    ) -> List[str]:
+        prompt, system_message = self._build_prompt(sample, comment_embedding)
+        response = self.llm.call_llm(
+            prompt=prompt,
+            system_message=system_message,
+            model=self.config.model,
+            provider="lm_studio",
+            temperature=0.7,
+        )
+        text = response.strip()
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                clean = [str(x).strip() for x in parsed if isinstance(x, str)]
+                if clean:
+                    return clean
+        except json.JSONDecodeError:
+            pass
+        return [text]
+
+    def _cross_validate(
+        self,
+        candidate_texts: List[str],
+        few_shots: List[Dict[str, Any]],
+        tangents_db: List[Dict[str, Any]],
+        selected_angle: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        decoded_indices: List[Optional[int]] = []
+        decodeds: List[Optional[Dict[str, Any]]] = []
+        for text in candidate_texts:
+            decoded_idx = self.decode_pipeline.decode(
+                stego_text=text,
+                angles=tangents_db,
+                few_shots=few_shots,
+            )
+            decoded_indices.append(decoded_idx)
+            if isinstance(decoded_idx, int) and 0 <= decoded_idx < len(tangents_db):
+                decoded = tangents_db[decoded_idx]
+                decodeds.append(decoded)
+            else:
+                decodeds.append(None)
+
+        success_idx = -1
+        for idx, decoded_obj in enumerate(decodeds):
+            if _eq_angle(decoded_obj, selected_angle):
+                success_idx = idx
+                break
+
+        if success_idx != -1:
+            return {
+                "succeeded": True,
+                "stegoText": candidate_texts[success_idx],
+                "successIdx": success_idx,
+                "decodedIndices": decoded_indices,
+            }
+
+        breakdown: Dict[str, Any] = {}
+        for idx, text in enumerate(candidate_texts):
+            breakdown[text] = decodeds[idx]
+        return {
+            "succeeded": False,
+            "breakDown": breakdown,
+            "decodedIndices": decoded_indices,
+        }
+
+    def encode(
+        self,
+        payload: str,
+        post: Dict[str, Any],
+        tag: Optional[str] = None,
+        max_retries: int = 4,
+    ) -> Dict[str, Any]:
+        """
+        Encode payload into post using steganography.
+
+        This implementation mirrors the n8n Stego workflow:
+        1) Post augmentation (compression + comment/angle embedding)
+        2) Source matching and sample construction
+        3) Candidate generation + decode cross-validation
+        4) Retry loop when validation fails
+        """
+        angles = post.get("angles", [])
+        if not isinstance(angles, list) or not angles:
+            raise ValueError("Post must have angles")
+
+        post_augmentation = self._augment_post(payload, post)
+        samples, tangents_db = self._build_samples(post_augmentation, post)
+        if not samples:
+            return {
+                "stego_text": "",
+                "post": post,
+                "succeeded": False,
+                "retry_count": 0,
+                "tag": tag,
+                "error": "No samples generated from angle embedding",
+                "embedding": post_augmentation,
+            }
+
+        selected_angle = post_augmentation["angleEmbedding"].get("selectedAngle", {})
+        selected_idx = selected_angle.get("idx")
+        retry_count = 0
+        last_breakdown: Dict[str, Any] = {}
+
+        while retry_count <= max_retries:
+            try:
+                encoded_results: List[Dict[str, Any]] = []
+                for sample in samples:
+                    texts = self._generate_stego_texts(
+                        sample=sample,
+                        comment_embedding=post_augmentation["commentEmbedding"],
+                    )
+                    encoded_results.append(
+                        {
+                            "category": sample.get("category"),
+                            "source_quote": sample.get("source_quote"),
+                            "tangent": sample.get("tangent"),
+                            "texts": texts,
+                        }
+                    )
+
+                primary_texts = encoded_results[0].get("texts", []) if encoded_results else []
+                few_shots = encoded_results[1:]
+                if not primary_texts:
+                    raise RuntimeError("Encoder did not return candidate texts")
+
+                validation = self._cross_validate(
+                    candidate_texts=primary_texts,
+                    few_shots=few_shots,
+                    tangents_db=tangents_db,
+                    selected_angle=selected_angle,
+                )
+                if validation.get("succeeded"):
+                    return {
+                        "stego_text": validation["stegoText"],
+                        "post": post,
+                        "selected_angle": selected_angle,
+                        "angle_index": selected_idx,
+                        "succeeded": True,
+                        "retry_count": retry_count,
+                        "tag": tag,
+                        "embedding": post_augmentation,
+                        "encoded_samples": encoded_results,
+                        "decoded_indices": validation.get("decodedIndices", []),
+                    }
+
+                last_breakdown = validation.get("breakDown", {})
+                if retry_count >= max_retries:
+                    return {
+                        "stego_text": primary_texts[0] if primary_texts else "",
+                        "post": post,
+                        "selected_angle": selected_angle,
+                        "angle_index": selected_idx,
+                        "succeeded": False,
+                        "retry_count": retry_count,
+                        "tag": tag,
+                        "error": "Decoding validation failed",
+                        "breakdown": last_breakdown,
+                        "embedding": post_augmentation,
+                        "encoded_samples": encoded_results,
+                    }
+                retry_count += 1
+            except Exception as exc:
+                if retry_count >= max_retries:
+                    return {
+                        "stego_text": "",
+                        "post": post,
+                        "succeeded": False,
+                        "retry_count": retry_count,
+                        "tag": tag,
+                        "error": str(exc),
+                        "breakdown": last_breakdown,
+                        "embedding": post_augmentation,
+                    }
+                retry_count += 1
+
+        return {
+            "stego_text": "",
+            "post": post,
+            "succeeded": False,
+            "retry_count": retry_count,
+            "tag": tag,
+            "error": "Max retries exceeded",
+            "breakdown": last_breakdown,
+            "embedding": post_augmentation,
+        }
+
+    def process_post(
+        self,
+        post_id: str,
+        payload: str,
+        tag: Optional[str] = None,
+        step: str = "final-step",
+    ) -> Dict[str, Any]:
+        """Process one post and persist output on success."""
+        # n8n Stego reads post data from final-step; keep fallback for local compatibility.
+        try:
+            post = self.backend.get_post_local(f"{post_id}.json", step="final-step")
+        except FileNotFoundError:
+            post = self.backend.get_post_local(f"{post_id}.json", step="angles-step")
+
+        result = self.encode(payload=payload, post=post, tag=tag)
+        if result.get("succeeded"):
+            filename = f"{post_id}_{tag}.json" if tag else f"{post_id}.json"
+            self.backend.save_object_local(result, step=step, filename=filename)
+        return result

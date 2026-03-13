@@ -1,0 +1,709 @@
+{
+  "updatedAt": "2026-01-06T06:08:32.000Z",
+  "createdAt": "2025-12-09T04:31:37.112Z",
+  "id": "ot3lZXFjtZy2fcxD",
+  "name": "GenSearchTerms",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=# Title: {{ $('Init Fields').item.json.post_title }}\n`{{ $('Init Fields').item.json.post_url }}`\n\n{{ $('Init Fields').item.json.post_text? '## Content:\\n'+$('Init Fields').item.json.post_text: '' }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=You are a creative intelligence that transforms any text into a kaleidoscope of fascinating research pathways. Your mission is to explode a single post into the maximum number of intriguing, non-obvious, and wildly distinct search queries that capture every conceivable dimension of the content. Think like a polymath detective, cultural anthropologist, and trend forecaster combined.\n\n**Maximize these qualities in your queries:**\n- **Unexpected angles** (What would a historian, neuroscientist, or underground subculture expert search for?)\n- **Granular specificity** (Niche down to absurd levels of detail)\n- **Cross-domain connections** (Link topics to unrelated fields)\n- **Temporal dimensions** (Trends, futures, forgotten pasts, \"2025\", \"since 2020\")\n- **Actionable formats** (\"vs\", \"alternatives\", \"how to\", \"why does\", \"tools for\", \"mistakes with\")\n- **Jargon exploration** (Technical terms, slang, industry acronyms)\n- **Geographic/cultural variants** (UK vs US terms, regional practices)\n\n**OUTPUT RULES:**\n- Return ONLY a JSON array of search strings\n- Minimum 12 queries (aim for 15-20)\n- Each query must be UNIQUE (no semantic duplicates)\n- Strip ALL personal identifiers, names, and emotional language\n- Focus purely on concepts, mechanisms, and externalizable topics\n- Make each query sound like something a curious expert would type into Google at 2am\n\n**Examples of transformation:**\n❌ Boring: \"cooking tips\"  \n✅ Interesting: \"Maillard reaction mistakes cast iron skillet 2024\"\n\n❌ Boring: \"productivity apps\"  \n✅ Interesting: \"Zettelkasten method vs PARA system academic research\"\n\n❌ Boring: \"travel Japan\"  \n✅ Interesting: \"Japan conbini food hacking minimalist backpacking\"\n\n**Input:** A post about someone's experience.\n**Your task:** Deconstruct it into the most interesting, obscure, and diverse search queries possible. Cover technical terms, cultural phenomena, historical precedents, psychological mechanisms, tool comparisons, and emerging trends. Leave no conceptual stone unturned. Format as a JSON array of strings, no explanations."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        48,
+        -432
+      ],
+      "id": "d324e033-8415-4963-95dd-b63800103bd5",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "mistral-nemo-instruct-2407-abliterated"
+        },
+        "options": {
+          "timeout": "={{ 1000 * 60 * 60 * 10 }}",
+          "maxRetries": 4
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -336,
+        224
+      ],
+      "id": "ab8bd123-5aea-4341-81ea-8870c7472dfe",
+      "name": "Local Summarization Minstral1",
+      "notesInFlow": false,
+      "credentials": {
+        "openAiApi": {
+          "id": "iuOubn3dqpOUPpQA",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai/gpt-oss-20b",
+          "mode": "list",
+          "cachedResultName": "openai/gpt-oss-20b"
+        },
+        "options": {
+          "timeout": "={{ 1000*60*10 }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -80,
+        224
+      ],
+      "id": "cbdb1068-84e1-4bfa-816d-8905669bbfc6",
+      "name": "gpt-oss1",
+      "credentials": {
+        "openAiApi": {
+          "id": "iuOubn3dqpOUPpQA",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-flash-lite-latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -208,
+        224
+      ],
+      "id": "a1df3c6d-fe2f-4751-a454-9c1555a14b26",
+      "name": "lite",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "npJWIuX1Pto10uUk",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 3,
+        "rules": {
+          "rule": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "d7a0999e-c196-4b8e-a00f-d4e2cc0832c9",
+                    "leftValue": "hi",
+                    "rightValue": "hi",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.modelSelector",
+      "typeVersion": 1,
+      "position": [
+        -288,
+        16
+      ],
+      "id": "e92c87b3-3d66-4a88-bbe9-75aedf069fdf",
+      "name": "Topic Model Selector"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n    \"type\": \"array\",\n    \"items\": {\n        \"type\": \"string\"\n    }\n}",
+        "autoFix": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        256,
+        -160
+      ],
+      "id": "9c61f3fe-c537-4169-bd51-c1ab3c2abc57",
+      "name": "string[]"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "post_title",
+              "type": "any"
+            },
+            {
+              "name": "post_text",
+              "type": "any"
+            },
+            {
+              "name": "post_url",
+              "type": "any"
+            },
+            {
+              "name": "post_id"
+            }
+          ]
+        }
+      },
+      "id": "31d0b5cf-c09c-4603-99fb-80946c62b14e",
+      "typeVersion": 1.1,
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        -912,
+        -560
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "rzT7NbGjQbQRnS1H",
+          "mode": "list",
+          "cachedResultName": "ResearchTerms",
+          "cachedResultUrl": "/projects/OjdtAcp29h8ZUA6k/datatables/rzT7NbGjQbQRnS1H"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "post_id",
+              "keyValue": "={{ $json.post_id }}"
+            }
+          ]
+        },
+        "limit": 1
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        -656
+      ],
+      "id": "53b0d3da-bcf1-4db0-8d20-5a916fba9024",
+      "name": "Get row(s)",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1136,
+        -752
+      ],
+      "id": "61ad6fd2-ccd8-4ea0-ba6c-16cda49eed8f",
+      "name": "When clicking ‘Execute workflow’",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nreturn [\n  {\n    \"post_title\": \"Conservative activist Charlie Kirk dies after being shot at Utah college event\",\n    \"post_text\": \"Conservative activist Charlie Kirk assassinated at Utah university: By HANNAH SCHOENBAUM, ALANNA DURKIN RICHER, MARK SHERMAN and ERIC TUCKER\\n\\t Charlie Kirk, a conservative activist and ally of President Donald Trump, was shot and killed Wednesday at a Utah college event in what the governor called a political assassination carried out from a rooftop. The shooting drew bipartisan condemnation but little consensus on how to prevent political violence.\\n- Charlie Kirk, CEO and co-founder of Turning Point USA, was assassinated during an event at Utah Valley University\\n- The shooter wore dark clothing and fired from a building roof some distance away from the event\\n- No suspect was in custody late Wednesday, though authorities were searching for a new person of interest\\n- The assassination drew bipartisan condemnation across the political aisle\\n---\\nConservative activist Charlie Kirk assassinated at Utah university: By Hannah Schoenbaum and Alanna Durkin Richer and Mark Sherman and Eric Tucker\\n\\t Charlie Kirk, a prominent conservative activist and founder of Turning Point USA, was shot and killed during a visit to Utah Valley University in Orem, Utah. The incident has left the conservative community shocked and mourning.\\n- Charlie Kirk, a well-known conservative activist, was assassinated at Utah Valley University\\n- Turning Point USA, the organization founded by Kirk, is known for its activism on college campuses\\n- Kirk's zeal for confronting liberals in academia eventually won over influential conservative financiers\",\n    \"post_url\": \"https://apnews.com/article/charlie-kirk-conservative-activist-shot-546165a8151104e0938a5e085be1e8bd\",\n    \"post_id\": \"1ndpxk8\"\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -912,
+        -752
+      ],
+      "id": "e6b6e268-3a8b-4e89-b4ae-77bba563b64d",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b18aaba2-c47f-4f51-bc3a-0f7343f45756",
+              "leftValue": "={{ Object.keys($json).length !== 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -240,
+        -656
+      ],
+      "id": "480558ee-f8a3-4ad9-b945-00643c4d46c9",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "rzT7NbGjQbQRnS1H",
+          "mode": "list",
+          "cachedResultName": "ResearchTerms",
+          "cachedResultUrl": "/projects/OjdtAcp29h8ZUA6k/datatables/rzT7NbGjQbQRnS1H"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "post_id": "={{ $('Init Fields').item.json.post_id }}",
+            "searchTerms": "={{ JSON.stringify( $('AI Agent').item.json.output )}}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "post_id",
+              "displayName": "post_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "searchTerms",
+              "displayName": "searchTerms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        496,
+        -576
+      ],
+      "id": "c5dc2a7b-b866-41bd-bf00-225c8b5cb495",
+      "name": "Insert row"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0dd9c6de-c374-4220-b137-de3b8c5db17e",
+              "name": "post_id",
+              "value": "={{ $json.post_id }}",
+              "type": "string"
+            },
+            {
+              "id": "da16b67a-fc47-40bf-8719-63760ab86f4c",
+              "name": "post_title",
+              "value": "={{ $json.post_title }}",
+              "type": "string"
+            },
+            {
+              "id": "9621b8cb-a20f-47ab-aa08-1fae6d6cd9ea",
+              "name": "post_url",
+              "value": "={{ $json.post_url }}",
+              "type": "string"
+            },
+            {
+              "id": "4601e226-5d76-48be-a47b-69fedd19e789",
+              "name": "post_text",
+              "value": "={{ $json.post_text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -688,
+        -656
+      ],
+      "id": "efe29446-376c-4515-a614-16a6eb62ea81",
+      "name": "Init Fields"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nreturn [\n  {\n    terms:$input.first().json.output\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -432
+      ],
+      "id": "768c084f-5592-4511-a895-ae32f2ffc964",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nreturn [\n  {\n    terms: JSON.parse($input.first().json.searchTerms)\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -880
+      ],
+      "id": "a97285aa-b5e4-4349-ac0e-5a477009a39a",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c049ba72-cf24-4280-9d52-ab5b2269c16c",
+              "name": "output",
+              "value": "={{ $json.terms }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        944,
+        -656
+      ],
+      "id": "6c4dc2b2-289c-4536-b058-2a596568dc62",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "description": "Call this tool to  validate your final answer send it your final answer",
+        "workflowId": {
+          "__rl": true,
+          "value": "RO7c2NpYiUKosXPN",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/RO7c2NpYiUKosXPN",
+          "cachedResultName": "JSON validator"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "text": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('text', ``, 'string') }}",
+            "schema": "{     \"type\": \"array\",     \"items\": {         \"type\": \"string\"     } }",
+            "model": "mistral-nemo-instruct-2407-abliterated"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "text",
+              "displayName": "text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "schema",
+              "displayName": "schema",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "model",
+              "displayName": "model",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        80,
+        -176
+      ],
+      "id": "9647685b-2d5e-4e8f-94b8-c8c113e4ad4f",
+      "name": "Call 'JSON validator'"
+    }
+  ],
+  "connections": {
+    "Local Summarization Minstral1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Topic Model Selector",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gpt-oss1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Topic Model Selector",
+            "type": "ai_languageModel",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "lite": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Topic Model Selector",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Topic Model Selector": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "string[]",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "string[]": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Init Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Insert row",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s)": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Init Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Fields": {
+      "main": [
+        [
+          {
+            "node": "Get row(s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert row": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'JSON validator'": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "versionId": "2e38ebe3-c41d-426e-9bc2-c878b502abfe",
+  "activeVersionId": "2e38ebe3-c41d-426e-9bc2-c878b502abfe",
+  "versionCounter": 52,
+  "triggerCount": 0,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2025-12-09T04:31:37.117Z",
+      "createdAt": "2025-12-09T04:31:37.117Z",
+      "role": "workflow:owner",
+      "workflowId": "ot3lZXFjtZy2fcxD",
+      "projectId": "OjdtAcp29h8ZUA6k",
+      "project": {
+        "updatedAt": "2025-10-01T18:42:40.745Z",
+        "createdAt": "2025-10-01T18:31:22.020Z",
+        "id": "OjdtAcp29h8ZUA6k",
+        "name": "Nasooh AlOlabi <nasooholabi@proton.me>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "198cbed9-2053-49b6-8798-4b778fe5cd11"
+      }
+    }
+  ]
+}

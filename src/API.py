@@ -348,39 +348,6 @@ async def fetch_url_content():
 
     return jsonify({"message": "Processed", "result": result}), 200
 
-
-"""
-# --- Define Your Schema ---
-class ArticleData(BaseModel):
-    title: str = Field(..., description="The main headline of the article")
-    summary: str = Field(..., description="A 2-sentence summary of the content")
-    key_points: list[str] = Field(..., description="List of 3-5 key takeaways")
-    author: str = Field(default="Unknown", description="Name of the author if available")
-
-async def main():
-    # Target URL (Example: A tech news site)
-    target_url = "https://techcrunch.com/" 
-    
-    # Run the Modular Scraper
-    result = await extract_structured_data(
-        url=target_url,
-        schema=ArticleData,
-        # Ensure this matches the ID in LM Studio top bar exactly:
-        model_name="mistral-nemo-instruct-2407-abliterated", 
-        instruction="Analyze the main article on this page. Ignore nav links and ads."
-    )
-
-    # Display Clean Output
-    if result:
-        print("\n" + "="*40)
-        print(" FINAL EXTRACTED DATA ")
-        print("="*40)
-        print(json.dumps(result, indent=2))
-    else:
-        print("\n[!] No data extracted.")
-"""
-
-
 class ArticleData(BaseModel):
     title: str = Field(..., description="The main headline of the article")
     summary: str = Field(...,
@@ -1561,20 +1528,19 @@ def analyze_angles_endpoint():
 # Cleanup on app shutdown
 atexit.register(stop_event_loop)
 
-
 if __name__ == "__main__":
-    # To run this script, you must first install Flask: pip install Flask
-    # Start the persistent event loop
-    start_event_loop()
-
+    import os
+    from infrastructure.config import POSTS_DIRECTORY
+    from services.kv_service import init_db, migrate_json_to_sqlite
+    
     # Migrate data from old JSON file to SQLite if it exists
     migrate_json_to_sqlite()
     # Initialize database (creates table if it doesn't exist)
     init_db()
     print(f"Serving posts from directory: {os.path.abspath(POSTS_DIRECTORY)}")
-    print(f"Database file: {os.path.abspath(DB_FILE)}")
     print("Starting server...")
     try:
         app.run(host="192.168.100.136", port=5001, debug=False)
     finally:
+        from infrastructure.event_loop import stop_event_loop
         stop_event_loop()

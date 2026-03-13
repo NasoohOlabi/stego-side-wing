@@ -1,0 +1,1155 @@
+{
+  "updatedAt": "2026-03-07T15:52:55.509Z",
+  "createdAt": "2025-11-09T15:25:56.392Z",
+  "id": "27rZrYtywu3k9e7Q",
+  "name": "Stego",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -6080,
+        736
+      ],
+      "id": "4ec07d57-4388-4965-b972-dc60d5176eeb",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f957c0eb-7396-4c28-b949-d014578dfc58",
+              "name": "payload",
+              "value": "={\n\"payload\": \"House Oversight Committee subpoenas Ghislaine Maxwell for deposition: By Annie Grayer and Kaitlan Collins, CNN\",\n\"tag\": \"version_16\"\n}\n\n",
+              "type": "object"
+            },
+            {
+              "id": "b871b0d0-5d81-4c01-ab48-fa83d98cc978",
+              "name": "MODEL",
+              "value": "openai/gpt-oss-20b",
+              "type": "string"
+            },
+            {
+              "id": "26ef596a-268f-4e84-a503-31cfd2d44e55",
+              "name": "BASE_URL_LAP",
+              "value": "http://127.0.0.1:5000",
+              "type": "string"
+            },
+            {
+              "id": "e8f91c16-780b-461f-af9d-444039d0ba52",
+              "name": "BASE_URL",
+              "value": "http://192.168.100.136:5001",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -5856,
+        832
+      ],
+      "id": "ee2edb2a-7f39-47c9-8484-1d5cc45d28d0",
+      "name": "SetSecretData"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "mistral-nemo-instruct-2407-abliterated",
+          "mode": "list",
+          "cachedResultName": "mistral-nemo-instruct-2407-abliterated"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -3840,
+        1232
+      ],
+      "id": "c73e4c4f-f437-4551-905e-93ffedc0a16b",
+      "name": "Local Summarization Minstral",
+      "credentials": {
+        "openAiApi": {
+          "id": "iuOubn3dqpOUPpQA",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "function eq(obj1, obj2) {\n  // Check if both objects are null or undefined\n  if (obj1 == null && obj2 == null) {\n    return true;\n  }\n  // If one is null/undefined and the other isn't, they are not equal\n  if (obj1 == null || obj2 == null) {\n    return false;\n  }\n\n  // Check if the specific properties are equal\n  return (\n    obj1.category === obj2.category &&\n    obj1.tangent === obj2.tangent &&\n    obj1.source_quote === obj2.source_quote\n  );\n}\nconsole.log('$input.item.json.data',$input.item.json.data)\n// Get the necessary data\nconst decodeds = $input.item.json.data.map(x=> $('sample').first().json.TangentsDB [+x.output]);\nconsole.log('decodeds',decodeds)\n\nconst encodedPayload = $('PostAugmentation').first().json.angleEmbedding.selectedAngle;\n\n// Use the new eq function for comparison\nconst successIdx = decodeds.findIndex((v) => eq(v, encodedPayload));\n\nif (successIdx !== -1) {\n  return {\n    succeeded: true,\n    stegoText: $('Encode + 3 Examples Aggregate').first().json.results[0].texts[successIdx],\n  };\n}\n\nconst breakDown = $('Encode + 3 Examples Aggregate').first().json.results[0].texts.reduce((acc, item, itemIdx) => {\n    acc[item] = decodeds[itemIdx];\n    return acc;\n  }, {});\nreturn { succeeded: false, breakDown };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2128,
+        592
+      ],
+      "id": "228557c1-c810-4138-ba71-f7682505c2a6",
+      "name": "CrossValidation"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "results[0].texts",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -2800,
+        592
+      ],
+      "id": "e2b095e8-787f-4053-ab1a-72a18217870d",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        -2352,
+        592
+      ],
+      "id": "c2488da5-9233-4d36-8adf-6979c6c6c2bf",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "062499cb-216e-4741-9ee2-1447e838437a",
+              "name": "stegoText",
+              "value": "={{ $json.stegoText }}",
+              "type": "string"
+            },
+            {
+              "id": "2e49cb3b-27e4-4ac0-96b8-c91b46a76374",
+              "name": "embedding",
+              "value": "={{ $('PostAugmentation').last().json }}",
+              "type": "object"
+            },
+            {
+              "id": "2d73c4d3-ff37-4332-ade4-7bd47503cd07",
+              "name": "post",
+              "value": "={{ $('Get Post').last().json }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1680,
+        448
+      ],
+      "id": "beca2e82-19e9-4cf4-aa4c-ef52e861e5c5",
+      "name": "Save"
+    },
+    {
+      "parameters": {
+        "numberInputs": 4,
+        "rules": {
+          "rule": [
+            {
+              "modelIndex": 3,
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "d7a0999e-c196-4b8e-a00f-d4e2cc0832c9",
+                    "leftValue": "hi",
+                    "rightValue": "hi",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.modelSelector",
+      "typeVersion": 1,
+      "position": [
+        -3728,
+        1024
+      ],
+      "id": "034c0d2a-9f8a-478d-865d-702b82d1a9b1",
+      "name": "Model Selector"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-flash-lite-latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -3712,
+        1232
+      ],
+      "id": "16798476-f3eb-4fd3-b4af-21a1c0277ae2",
+      "name": "Google Gemini Chat Model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "npJWIuX1Pto10uUk",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=## Context to React To\n\n### Relevant Research / Domain Info\n{{ $json.best_match }}\n\n---\n\n### Original Post / Comments\n\nTitle: {{ $('PostAugmentation').last().json.commentEmbedding.context.title }}\nAuthor: {{ $('PostAugmentation').last().json.commentEmbedding.context.author }}\n\nContent:\n{{ $('PostAugmentation').last().json.commentEmbedding.context.selftext }}\n{{ $('PostAugmentation').last().json.commentEmbedding.pickedCommentChain && $('PostAugmentation').last().json.commentEmbedding.pickedCommentChain.length > 0 ? '\\n---\\n':'' }}\n{{ $('PostAugmentation').last().json.commentEmbedding.pickedCommentChain.map((x,xIdx)=>xIdx===0? `${x.name} commented:\\n${x.body}`:`${x.name} replyed:\\n${x.body}`).join('\\n---\\n') }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=ROLE: Human Redditor — stay in character at all times.\n\nMISSION: Write three short, natural Reddit-style comments reacting to the Original Post.\nEach comment must explore the perspective derived from “{{ $json.tangent }}”, and feel emotionally consistent with {{ $json.category }}.\nThe writing should sound human, grounded, and reflective — never robotic or abstract.\n\n---\n\nRULES\n\n1. Output one JSON array of exactly three text strings.\n   No markdown, no bullets, no lists.\n2. No labels or explanations. Only the comments themselves.\n3. Human tone: casual, spontaneous, slightly imperfect.\n4. Clear intent: Each comment must naturally express\n\n   * who is reacting (subject),\n   * what they are thinking or doing (action),\n   * how they feel about it (emotion).\n     Do not force grammar; keep phrasing natural.\n5. Banned words: Do not use specific keywords, names, or jargon found in the provided content. Paraphrase those ideas in everyday language.\n6. Priority rule: If any rules conflict, prioritize thematic accuracy and natural human expression.\n\nIMPORTANT: Your final response must be formatted as valid JSON and returned using the required response-formatting tool.\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -3728,
+        592
+      ],
+      "id": "90ce3fed-c1bd-44c3-b07f-a0089c894be5",
+      "name": "G Encode",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai/gpt-oss-20b",
+          "mode": "list",
+          "cachedResultName": "openai/gpt-oss-20b"
+        },
+        "options": {
+          "timeout": "={{ 1000 * 60 * 60 * 5 }}",
+          "maxRetries": 5
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -3584,
+        1232
+      ],
+      "id": "260c9c02-bf8a-4397-afb2-cc1b1f9ab731",
+      "name": "gpt-oss",
+      "credentials": {
+        "openAiApi": {
+          "id": "iuOubn3dqpOUPpQA",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n\t\"type\": \"array\",\n\t\"items\": {\n        \"type\": \"string\"\n    }\n}",
+        "autoFix": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        -3648,
+        816
+      ],
+      "id": "dbb93c6a-fa39-4c30-b112-98183e35eb03",
+      "name": "String List"
+    },
+    {
+      "parameters": {
+        "model": "qwen/qwen3-32b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -3456,
+        1232
+      ],
+      "id": "0e1e6959-ee0b-4ae8-b3ad-d89b1b232fe4",
+      "name": "Groq Chat Model1",
+      "credentials": {
+        "groqApi": {
+          "id": "7IadJ606YJf7u1Gx",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "bb743f69-1273-4018-ad91-e8667f8aa0ba",
+              "name": "fileName",
+              "value": "={{ $json.fileNames }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -5408,
+        832
+      ],
+      "id": "6cc0fb14-6694-4a64-8e49-a77252af66f1",
+      "name": "singular file names"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.BASE_URL }}/posts_list",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "count",
+              "value": "1"
+            },
+            {
+              "name": "step",
+              "value": "final-step"
+            },
+            {
+              "name": "offset",
+              "value": "1"
+            },
+            {
+              "name": "tag",
+              "value": "={{ $json.payload.tag }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -5632,
+        832
+      ],
+      "id": "9ad93f22-884e-4c80-9f9c-d65da949a093",
+      "name": "GetListPosts"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('SetSecretData').item.json.BASE_URL }}/get_post",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "post",
+              "value": "={{ $json.fileName }}"
+            },
+            {
+              "name": "step",
+              "value": "final-step"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -4960,
+        832
+      ],
+      "id": "c1740d87-78c1-4fc9-8188-ac13e386eaf1",
+      "name": "Get Post"
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        -1456,
+        544
+      ],
+      "id": "0ce0aca3-56c0-463a-910d-03cce2ee5c4d",
+      "name": "Convert to File"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=D:\\\\Master\\\\code\\\\stego-results-viewer\\\\output-results\\\\{{ $('Save').last().json.post.id }}{{ !!$('SetSecretData').last().json.payload.tag ? '_'+$('SetSecretData').last().json.payload.tag :''}}.json",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        -1232,
+        544
+      ],
+      "id": "24a8b920-6626-48ea-bff9-6b8bc51c7ac6",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "path": "f43d05a8-ab8f-4805-b357-bd094baa50e1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -6080,
+        928
+      ],
+      "id": "a2ff02a0-e65f-4ba6-b7d9-0604d144a157",
+      "name": "Webhook",
+      "webhookId": "f43d05a8-ab8f-4805-b357-bd094baa50e1"
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5678/webhook/f43d05a8-ab8f-4805-b357-bd094baa50e1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -1008,
+        544
+      ],
+      "id": "93301612-21ba-493f-8e7a-a77822091220",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "fileName",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -5184,
+        832
+      ],
+      "id": "70db7341-f58e-416e-959a-3803816e3f59",
+      "name": "Split Out2"
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * UnifiedEmbeddingV3_Optimized.js\n *\n * High-performance single n8n Code node that performs two-level steganographic\n * embedding.\n *\n * FIXES:\n * - Resolved comment chain breakage by normalizing ID prefixes (e.g., t1_) during parent lookup.\n */\n\n/* ============================================================\n   CONFIG\n   ============================================================ */\n\nconst MAX_LITERAL_LEN = 250;\n\n/* ============================================================\n   HELPERS\n   ============================================================ */\n\nconst isNonEmptyString = (v) => typeof v === \"string\" && v.length > 0;\n\n/**\n * Safe bit slice with padding.\n */\nfunction takeBits(bits, count) {\n\tif (count <= 0)\n\t\treturn { bitsUsed: \"\", remaining: bits, insufficient: false };\n\tif (bits.length >= count) {\n\t\treturn {\n\t\t\tbitsUsed: bits.substring(0, count),\n\t\t\tremaining: bits.substring(count),\n\t\t\tinsufficient: false\n\t\t};\n\t}\n\treturn {\n\t\tbitsUsed: bits.padEnd(count, \"0\"),\n\t\tremaining: \"\",\n\t\tinsufficient: true\n\t};\n}\n\n/**\n * Converts string to binary representation of its UTF-8 bytes.\n */\nfunction toBinaryUtf8(str) {\n\tconst output = [];\n\tfor (let i = 0; i < str.length; i++) {\n\t\tlet cp = str.codePointAt(i);\n\t\tif (cp > 0xffff) i++;\n\n\t\tlet bytes = [];\n\t\tif (cp <= 0x7f) bytes.push(cp);\n\t\telse if (cp <= 0x7ff) bytes.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));\n\t\telse if (cp <= 0xffff)\n\t\t\tbytes.push(\n\t\t\t\t0xe0 | (cp >> 12),\n\t\t\t\t0x80 | ((cp >> 6) & 0x3f),\n\t\t\t\t0x80 | (cp & 0x3f)\n\t\t\t);\n\t\telse\n\t\t\tbytes.push(\n\t\t\t\t0xf0 | (cp >> 18),\n\t\t\t\t0x80 | ((cp >> 12) & 0x3f),\n\t\t\t\t0x80 | ((cp >> 6) & 0x3f),\n\t\t\t\t0x80 | (cp & 0x3f)\n\t\t\t);\n\n\t\tfor (const b of bytes) output.push(b.toString(2).padStart(8, \"0\"));\n\t}\n\treturn output.join(\"\");\n}\n\nfunction getBitWidth(max) {\n\treturn max <= 1 ? 1 : Math.ceil(Math.log2(max + 1));\n}\n\nfunction encodeInt(n, max) {\n\treturn n.toString(2).padStart(getBitWidth(max), \"0\");\n}\n\nfunction flattenComments(comments) {\n\tconst flatten = (c) => {\n\t\tif (\n\t\t\t!c ||\n\t\t\t!c.replies ||\n\t\t\t!Array.isArray(c.replies) ||\n\t\t\tc.replies.length === 0\n\t\t) {\n\t\t\treturn c ? [c] : [];\n\t\t}\n\t\treturn [c, ...c.replies.flatMap(flatten)];\n\t};\n\treturn Array.isArray(comments)\n\t\t? comments.flatMap(flatten).filter(Boolean)\n\t\t: [];\n}\n\n/* ============================================================\n   COMPRESSION\n   ============================================================ */\n\nfunction buildDictionary(scrapeData) {\n\tconsole.log(\"[buildDictionary] Starting dictionary building...\");\n\tif (!scrapeData || typeof scrapeData !== \"object\") return [];\n\tconst searchResults = Array.isArray(scrapeData.search_results)\n\t\t? scrapeData.search_results\n\t\t: [];\n\tconst comments = flattenComments(scrapeData.comments || []);\n\tconst dict = [\n\t\tscrapeData.selftext,\n\t\t...searchResults,\n\t\t...comments.map((c) => c.body)\n\t].filter(isNonEmptyString);\n\tconsole.log(\n\t\t`[buildDictionary] Dictionary built with ${dict.length} entries`\n\t);\n\treturn dict;\n}\n\n/**\n * Calculates the UTF-8 byte length of a string directly without binary conversion.\n * Used for fast cost estimation in DP.\n */\nfunction getUtf8ByteLength(str) {\n\tlet len = 0;\n\tfor (let i = 0; i < str.length; i++) {\n\t\tlet code = str.codePointAt(i);\n\t\tif (code > 0xffff) i++; // Surrogate pair\n\t\tif (code <= 0x7f) len += 1;\n\t\telse if (code <= 0x7ff) len += 2;\n\t\telse if (code <= 0xffff) len += 3;\n\t\telse len += 4;\n\t}\n\treturn len;\n}\n\n/**\n * Optimized dictionary compression.\n */\nfunction compressPayload(payload, dictionary) {\n\tconsole.log(\n\t\t`[compressPayload] Starting compression for payload length: ${payload.length}, dictionary size: ${dictionary.length}`\n\t);\n\t// 1. Calculate Standard Encoding (Baseline)\n\tconsole.log(\"[compressPayload] Step 1: Calculating standard encoding...\");\n\tconst stdBinary = toBinaryUtf8(payload);\n\tconst stdLength = 1 + stdBinary.length; // '0' + bits\n\tconsole.log(`[compressPayload] Standard encoding length: ${stdLength}`);\n\n\t// 2. Setup for DP\n\tconst n = payload.length;\n\tconst MAX_DICT_INDEX = dictionary.length;\n\tconsole.log(\n\t\t`[compressPayload] Step 2: Setting up DP for payload length ${n}...`\n\t);\n\n\t// Optimization: Precompute global max match len\n\tconsole.log(\n\t\t\"[compressPayload] Step 2.1: Computing global max match length...\"\n\t);\n\tlet GLOBAL_MAX_MATCH = 0;\n\tfor (const s of dictionary)\n\t\tif (s.length > GLOBAL_MAX_MATCH) GLOBAL_MAX_MATCH = s.length;\n\tconsole.log(\n\t\t`[compressPayload] Global max match length: ${GLOBAL_MAX_MATCH}`\n\t);\n\n\t// Optimization: Precompute byte offsets for O(1) literal cost calculation\n\tconst byteOffsets = new Int32Array(n + 1);\n\tlet byteCount = 0;\n\tfor (let i = 0; i < n; i++) {\n\t\tbyteOffsets[i] = byteCount;\n\t\tlet c = payload.codePointAt(i);\n\t\tif (c > 0xffff) {\n\t\t\tbyteCount += 4;\n\t\t\ti++;\n\t\t\tbyteOffsets[i] = byteCount;\n\t\t}\n\t}\n\n\t// Precompute Matches\n\tconsole.log(\n\t\t\"[compressPayload] Step 2.2: Precomputing matches (this may take a while)...\"\n\t);\n\tconst matches = new Map();\n\tfor (let i = 0; i < n; i++) {\n\t\tif (i % 100 === 0 || i === n - 1) {\n\t\t\tconsole.log(\n\t\t\t\t`[compressPayload] Precomputing matches: ${\n\t\t\t\t\ti + 1\n\t\t\t\t}/${n} (${Math.round(((i + 1) / n) * 100)}%)`\n\t\t\t);\n\t\t}\n\t\tconst char = payload[i];\n\t\tconst matchesAtI = [];\n\t\tfor (let j = 0; j < dictionary.length; j++) {\n\t\t\tconst txt = dictionary[j];\n\t\t\tlet start = txt.indexOf(char);\n\t\t\twhile (start !== -1) {\n\t\t\t\tlet matchLen = 1;\n\t\t\t\twhile (\n\t\t\t\t\tmatchLen <\n\t\t\t\t\t\tMath.min(GLOBAL_MAX_MATCH, n - i, txt.length - start) &&\n\t\t\t\t\tpayload[i + matchLen] === txt[start + matchLen]\n\t\t\t\t) {\n\t\t\t\t\tmatchLen++;\n\t\t\t\t}\n\t\t\t\t// Only consider matches that are likely to save bits (>2 chars)\n\t\t\t\tif (matchLen > 2) {\n\t\t\t\t\tmatchesAtI.push({ doc: j, idx: start, len: matchLen });\n\t\t\t\t}\n\t\t\t\tstart = txt.indexOf(char, start + 1);\n\t\t\t}\n\t\t}\n\t\tif (matchesAtI.length) matches.set(i, matchesAtI);\n\t}\n\n\tconsole.log(\"[compressPayload] Step 2.3: Running DP algorithm...\");\n\tconst dp = Array(n + 1).fill(Infinity);\n\tconst choice = Array(n).fill(null);\n\tdp[n] = 0;\n\n\tconst BIT_WIDTH_LITERAL_LEN = getBitWidth(MAX_LITERAL_LEN);\n\tconst BIT_WIDTH_DICT_IDX = getBitWidth(MAX_DICT_INDEX);\n\tconst BIT_WIDTH_MATCH_LEN = getBitWidth(GLOBAL_MAX_MATCH);\n\n\tfor (let i = n - 1; i >= 0; i--) {\n\t\tif ((n - i) % 50 === 0 || i === 0) {\n\t\t\tconsole.log(\n\t\t\t\t`[compressPayload] DP progress: ${n - i}/${n} (${Math.round(\n\t\t\t\t\t((n - i) / n) * 100\n\t\t\t\t)}%)`\n\t\t\t);\n\t\t}\n\t\t// Option A: Literal\n\t\tconst maxL = Math.min(MAX_LITERAL_LEN, n - i);\n\n\t\tfor (let L = 1; L <= maxL; L++) {\n\t\t\tconst subStr = payload.substr(i, L);\n\t\t\tconst byteLen = getUtf8ByteLength(subStr);\n\n\t\t\tconst cost = 1 + BIT_WIDTH_LITERAL_LEN + byteLen * 8 + dp[i + L];\n\t\t\tif (cost < dp[i]) {\n\t\t\t\tchoice[i] = { kind: \"literal\", len: L, subStr };\n\t\t\t\tdp[i] = cost;\n\t\t\t}\n\t\t}\n\n\t\t// Option B: Dictionary\n\t\tconst mList = matches.get(i);\n\t\tif (mList) {\n\t\t\tfor (const m of mList) {\n\t\t\t\tconst docLenBits = getBitWidth(dictionary[m.doc].length);\n\t\t\t\tconst cost =\n\t\t\t\t\t1 +\n\t\t\t\t\tBIT_WIDTH_DICT_IDX +\n\t\t\t\t\tdocLenBits +\n\t\t\t\t\tBIT_WIDTH_MATCH_LEN +\n\t\t\t\t\tdp[i + m.len];\n\n\t\t\t\tif (cost < dp[i]) {\n\t\t\t\t\tchoice[i] = { kind: \"dict\", ...m };\n\t\t\t\t\tdp[i] = cost;\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n\tconsole.log(\"[compressPayload] DP algorithm completed\");\n\n\t// Reconstruct Dictionary Path\n\tconsole.log(\"[compressPayload] Step 2.4: Reconstructing dictionary path...\");\n\tlet currI = 0;\n\tlet dictBinary = \"\";\n\tconst references = [];\n\n\twhile (currI < n) {\n\t\tconst ch = choice[currI] || {\n\t\t\tkind: \"literal\",\n\t\t\tlen: 1,\n\t\t\tsubStr: payload[currI]\n\t\t};\n\t\tconst safeLen = Math.max(1, ch.len || 1);\n\n\t\tif (ch.kind === \"literal\") {\n\t\t\tconst bin = toBinaryUtf8(ch.subStr || payload.substr(currI, safeLen));\n\t\t\tdictBinary += \"0\" + encodeInt(safeLen, MAX_LITERAL_LEN) + bin;\n\t\t\treferences.push({ doc: null, idx: currI, len: safeLen });\n\t\t} else {\n\t\t\tdictBinary +=\n\t\t\t\t\"1\" +\n\t\t\t\tencodeInt(ch.doc, MAX_DICT_INDEX) +\n\t\t\t\tencodeInt(ch.idx, dictionary[ch.doc].length) +\n\t\t\t\tencodeInt(safeLen, GLOBAL_MAX_MATCH);\n\t\t\treferences.push({ doc: ch.doc, idx: ch.idx, len: safeLen });\n\t\t}\n\t\tcurrI += safeLen;\n\t}\n\n\tconst dictLength = 1 + dictBinary.length;\n\tconsole.log(`[compressPayload] Dictionary encoding length: ${dictLength}`);\n\n\tif (dictLength >= stdLength) {\n\t\treturn {\n\t\t\tmethod: \"standard\",\n\t\t\tpayload,\n\t\t\tcompressed: \"0\" + stdBinary,\n\t\t\tcompressedLength: stdLength,\n\t\t\toriginalLength: stdBinary.length,\n\t\t\tratio: stdLength / (stdBinary.length || 1),\n\t\t\treferences: []\n\t\t};\n\t} else {\n\t\treturn {\n\t\t\tmethod: \"dictionary\",\n\t\t\tpayload,\n\t\t\tcompressed: \"1\" + dictBinary,\n\t\t\tcompressedLength: dictLength,\n\t\t\toriginalLength: stdBinary.length,\n\t\t\tratio: dictLength / (stdBinary.length || 1),\n\t\t\treferences\n\t\t};\n\t}\n}\n\n/* ============================================================\n   EMBEDDING LOGIC\n   ============================================================ */\n\nfunction embedInCommentSelection(bits, post) {\n\tconsole.log(\n\t\t`[embedInCommentSelection] Starting comment embedding with ${bits.length} bits`\n\t);\n\tconst comments = post?.comments || [];\n\tconst flattenedComments = flattenComments(comments);\n\tconst n = flattenedComments.length;\n\tconsole.log(`[embedInCommentSelection] Found ${n} flattened comments`);\n\tconst bitsCount = getBitWidth(n);\n\tconst { bitsUsed, remaining, insufficient } = takeBits(bits, bitsCount);\n\tconsole.log(\n\t\t`[embedInCommentSelection] Selected comment index: ${\n\t\t\tparseInt(bitsUsed || \"0\", 2) || 0\n\t\t}`\n\t);\n\n\tlet selectionIndex = parseInt(bitsUsed || \"0\", 2) || 0;\n\tif (selectionIndex > n) selectionIndex = selectionIndex % (n + 1);\n\n\tlet pickedCommentChain = [];\n\tif (selectionIndex > 0 && n > 0) {\n\t\tconst pickedComment = flattenedComments[selectionIndex - 1];\n\t\tconst commentMap = new Map();\n\t\tfor (const c of flattenedComments) commentMap.set(c.id, c);\n\n\t\tlet current = pickedComment;\n\t\tconst visitedIds = new Set();\n\t\twhile (current) {\n\t\t\tif (visitedIds.has(current.id)) break;\n\t\t\tvisitedIds.add(current.id);\n\n\t\t\tpickedCommentChain.unshift({\n\t\t\t\tname: current.author || \"Unknown\",\n\t\t\t\tbody: current.body || \"\",\n\t\t\t\tid: current.id,\n\t\t\t\tparent_id: current.parent_id,\n\t\t\t\tpermalink: current.permalink\n\t\t\t});\n\t\t\tif (current.parent_id === current.link_id) break;\n\t\t\t\n\t\t\t// --- FIX START: Handle Parent ID Lookup Mismatch ---\n\t\t\tlet parent = commentMap.get(current.parent_id);\n\t\t\t\n\t\t\t// If direct lookup fails, try stripping typical prefixes (e.g. \"t1_\")\n\t\t\tif (!parent && typeof current.parent_id === 'string' && current.parent_id.includes('_')) {\n\t\t\t\tconst strippedId = current.parent_id.split('_').pop();\n\t\t\t\tparent = commentMap.get(strippedId);\n\t\t\t}\n\t\t\t// --- FIX END ---\n\n\t\t\tif (!parent || parent === current) break;\n\t\t\tcurrent = parent;\n\t\t}\n\t}\n\n\treturn {\n\t\tresult: {\n\t\t\tbitsUsed,\n\t\t\tbitsCount,\n\t\t\ttargetType: selectionIndex === 0 ? \"post\" : \"comment\",\n\t\t\tcontext: {\n\t\t\t\tid: post?.id,\n\t\t\t\ttitle: post?.title,\n\t\t\t\tauthor: post?.author,\n\t\t\t\tpermalink: post?.permalink\n\t\t\t},\n\t\t\tpickedCommentChain,\n\t\t\tinsufficientBits: insufficient\n\t\t},\n\t\tremainingBits: remaining\n\t};\n}\n\nasync function embedInAngleSelection(bits, nestedAngles) {\n\tconsole.log(\n\t\t`[embedInAngleSelection] Starting angle embedding with ${bits.length} bits`\n\t);\n\tconst angles = nestedAngles.flat().map((x,xIdx)=>({...x,idx:xIdx}));\n\tconsole.log(\n\t\t`[embedInAngleSelection] Found ${angles.length} angles from ${nestedAngles.length} documents`\n\t);\n\tif (angles.length === 0) {\n\t\treturn {\n\t\t\tbitsUsed: \"\",\n\t\t\tremainingBits: bits,\n\t\t\tselectedAngle: {},\n\t\t\tsnippet: null,\n\t\t\tinsufficientBits: false\n\t\t};\n\t}\n\n\tconst bitsCount = getBitWidth(angles.length - 1);\n\tconst { bitsUsed, remaining, insufficient } = takeBits(bits, bitsCount);\n\n\tlet idx = parseInt(bitsUsed || \"0\", 2) || 0;\n\tif (idx >= angles.length) idx = idx % angles.length;\n\n\tconst selectedAngle = angles[idx];\n\tconst remainingAngles = angles.filter((_, i) => i !== idx);\n\n\treturn {\n\t\tbitsUsed,\n\t\tbitsCount,\n\t\tremainingBits: remaining,\n\t\tselectedAngle,\n\t\tremainingAngles,\n\t\ttotalAnglesSelectedFirst: [selectedAngle, ...remainingAngles],\n        TangentsDB:angles,\n\t\tinsufficientBits: insufficient\n\t};\n}\n\n/* ============================================================\n   MAIN\n   ============================================================ */\n\nconst inputItems = $input.all();\nconsole.log(`[MAIN] Starting processing of ${inputItems.length} item(s)`);\n\nconst results = await Promise.all(\n\tinputItems.map(async (item, itemIndex) => {\n\t\tconst warnings = [];\n\t\tlet data = item.json;\n\t\tif (data?.angles && data?.data) {\n\t\t\tdata = { ...data.data, angles: data.angles };\n\t\t}\n\t\tconst post = data?.post || data || {};\n\n\t\tlet payload = $(\"SetSecretData\").first()?.json?.payload;\n\t\tif (payload?.payload) payload = payload.payload;\n\n\t\tif (!isNonEmptyString(payload)) {\n\t\t\treturn {\n\t\t\t\tjson: { error: \"No payload\", warnings: [\"Invalid payload\"] }\n\t\t\t};\n\t\t}\n\n\t\t// Step 3: Angles\n\t\tconst nestedAngles = (post?.angles || data?.angles || [])\n\t\t\t.filter(Boolean)\n\t\t\t.map((x) => (Array.isArray(x) ? x.filter(Boolean) : [x]));\n\n\t\t// Step 4: Dictionary & Compress\n\t\tconst dictionary = buildDictionary(post);\n\t\tconst compression = compressPayload(payload, dictionary);\n\n\t\tif (compression.method === \"standard\") {\n\t\t\twarnings.push(\n\t\t\t\t\"Dictionary compression inefficient; used standard encoding.\"\n\t\t\t);\n\t\t}\n\n\t\t// Step 5: Embed Comments\n\t\tconst commentEmb = embedInCommentSelection(compression.compressed, post);\n\t\tif (commentEmb.result.insufficientBits)\n\t\t\twarnings.push(\"Padding used in Comment Selection.\");\n\n\t\t// Step 6: Embed Angles\n\t\tconst angleEmb = await embedInAngleSelection(\n\t\t\tcommentEmb.remainingBits,\n\t\t\tnestedAngles\n\t\t);\n\t\tif (angleEmb.insufficientBits)\n\t\t\twarnings.push(\"Padding used in Angle Selection.\");\n\n\t\treturn {\n\t\t\tjson: {\n\t\t\t\tcompression,\n\t\t\t\tcommentEmbedding: commentEmb.result,\n\t\t\t\tangleEmbedding: angleEmb,\n\t\t\t\ttotalBitsEmbedded: commentEmb.result.bitsCount + angleEmb.bitsCount,\n\t\t\t\tfullEncodedBits: commentEmb.result.bitsUsed + angleEmb.bitsUsed,\n\t\t\t\twarnings\n\t\t\t}\n\t\t};\n\t})\n);\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4736,
+        832
+      ],
+      "id": "27deddd5-07f3-48bb-ad91-84a9a7e21a27",
+      "name": "PostAugmentation"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "samples",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -4064,
+        592
+      ],
+      "id": "0a662368-04d1-4d11-88d6-435ece1a44fd",
+      "name": "Encode + 3 Examples Split"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "results",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        -3024,
+        592
+      ],
+      "id": "cc70d513-f7f4-4ec9-8fd5-840a371fc613",
+      "name": "Encode + 3 Examples Aggregate"
+    },
+    {
+      "parameters": {
+        "jsCode": "return {\n  category:$('Encode + 3 Examples Split').first().json.category,\n  source_quote:$('Encode + 3 Examples Split').first().json.source_quote,\n  tangent:$('Encode + 3 Examples Split').first().json.tangent,\n  texts: $json.output\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3248,
+        592
+      ],
+      "id": "e729a3b5-42ae-43e6-9344-7a04eb772466",
+      "name": "Clean the Encoder output"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "tWT6U8IK_9oUBlJMRl0oa",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/tWT6U8IK_9oUBlJMRl0oa",
+          "cachedResultName": "Decode"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "stegoText": "={{ $json['results[0].texts'] }}",
+            "BASE_URL": "={{ $('SetSecretData').first().json.BASE_URL }}",
+            "fewShots": "={{ $('Encode + 3 Examples Aggregate').item.json.results.slice(1) }}",
+            "angles": "={{ $('PostAugmentation').first().json.angleEmbedding.TangentsDB }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "angles",
+              "displayName": "angles",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "stegoText",
+              "displayName": "stegoText",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fewShots",
+              "displayName": "fewShots",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "BASE_URL",
+              "displayName": "BASE_URL",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -2576,
+        592
+      ],
+      "id": "308f96e9-c9ad-4dd2-bfc0-abd0f97c0603",
+      "name": "Call 'Decode'"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.succeeded }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    },
+                    "id": "5db63f30-ae7a-4151-923d-e08a7f9c726e"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Succeeded"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "d99b7781-3817-480a-acbe-259f9b1c87df",
+                    "leftValue": "={{ $('sample').last().json.retryCount < 4 }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Retry"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.3,
+      "position": [
+        -1904,
+        576
+      ],
+      "id": "ae17cbd6-21f8-4098-9750-8a50993b3b0f",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5678/webhook/f43d05a8-ab8f-4805-b357-bd094baa50e1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -1680,
+        976
+      ],
+      "id": "35a485bd-953d-43f3-a40a-389de1cf9de9",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e15bce3f-1827-4c42-95eb-9b640f22931f",
+              "name": "retryCount",
+              "value": "={{ $('sample').last().json.retryCount + 1 }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1680,
+        688
+      ],
+      "id": "f8069dd5-f859-4d0e-b1d6-83b3e846c1f9",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('SetSecretData').item.json.BASE_URL }}/needle_finder_batch",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=needles",
+              "value": "={{ $json.angleEmbedding.totalAnglesSelectedFirst.slice(0,4).map(x=>x.source_quote) }}"
+            },
+            {
+              "name": "haystack",
+              "value": "={{ $('Get Post').item.json.search_results }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -4512,
+        832
+      ],
+      "id": "b1397d51-b0e6-44fe-a569-8796536850b5",
+      "name": "Find the source"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Extract data sources using .first() to bypass pairing issues in the loop\n// We use .first() because these nodes run once globally before the retry loop\nconst postAug = $('PostAugmentation').first().json;\nconst anglesInQuestion = postAug.angleEmbedding.totalAnglesSelectedFirst.slice(0,4);\nconst sourceResults = $('Find the source').first().json.results;\n\n// merge with results\n// 1. Process Unselected Angles (Merge with source data)\nconst samples = anglesInQuestion.map((angle, index) => {\n    // Safety check: ensure sourceResults exists\n    const matchData = sourceResults && sourceResults[index] ? sourceResults[index] : {};\n    const { best_match } = matchData;\n    return { ...angle, best_match };\n});\n\n// 2. Flatten Tangents and add an index reference\nconst TangentsDB = postAug.angleEmbedding.TangentsDB;\n\n// 3. Construct Final Output\nreturn {\n  samples,\n  TangentsDB,\n  // Check specifically if retryCount exists in incoming JSON, else default to 0\n  retryCount: $json.retryCount ? $json.retryCount : 0,\n  selectedAngles: postAug.angleEmbedding.selectedAngles\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4288,
+        832
+      ],
+      "id": "8e13b3c3-bfc6-4aa0-9919-f5c69f8b28cd",
+      "name": "sample"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('SetSecretData').first().json.BASE_URL }}/save_object",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "step",
+              "value": "final-step"
+            },
+            {
+              "name": "filename",
+              "value": "={{ $json.post.id }}_{{ $('SetSecretData').first().json.payload.tag}}.json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -1456,
+        352
+      ],
+      "id": "e9542889-80a8-443d-b94f-f0b0a1757c5e",
+      "name": "Save Post"
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "SetSecretData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SetSecretData": {
+      "main": [
+        [
+          {
+            "node": "GetListPosts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local Summarization Minstral": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Model Selector",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CrossValidation": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Call 'Decode'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "CrossValidation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Model Selector": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "G Encode",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "String List",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Model Selector",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "G Encode": {
+      "main": [
+        [
+          {
+            "node": "Clean the Encoder output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gpt-oss": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Model Selector",
+            "type": "ai_languageModel",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "String List": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "G Encode",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Model Selector",
+            "type": "ai_languageModel",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "singular file names": {
+      "main": [
+        [
+          {
+            "node": "Split Out2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetListPosts": {
+      "main": [
+        [
+          {
+            "node": "singular file names",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Post": {
+      "main": [
+        [
+          {
+            "node": "PostAugmentation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "SetSecretData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out2": {
+      "main": [
+        [
+          {
+            "node": "Get Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PostAugmentation": {
+      "main": [
+        [
+          {
+            "node": "Find the source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Encode + 3 Examples Split": {
+      "main": [
+        [
+          {
+            "node": "G Encode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Encode + 3 Examples Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean the Encoder output": {
+      "main": [
+        [
+          {
+            "node": "Encode + 3 Examples Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'Decode'": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Save",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "sample",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find the source": {
+      "main": [
+        [
+          {
+            "node": "sample",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "sample": {
+      "main": [
+        [
+          {
+            "node": "Encode + 3 Examples Split",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Schedule Trigger": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "1b6d84f8-a2ef-4b3f-a560-4978a72487d3",
+  "activeVersionId": "1b6d84f8-a2ef-4b3f-a560-4978a72487d3",
+  "versionCounter": 432,
+  "triggerCount": 1,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2025-11-09T15:25:56.399Z",
+      "createdAt": "2025-11-09T15:25:56.399Z",
+      "role": "workflow:owner",
+      "workflowId": "27rZrYtywu3k9e7Q",
+      "projectId": "OjdtAcp29h8ZUA6k",
+      "project": {
+        "updatedAt": "2025-10-01T18:42:40.745Z",
+        "createdAt": "2025-10-01T18:31:22.020Z",
+        "id": "OjdtAcp29h8ZUA6k",
+        "name": "Nasooh AlOlabi <nasooholabi@proton.me>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "198cbed9-2053-49b6-8798-4b778fe5cd11"
+      }
+    }
+  ]
+}

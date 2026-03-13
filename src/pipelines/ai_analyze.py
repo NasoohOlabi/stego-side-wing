@@ -3,14 +3,12 @@ import json
 import os
 import sys
 from datetime import datetime
-from typing import List, cast
+from typing import Any, Dict, List, cast
 
 import httpx
-from flask import cli
 from icecream import ic  # Import icecream for colorful logging
 from openai import OpenAI
 
-# Backward compatibility: redirect to pipelines
 from pipelines.headless_browser_analyzer import WebAnalyzer
 from integrations.news_api import (
     Article,
@@ -26,10 +24,12 @@ ic.configureOutput(prefix="[{time}] | ")
 _original_httpx_client_init = httpx.Client.__init__
 
 
-def _httpx_client_init_with_proxies(self, *args, proxies=None, **kwargs):
+def _httpx_client_init_with_proxies(
+    self: httpx.Client, *args: Any, proxies: str | None = None, **kwargs: Any
+) -> None:
     if proxies is not None and "proxy" not in kwargs:
         kwargs["proxy"] = proxies
-    return _original_httpx_client_init(self, *args, **kwargs)
+    _original_httpx_client_init(self, *args, **kwargs)
 
 
 httpx.Client.__init__ = _httpx_client_init_with_proxies
@@ -49,7 +49,7 @@ client = OpenAI(
 ic(client)
 
 
-async def process_file(post_data):
+async def process_file(post_data: Dict[str, Any]) -> Dict[str, Any]:
     """Process a single JSON file for analysis"""
 
     # Store comments separately before removing them
@@ -93,7 +93,7 @@ async def process_file(post_data):
     # Process the response
     print("📝 AI Response received:")
 
-    full_response: str = completion.choices[0].message.content
+    full_response = completion.choices[0].message.content or ""
 
     ic(full_response)
     start = full_response.find("[")
@@ -119,7 +119,6 @@ async def process_file(post_data):
 
     # Initialize web analyzer - reuse for all URLs in this batch
     web_analyzer = WebAnalyzer()
-    web_analyzer._auto_close = False  # Don't auto-close, we'll close manually at the end
     print("🌐 Web analyzer initialized (will reuse browser for all URLs)")
 
     # get the results of each topic
@@ -149,7 +148,7 @@ async def process_file(post_data):
                 print(
                     f"\nSuccessfully retrieved {success_result['totalResults']} results."
                 )
-                for index, article in enumerate(success_result["articles"]):
+                for article in success_result["articles"]:
                     search_results.append(article)
             else:
                 # Use cast() to narrow the type for Pylance after the runtime check
@@ -264,7 +263,7 @@ async def main():
     for directory in directories:
         if os.path.exists(directory):
             ic(f"🔍 Scanning directory: {directory}")
-            for root, dirs, files in os.walk(directory):
+            for root, _dirs, files in os.walk(directory):
                 for file in files:
                     if file.endswith(".json"):
                         file_path = os.path.join(root, file)
@@ -282,7 +281,9 @@ async def main():
     # Process each file
     for i, file_path in enumerate(json_files, 1):
         ic(f"\n🔄 Processing file {i}/{len(json_files)}")
-        await process_file(file_path)
+        with open(file_path, "r", encoding="utf-8") as f:
+            post = json.load(f)
+        await process_file(post)
 
 
 if __name__ == "__main__":

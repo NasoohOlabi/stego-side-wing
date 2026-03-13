@@ -8,7 +8,9 @@ This prevents RuntimeError: Queue is bound to a different event loop.
 import asyncio
 import threading
 import atexit
-from typing import Optional, Coroutine, Any
+from typing import Any, Coroutine, Optional, TypeVar
+
+T = TypeVar("T")
 
 
 class EventLoopManager:
@@ -69,7 +71,7 @@ class EventLoopManager:
             raise RuntimeError("Event loop manager not started. Call start() first.")
         return self._loop
     
-    def run_async(self, coro: Coroutine) -> Any:
+    def run_async(self, coro: Coroutine[Any, Any, T]) -> T:
         """
         Run an async coroutine from a sync context.
         
@@ -97,7 +99,7 @@ def get_event_loop() -> asyncio.AbstractEventLoop:
     return _manager.get_loop()
 
 
-def run_async(coro: Coroutine) -> Any:
+def run_async(coro: Coroutine[Any, Any, T]) -> T:
     """Run an async coroutine from a sync context using the persistent loop."""
     return _manager.run_async(coro)
 

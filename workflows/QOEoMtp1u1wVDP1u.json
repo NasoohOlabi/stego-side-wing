@@ -1,0 +1,1000 @@
+{
+  "updatedAt": "2026-02-15T12:43:06.825Z",
+  "createdAt": "2025-11-22T20:46:04.770Z",
+  "id": "QOEoMtp1u1wVDP1u",
+  "name": "Research",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2512,
+        384
+      ],
+      "id": "49048f96-5bdc-4ae3-93f6-a4f90bb3a2af",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "bb743f69-1273-4018-ad91-e8667f8aa0ba",
+              "name": "fileName",
+              "value": "={{ $json.fileNames }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1840,
+        288
+      ],
+      "id": "4bb27386-962d-4d3c-ade4-6e333d5a382d",
+      "name": "singular file names"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').item.json.BASE_URL }}/get_post",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "post",
+              "value": "={{ $json.fileName[0] }}"
+            },
+            {
+              "name": "step",
+              "value": "filter-researched"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1616,
+        288
+      ],
+      "id": "d554cd69-f391-474d-9a95-1694079857d8",
+      "name": "get post"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.BASE_URL }}/posts_list",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "count",
+              "value": "=1"
+            },
+            {
+              "name": "step",
+              "value": "filter-researched"
+            },
+            {
+              "name": "offset",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2064,
+        288
+      ],
+      "id": "d36d1632-27d1-4b95-998d-75678148e372",
+      "name": "GetListPosts"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e000820f-d533-4cb1-ad90-b88382cbd6e0",
+              "name": "post",
+              "value": "={{ $json }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1168,
+        208
+      ],
+      "id": "3a53598e-5dd0-44b9-ade0-6a55e7c3ae97",
+      "name": "WrapPost"
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "mode": "each",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1296,
+        384
+      ],
+      "id": "3b7c9c58-8a4f-42f8-816c-a799d40c93b0",
+      "name": "Convert to File"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=D:\\\\Master\\\\code\\\\stego-side-wing\\\\datasets\\\\news_researched\\\\{{ $('New').item.json.id }}.json",
+        "options": {
+          "append": false
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        384
+      ],
+      "id": "9bd57b57-a1ab-45e5-8efd-7cc9ded4fc62",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "output",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -720,
+        208
+      ],
+      "id": "a703e974-8da9-4e2f-b86b-93e027ca148e",
+      "name": "Split Out1"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "GhAbcOIAo7F9UMaA",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/GhAbcOIAo7F9UMaA",
+          "cachedResultName": "Fetch Url Content"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "url": "={{ $json.link }}"
+          },
+          "matchingColumns": [
+            "url"
+          ],
+          "schema": [
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        400,
+        160
+      ],
+      "id": "4963ddb9-9bb0-4061-b3a1-32c0ce321cd9",
+      "name": "Call 'Fetch Url Content'",
+      "retryOnFail": true,
+      "maxTries": 5
+    },
+    {
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldToAggregate": "text"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        400,
+        -32
+      ],
+      "id": "66360af7-1942-4714-b0a0-a508a0dd9c9f",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').item.json.BASE_URL }}/google_search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.output }}"
+            },
+            {
+              "name": "first",
+              "value": "1"
+            },
+            {
+              "name": "count",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -496,
+        208
+      ],
+      "id": "761fb6fe-6ad0-4953-a2f4-bccb0bc3d66e",
+      "name": "Search",
+      "alwaysOutputData": false,
+      "retryOnFail": false,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "results",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -272,
+        48
+      ],
+      "id": "9496bb0c-e23c-4440-bfc2-95f51423b033",
+      "name": "Split Out2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Loop over input items and add a new field called 'myNewField' to the JSON of each one\nconst links = Array.from(new Set($input.all().map(x=>x.json.link))).map(x=>({link:x})).filter(x=>!x.link.endsWith('.pdf'))\n\nreturn links;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        48
+      ],
+      "id": "95688cf0-6566-45fb-8551-36ecc529aa07",
+      "name": "Deduplicate"
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "mode": "each",
+        "binaryPropertyName": "=data",
+        "options": {
+          "format": true,
+          "encoding": "utf8",
+          "fileName": "={{ $json.id }}.json"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1296,
+        64
+      ],
+      "id": "71f3a0a0-93fd-4d47-9c91-c93c533a298e",
+      "name": "Convert to File1"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=D:\\\\Master\\\\code\\\\stego-side-wing\\\\datasets\\\\news_researched\\\\{{ $('Edit Fields').item.json.data.id }}.json",
+        "options": {
+          "append": false
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        64
+      ],
+      "id": "25b2bc07-5c53-4bb6-b4fb-18f0fe3186bb",
+      "name": "Read/Write Files from Disk1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dd3221db-7bbc-4ab1-9605-0bb620a1911e",
+              "name": "error.message",
+              "value": "={{ JSON.parse\n($json.error.message.slice(6)) }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -272,
+        240
+      ],
+      "id": "b0341da7-46dc-4a43-8ea2-42212b24d9ff",
+      "name": "Better view the Error"
+    },
+    {
+      "parameters": {
+        "errorType": "errorObject",
+        "errorObject": "={{ $json }}"
+      },
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        -2512,
+        -352
+      ],
+      "id": "8d08e467-88d9-4d5b-8f25-c8b328f0e9b4",
+      "name": "Stop and Error"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "ot3lZXFjtZy2fcxD",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/ot3lZXFjtZy2fcxD",
+          "cachedResultName": "GenSearchTerms"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "post_title": "={{ $json.post.title }}",
+            "post_text": "={{ $json.post.selftext }}",
+            "post_url": "={{ $json.post.url }}",
+            "post_id": "={{ $json.post.id }}"
+          },
+          "matchingColumns": [
+            "post_title",
+            "post_text",
+            "post_url"
+          ],
+          "schema": [
+            {
+              "id": "post_title",
+              "displayName": "post_title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "post_text",
+              "displayName": "post_text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "post_url",
+              "displayName": "post_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "post_id",
+              "displayName": "post_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -944,
+        208
+      ],
+      "name": "Call GenSearchTerms",
+      "id": "cbf3711b-6ff2-4719-9370-71177c47d35d",
+      "retryOnFail": true,
+      "maxTries": 5
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ea8dd562-40c4-4907-b80c-fad449288c6c",
+              "name": "data",
+              "value": "={{ $json }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        848,
+        -32
+      ],
+      "id": "281b371b-3ab3-443a-88bb-cfe1f6172a15",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "96c3e2c1-bfb3-4f68-b0ef-28f41c8df0ac",
+              "leftValue": "={{ !$json.search_results }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "78998a74-6fb3-488c-80a4-99f2098aba57",
+              "leftValue": "={{ Array.isArray($json.search_results) && $json.search_results.filter(x=>x.trim()).length == 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "9342686d-d5a1-4ed5-b7e1-d9de72e8b932",
+              "leftValue": "={{ Object.values($json.search_results).flat().filter(x=>x.trim()).length == 0  }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1392,
+        288
+      ],
+      "id": "27f9d8dc-a010-4bca-8686-67482ca90560",
+      "name": "New"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nreturn [{...$('WrapPost').last().json.post,\n        search_results : $input.first().json.text.filter(x=>!!x)\n       }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        -32
+      ],
+      "id": "ce067d7d-ebf8-46f9-a705-70052e31fbec",
+      "name": "Set Search Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Loop over input items and add a new field called 'myNewField' to the JSON of each one\nfor (const item of $input.all()) {\n  item.json = item.json.data;\n}\n\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        -32
+      ],
+      "id": "2841260c-68d3-445b-92d0-023215e7df92",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "path": "4f5a58c6-168b-4c4d-8bcd-9cc1a5532a79",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -2512,
+        192
+      ],
+      "id": "6a1ef621-043c-4577-9ee8-cd50f084aa14",
+      "name": "Webhook",
+      "webhookId": "4f5a58c6-168b-4c4d-8bcd-9cc1a5532a79"
+    },
+    {
+      "parameters": {
+        "batchSize": 3,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        176,
+        48
+      ],
+      "id": "46d57291-63d4-403d-9afc-deb9664f34cb",
+      "name": "Loop Over Items1"
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5678/webhook/0a30762f-3cd3-4464-906b-a00f3578b81b",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -2512,
+        608
+      ],
+      "id": "709fbffc-dafd-4f96-98d7-8d102e7a75e1",
+      "name": "Start GenAngles"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b871b0d0-5d81-4c01-ab48-fa83d98cc978",
+              "name": "MODEL",
+              "value": "openai/gpt-oss-20b",
+              "type": "string"
+            },
+            {
+              "id": "26ef596a-268f-4e84-a503-31cfd2d44e55",
+              "name": "BASE_URL_LAP",
+              "value": "http://127.0.0.1:5000",
+              "type": "string"
+            },
+            {
+              "id": "e8f91c16-780b-461f-af9d-444039d0ba52",
+              "name": "BASE_URL",
+              "value": "http://192.168.100.136:5001",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2288,
+        288
+      ],
+      "id": "5542661d-c948-4a60-b100-02f78f0c3130",
+      "name": "Config"
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5678/webhook/4f5a58c6-168b-4c4d-8bcd-9cc1a5532a79",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1744,
+        352
+      ],
+      "id": "93249b14-cf2c-40ee-90ff-bb610c15d1ad",
+      "name": "Loop"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.BASE_URL }}/save_post",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "step",
+              "value": "filter-researched"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1296,
+        -128
+      ],
+      "id": "e6f6325a-5677-4ce6-b770-b369ba41b2dd",
+      "name": "Save Post"
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "singular file names": {
+      "main": [
+        [
+          {
+            "node": "get post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get post": {
+      "main": [
+        [
+          {
+            "node": "New",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetListPosts": {
+      "main": [
+        [
+          {
+            "node": "singular file names",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WrapPost": {
+      "main": [
+        [
+          {
+            "node": "Call GenSearchTerms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out1": {
+      "main": [
+        [
+          {
+            "node": "Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'Fetch Url Content'": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Set Search Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search": {
+      "main": [
+        [
+          {
+            "node": "Split Out2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Better view the Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out2": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File1": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk1": {
+      "main": [
+        [
+          {
+            "node": "Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Better view the Error": {
+      "main": [
+        []
+      ]
+    },
+    "Call GenSearchTerms": {
+      "main": [
+        [
+          {
+            "node": "Split Out1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New": {
+      "main": [
+        [
+          {
+            "node": "WrapPost",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Search Results": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Save Post",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Convert to File1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items1": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call 'Fetch Url Content'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "GetListPosts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Post": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Schedule Trigger": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "be4afd4d-6c15-4d53-a92a-07aca2e5a907",
+  "activeVersionId": "be4afd4d-6c15-4d53-a92a-07aca2e5a907",
+  "versionCounter": 140,
+  "triggerCount": 1,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2025-11-22T20:46:04.776Z",
+      "createdAt": "2025-11-22T20:46:04.776Z",
+      "role": "workflow:owner",
+      "workflowId": "QOEoMtp1u1wVDP1u",
+      "projectId": "OjdtAcp29h8ZUA6k",
+      "project": {
+        "updatedAt": "2025-10-01T18:42:40.745Z",
+        "createdAt": "2025-10-01T18:31:22.020Z",
+        "id": "OjdtAcp29h8ZUA6k",
+        "name": "Nasooh AlOlabi <nasooholabi@proton.me>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "198cbed9-2053-49b6-8798-4b778fe5cd11"
+      }
+    }
+  ]
+}

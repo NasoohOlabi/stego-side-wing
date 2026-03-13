@@ -1,0 +1,702 @@
+{
+  "updatedAt": "2026-02-10T04:57:23.145Z",
+  "createdAt": "2025-11-23T12:46:52.878Z",
+  "id": "GhAbcOIAo7F9UMaA",
+  "name": "Fetch Url Content",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "geaP6NmWJMA2CukG",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/geaP6NmWJMA2CukG",
+          "cachedResultName": "CacheSummarizer"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "input": "={{ $json.fetched_text }}"
+          },
+          "matchingColumns": [
+            "input"
+          ],
+          "schema": [
+            {
+              "id": "input",
+              "displayName": "input",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -1584,
+        560
+      ],
+      "id": "57279026-1ee2-4d2d-acaf-3ef2850e64ec",
+      "name": "Call 'CacheSummarizer'"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.BASE_URL }}/fetch_url_content_crawl4ai",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $json.url }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "text/html"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {}
+          },
+          "timeout": 10000000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2176,
+        1040
+      ],
+      "id": "8f695f64-c571-4b32-b954-1e26e6df1353",
+      "name": "FetchUrlContent",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "maxTries": 5
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.text.slice(0,10_000) }}",
+        "options": {
+          "systemMessage": "=Your job is to validate a URL-fetching tool's output. Sometimes the tool fails or pages get deleted, so detect error pages by content.\n\n**Failure example:**\n```plaintext\nPage not found – Oh It's Reviewed... 404 Not Found It looks like nothing was found...\n```\n\n**Output requirements:**\n- Return ONLY `succeeded` or `failed` (single word)\n- No explanations, markup, or additional text\n\n**Tool result to validate:**"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -2504,
+        304
+      ],
+      "id": "a70e1ba5-0542-400e-90ea-8cf71391642e",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "mistral-nemo-instruct-2407-abliterated",
+          "mode": "id"
+        },
+        "options": {
+          "timeout": "={{ 1000 * 60 * 60 * 10 }}",
+          "maxRetries": 4
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -2624,
+        736
+      ],
+      "id": "333c3b8f-a4ee-4dfb-a16a-b96024dd997a",
+      "name": "Local Summarization Minstral1",
+      "notesInFlow": false,
+      "credentials": {
+        "openAiApi": {
+          "id": "iuOubn3dqpOUPpQA",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai/gpt-oss-20b",
+          "mode": "list",
+          "cachedResultName": "openai/gpt-oss-20b"
+        },
+        "options": {
+          "timeout": "={{ 1000 * 60 * 5  }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -2368,
+        736
+      ],
+      "id": "8c031edb-1e4d-4b16-865e-aed12d22a55d",
+      "name": "gpt-oss1",
+      "credentials": {
+        "openAiApi": {
+          "id": "iuOubn3dqpOUPpQA",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 4,
+        "rules": {
+          "rule": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "d7a0999e-c196-4b8e-a00f-d4e2cc0832c9",
+                    "leftValue": "hi",
+                    "rightValue": "hi",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.modelSelector",
+      "typeVersion": 1,
+      "position": [
+        -2512,
+        528
+      ],
+      "id": "574b2539-83a1-4716-b6c4-60b09a896077",
+      "name": "Summarization Model Selector"
+    },
+    {
+      "parameters": {
+        "model": "qwen/qwen3-32b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -2240,
+        736
+      ],
+      "id": "83e9269e-fad8-4998-8be6-ce0acf7b0507",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "7IadJ606YJf7u1Gx",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a70acfdb-7e5b-40ca-ad54-756226c965c2",
+              "leftValue": "={{ $json.output.trim() }}",
+              "rightValue": "=failed",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2032,
+        512
+      ],
+      "id": "2e24b04f-acda-4c55-8b9d-c004b90cc43f",
+      "name": "Failed"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-flash-lite-latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -2496,
+        736
+      ],
+      "id": "3075e3ba-f5ca-46f9-aeb2-3c06b44babbd",
+      "name": "lite",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "npJWIuX1Pto10uUk",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1fc07783-224e-45d5-8192-3ad5a829feff",
+              "name": "fetched_text",
+              "value": "={{ $('Filter').item.json.result.text }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1808,
+        560
+      ],
+      "id": "294308f9-bada-4fe3-9b04-50f4306c5fdd",
+      "name": "PrepareExtractApiResult"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d6b9f14b-e0e4-4ad5-a9bf-39145110979f",
+              "name": "text",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1360,
+        560
+      ],
+      "id": "e8ba1855-23ac-43a9-a1aa-60177ef20506",
+      "name": "Prep Result Item"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "4868db09-f766-4b1f-9645-b4732c2094cd",
+              "name": "text",
+              "value": "={{ null }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1808,
+        208
+      ],
+      "id": "33897194-9e6e-4810-8607-1d2a22d07ba7",
+      "name": "Prep Empty Result Item"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "url"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -2624,
+        1136
+      ],
+      "id": "aab477a0-4b06-4e74-b5ec-72e03b8676b4",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2848,
+        944
+      ],
+      "id": "ec0e5ded-f0c8-450b-a021-2700a1aa2705",
+      "name": "When clicking ‘Execute workflow’",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "611690d0-3e93-473f-9e31-b3fda3c37860",
+              "name": "url",
+              "value": "https://www.congress.gov/crs-product/R46185",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2624,
+        944
+      ],
+      "id": "536a208b-d4af-4883-9264-e17833e5b1a5",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = Array.from($input.all())\n\t.filter((item) => {\n\t\t// 1. Setup allowed Content-Types\n\t\tconst ALLOWED_TYPES = [\"application/json\", \"text/html\", \"text/plain\"];\n\n\t\t// 2. Extract and clean the Header\n\t\tconst contentType = (\n\t\t\titem.json.headers?.[\"content-type\"] || \"\"\n\t\t).toLowerCase();\n\n\t\t// Check if the content-type matches any of our allowed strings\n\t\tconst hasValidHeader = ALLOWED_TYPES.some((type) =>\n\t\t\tcontentType.includes(type)\n\t\t);\n\t\tif (!hasValidHeader) return false;\n\n\t\t// 3. Extract the Body Text\n\t\tconst textContent = item.json.body?.result?.text;\n\n\t\tif (typeof textContent !== \"string\") return false; // Keep if no text to check\n\n\t\t// 4. Use Regex to check for binary signatures (PDF or PNG)\n\t\t// ^ matches the start of the string; | acts as an OR\n\t\tconst binarySignatures = [\"�PNG\", \"�PDF\"];\n\n\t\treturn !binarySignatures.some((x) => textContent.startsWith(x));\n\t})\n\t.map((item) => item.json.body.result);\n\nif (items.length === 0) {\n\tthrow new Error(\"No valid JSON, HTML, or Text content found.\");\n}\n\nreturn items;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2848,
+        336
+      ],
+      "id": "721b6baa-c9a3-417b-800c-95ceda110b1a",
+      "name": "Filter",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d6b9f14b-e0e4-4ad5-a9bf-39145110979f",
+              "name": "text",
+              "value": "={{ $json.result.map(({title,author,summary,key_points})=>\n\n`${title}: ${!!author ?'By '+author:''}\\n\\t${summary}\\n`+key_points.map(x=>'- '+x).join('\\n')\n\n).join('\\n---\\n') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1952,
+        1040
+      ],
+      "id": "c8e4d877-c694-4efe-9684-0e17907f744e",
+      "name": "Prep Result Item1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b871b0d0-5d81-4c01-ab48-fa83d98cc978",
+              "name": "MODEL",
+              "value": "openai/gpt-oss-20b",
+              "type": "string"
+            },
+            {
+              "id": "26ef596a-268f-4e84-a503-31cfd2d44e55",
+              "name": "BASE_URL_LAP",
+              "value": "http://127.0.0.1:5000",
+              "type": "string"
+            },
+            {
+              "id": "e8f91c16-780b-461f-af9d-444039d0ba52",
+              "name": "BASE_URL",
+              "value": "http://192.168.100.136:5001",
+              "type": "string"
+            },
+            {
+              "id": "bca0ac30-56c1-426e-a6b7-41a67fd05453",
+              "name": "url",
+              "value": "={{ $json.url }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2400,
+        1040
+      ],
+      "id": "e3118c6e-8875-4099-a37c-4ed3788d1101",
+      "name": "Config"
+    }
+  ],
+  "connections": {
+    "Call 'CacheSummarizer'": {
+      "main": [
+        [
+          {
+            "node": "Prep Result Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchUrlContent": {
+      "main": [
+        [
+          {
+            "node": "Prep Result Item1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local Summarization Minstral1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Summarization Model Selector",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gpt-oss1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Summarization Model Selector",
+            "type": "ai_languageModel",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Summarization Model Selector": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Summarization Model Selector",
+            "type": "ai_languageModel",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Failed": {
+      "main": [
+        [
+          {
+            "node": "Prep Empty Result Item",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PrepareExtractApiResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "lite": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Summarization Model Selector",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "PrepareExtractApiResult": {
+      "main": [
+        [
+          {
+            "node": "Call 'CacheSummarizer'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Result Item": {
+      "main": [
+        []
+      ]
+    },
+    "Prep Empty Result Item": {
+      "main": [
+        []
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prep Empty Result Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "FetchUrlContent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "versionId": "e3c3941b-4e81-4048-84cc-947444187763",
+  "activeVersionId": "1e6e109c-cea7-49c5-8ac4-0e6e7ab5e545",
+  "versionCounter": 62,
+  "triggerCount": 0,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2025-11-23T12:46:52.882Z",
+      "createdAt": "2025-11-23T12:46:52.882Z",
+      "role": "workflow:owner",
+      "workflowId": "GhAbcOIAo7F9UMaA",
+      "projectId": "OjdtAcp29h8ZUA6k",
+      "project": {
+        "updatedAt": "2025-10-01T18:42:40.745Z",
+        "createdAt": "2025-10-01T18:31:22.020Z",
+        "id": "OjdtAcp29h8ZUA6k",
+        "name": "Nasooh AlOlabi <nasooholabi@proton.me>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "198cbed9-2053-49b6-8798-4b778fe5cd11"
+      }
+    }
+  ]
+}

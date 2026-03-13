@@ -1,0 +1,42 @@
+{
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.13",
+  "venvPath": ".",
+  "venv": ".venv",
+  "useLibraryCodeForTypes": true,
+  "reportMissingTypeStubs": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownParameterType": "none",
+  "reportUnknownLambdaType": "none",
+  "reportUntypedFunctionDecorator": "none",
+  "reportMissingTypeArgument": "none",
+  "reportUnusedImport": "none",
+  "reportUnusedFunction": "none",
+  "include": [
+    "src/app",
+    "src/services",
+    "src/pipelines",
+    "src/integrations",
+    "src/infrastructure",
+    "src/workflows"
+  ],
+  "exclude": [
+    "src/util",
+    "src/angles",
+    "src/**/__pycache__",
+    "src/ai_analyze.py",
+    "src/headless_browser_analyzer.py",
+    "src/scraper.py",
+    "src/nest.py"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "src",
+      "extraPaths": [
+        "src"
+      ]
+    }
+  ]
+}

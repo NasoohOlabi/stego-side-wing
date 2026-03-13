@@ -1,0 +1,895 @@
+{
+  "updatedAt": "2026-01-18T09:42:13.000Z",
+  "createdAt": "2025-12-21T08:47:52.519Z",
+  "id": "GKmFzs1YuxtNztna",
+  "name": "GenAngles",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -3968,
+        -624
+      ],
+      "id": "f31e31e1-d4ab-467f-87a5-37fe4067e03b",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Extract input data\nconst datapoint = $json;\nconst postContent = datapoint.selftext ?? \"\";\n\n// Flatten nested results/comments for easier processing\nconst searchResults = datapoint.search_results;\n\nconst flattenComments = (c) =>\n\t!c.replies || c.replies.length === 0 ? [c] : [c, ...c.replies.flatMap(flattenComments)];\nconst comments = (datapoint.comments || []).flatMap(flattenComments);\n\n// Build dictionary of reference texts\nconst dictionary = [postContent, ...searchResults, ...comments].filter(\n\t(x) => typeof x === \"string\"&& x.length > 0\n);\n\nif (dictionary.length === 0){\n  throw \"Empty Dict Nothing to talk about\"\n}\n\nreturn \t{\n\t\tdictionary,\n\t}\n;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2192,
+        -688
+      ],
+      "id": "4c63bc9b-ead5-4d51-b13c-d2f0c74df231",
+      "name": "KeywordsSetsGeneration"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "mistral-nemo-instruct-2407-abliterated",
+          "mode": "list",
+          "cachedResultName": "mistral-nemo-instruct-2407-abliterated"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -3968,
+        -400
+      ],
+      "id": "cf1905ae-8b34-4b95-8d61-474c6f0aad25",
+      "name": "Local Summarization Minstral",
+      "credentials": {
+        "openAiApi": {
+          "id": "iuOubn3dqpOUPpQA",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "dictionary",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -3968,
+        432
+      ],
+      "id": "c636f8ec-5011-4de0-a82b-cb22ac64fa38",
+      "name": "ForEachDict"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        -3520,
+        240
+      ],
+      "id": "e9602b5e-8df6-4c63-aa3b-25d862f6ec14",
+      "name": "JoinTangents"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=I have a block of texts from any domain — it could be educational, technical, journalistic, creative, or conversational. I want you to extract phrases or quotes that could spark commentary, opinions, or deeper exploration. For each quote, generate a structured JSON object with:\n- `\"source_quote\"`: A short phrase or sentence from the text that could inspire discussion.\n- `\"tangent\"`: A brief description of the idea, opinion, or deeper topic I could explore based on that quote.\n- `\"category\"`: A high-level theme that groups the tangent (e.g. \"Politics\", \"Technology\", \"Education\", \"Philosophy\", \"Culture\", \"Business\").\nPlease give me at least 15 items. Here's an example of the format:\n```json\n[\n  {\n    \"source_quote\": \"this might even look good on your resume\",\n    \"tangent\": \"Explore what makes a project resume-worthy and how to present it to recruiters.\",\n    \"category\": \"Career Advice\"\n  },\n  {\n    \"source_quote\": \"we need to rethink how we educate children\",\n    \"tangent\": \"Discuss alternative education models like Montessori, unschooling, or project-based learning.\",\n    \"category\": \"Education\"\n  },\n  {\n    \"source_quote\": \"the algorithm decides what you see\",\n    \"tangent\": \"Analyze the ethical implications of algorithmic curation and its impact on public discourse.\",\n    \"category\": \"Technology\"\n  }\n]\n```\n\n```plaintext\n{{ JSON.stringify($json.outputs,null,2) }}\n```",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=You are a specialized Texts Analysis and Structuring Agent. Your sole function is to process an input blocks of texts and extract key discussion points, formatting the entire output as a single, valid JSON array of objects.\n\n**CRITICAL OUTPUT DIRECTIVE:**\nThe entire output **MUST** be the raw JSON array beginning with `[` and ending with `]`. **DO NOT** include any markdown fences (like ```json or ```), explanations, preambles, or postambles. OR I'LL KILL MYSELF\n\n**STRICT OUTPUT CONSTRAINTS:**\n1.  **Format:** Your entire response **MUST** be a single JSON array (`[...]`). Do not include any preceding or trailing text, explanations, code fences (like ` ```json `), or commentary.\n2.  **Minimum Count:** You **MUST** generate a minimum of 15 JSON objects in the array.\n3.  **Schema:** Each object **MUST** adhere strictly to the following schema with exactly these three keys:\n    * `\"source_quote\"` (string): A short, compelling quote or phrase extracted directly from the input text.\n    * `\"tangent\"` (string): A brief, provocative description of the deeper topic, opinion, or line of inquiry inspired by the quote.\n    * `\"category\"` (string): A high-level thematic label (e.g., \"Technology\", \"Philosophy\", \"Business\", \"Culture\", \"Science\").\n\n**PROCESSING INSTRUCTION:**\nAnalyze the provided text block. Identify and extract at least 15 distinct phrases or quotes that naturally lead to deeper commentary or exploration. Generate the corresponding JSON object for each, ensuring the final output is a syntactically correct JSON array.\n\n**Tools:**\nYou have access to a tool called JSON validator please always use it to double check your output matches the users schema\njust send it the answer you want to return and it will fix it\nplease always use it. and STICK TO RETURNING ONLY THE OUTPUT FORMAT DISCUSSED ABOVE!"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -3072,
+        496
+      ],
+      "id": "2765a390-7767-40e7-80a2-e057a3725771",
+      "name": "Angles Agent",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"array\",\n  \"items\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"source_quote\": { \"type\": \"string\" },\n      \"tangent\": { \"type\": \"string\" },\n      \"category\": { \"type\": \"string\" }\n    },\n    \"required\": [\"source_quote\", \"tangent\", \"category\"]\n  }\n}",
+        "autoFix": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        -2880,
+        720
+      ],
+      "id": "0e063907-db80-4cc2-a3ef-5ea2f3c2dd64",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-flash-lite-latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -3968,
+        -192
+      ],
+      "id": "7b00661e-2889-449b-8481-5235ea606334",
+      "name": "Google Gemini Chat Model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "npJWIuX1Pto10uUk",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "qwen/qwen3-32b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -3968,
+        32
+      ],
+      "id": "a10ebfd3-5cfd-4610-90f6-aaee628ead13",
+      "name": "Groq Chat Model1",
+      "credentials": {
+        "groqApi": {
+          "id": "7IadJ606YJf7u1Gx",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "bb743f69-1273-4018-ad91-e8667f8aa0ba",
+              "name": "fileName",
+              "value": "={{ $json.fileNames }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -3520,
+        -688
+      ],
+      "id": "0cb614c1-3809-48ae-8e9a-5d887ecb4914",
+      "name": "singular file names"
+    },
+    {
+      "parameters": {
+        "url": "http://127.0.0.1:5000/posts_list",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "count",
+              "value": "1000"
+            },
+            {
+              "name": "step",
+              "value": "angles-step"
+            },
+            {
+              "name": "count",
+              "value": "100"
+            },
+            {
+              "name": "offset",
+              "value": "2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3744,
+        -688
+      ],
+      "id": "a5effbd6-1c36-4e5b-8e43-263d100f78f7",
+      "name": "GetListPosts"
+    },
+    {
+      "parameters": {
+        "url": "http://127.0.0.1:5000/get_post",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "post",
+              "value": "={{ $json.fileName }}"
+            },
+            {
+              "name": "step",
+              "value": "angles-step"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2720,
+        -688
+      ],
+      "id": "26119d5d-daa9-4955-9a0d-e1bb3b5b8901",
+      "name": "Get Post"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "geaP6NmWJMA2CukG",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/geaP6NmWJMA2CukG",
+          "cachedResultName": "CacheSummarizer"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "input": "={{ $json.dictionary }}"
+          },
+          "matchingColumns": [
+            "input"
+          ],
+          "schema": [
+            {
+              "id": "input",
+              "displayName": "input",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -3520,
+        432
+      ],
+      "id": "c6364002-8143-45fe-8940-4036e5f8ba49",
+      "name": "Call 'CacheSummarizer'"
+    },
+    {
+      "parameters": {
+        "description": "Call this tool to double-check and fix your answer to exactly match the schema the user asked for",
+        "workflowId": {
+          "__rl": true,
+          "value": "RO7c2NpYiUKosXPN",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/RO7c2NpYiUKosXPN",
+          "cachedResultName": "JSON validator"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "text": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('text', ``, 'string') }}",
+            "schema": "{   \"type\": \"array\",   \"items\": {     \"type\": \"object\",     \"properties\": {       \"source_quote\": { \"type\": \"string\" },       \"tangent\": { \"type\": \"string\" },       \"category\": { \"type\": \"string\" }     },     \"required\": [\"source_quote\", \"tangent\", \"category\"]   } }",
+            "model": "openai/gpt-oss-20b"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "text",
+              "displayName": "text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "schema",
+              "displayName": "schema",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "model",
+              "displayName": "model",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        -3008,
+        720
+      ],
+      "id": "3a721228-ed75-4c1d-8a80-17fa29acad2a",
+      "name": "Call 'JSON validator'"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const get_original = false;\n\nconst deepClone = (value) => JSON.parse(JSON.stringify(value));\n\nconst extractFromResult = (result) =>\n  get_original\n    ? result.fetched_content || result.content_analysis || result.snippet\n    : result.content_analysis || result.fetched_content || result.snippet;\n\nconst normalizeResults = (res) => {\n  // If it's an array of strings (including empty array), it's acceptable\n  if (Array.isArray(res) && res.every((x) => typeof x === \"string\")) {\n    return res;\n  }\n  if (Array.isArray(res) && res.length > 0 && res[0]?.json?.content) {\n    return res.map((x) => x.json.content);\n  }\n\n  if (typeof res === \"object\" && Object.values(res).length > 0) {\n    const flat = Object.values(res).flat();\n\n    if (flat[0]?.json?.content) {\n      return flat.map((x) => x.json.content);\n    }\n\n    if (\n      flat[0]?.content_analysis ||\n      flat[0]?.fetched_content ||\n      flat[0]?.snippet\n    ) {\n      return flat.map(extractFromResult).filter(Boolean);\n    }\n\n    // New case: the object maps strings to nested objects with embedded fields\n    if (\n      flat[0]?.link &&\n      (flat[0]?.content_fetched !== undefined || flat[0]?.snippet)\n    ) {\n      return flat\n        .map(\n          (result) =>\n            result.content_analysis || result.fetched_content || result.snippet,\n        )\n        .filter(Boolean);\n    }\n  }\n\n  console.error(\"Unsupported search_results format\", {\n    type: typeof res,\n    sample: res,\n  });\n  throw new Error(\"Unsupported search_results format\");\n};\n\nconst item = $input.item.json.data ? $input.item.json.data : $input.item.json;\n\nconst clonedItem = {\n  ...item,\n  ...deepClone(item),\n};\n\ntry {\n  clonedItem.search_results = normalizeResults(clonedItem.search_results);\n} catch (error) {\n  console.error(\"Failed to normalize search_results for item\", {\n    id: clonedItem.id,\n    error: error.message,\n  });\n  throw error;\n}\n\nreturn clonedItem;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2416,
+        -688
+      ],
+      "id": "5cc69a10-19d0-4844-beaa-12a8859e7c59",
+      "name": "Search Results Patch"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -3072,
+        -688
+      ],
+      "id": "e3516eb3-c01f-4dcb-a1c1-26723e00c4ed",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "mode": "each",
+        "options": {
+          "format": true,
+          "fileName": "={{ $json.id }}.json"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        -1456,
+        -688
+      ],
+      "id": "faf10723-0c49-4537-863d-8d9b583e9567",
+      "name": "Convert to File"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=D:\\\\Master\\\\code\\\\stego-side-wing\\\\datasets\\\\news_angles\\\\{{ $('Set Angles on Post').item.json.id }}.json",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        -1088,
+        -624
+      ],
+      "id": "09217367-cf9f-4879-8a75-da41d6d07ec8",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "fileName",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -3296,
+        -688
+      ],
+      "id": "1d743139-3e15-4acb-b4b7-9eaa419ba1d7",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "batchSize": 3,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -3744,
+        432
+      ],
+      "id": "ed2690ec-38b6-4fb9-a2ae-5a9ff91e4190",
+      "name": "Loop Over Items1"
+    },
+    {
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldToAggregate": "output",
+              "renameField": true,
+              "outputFieldName": "outputs"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        -3296,
+        432
+      ],
+      "id": "a61bb778-6d56-422d-9cb2-a59364cfebaa",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "openai/gpt-oss-20b",
+          "mode": "list",
+          "cachedResultName": "openai/gpt-oss-20b"
+        },
+        "options": {
+          "timeout": "={{ 1000 * 60 * 60 * 5 }}",
+          "maxRetries": 5
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -2944,
+        928
+      ],
+      "id": "642432ae-ca31-4a9f-9a80-9697f2155fbc",
+      "name": "gpt-oss",
+      "credentials": {
+        "openAiApi": {
+          "id": "iuOubn3dqpOUPpQA",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "path": "0a30762f-3cd3-4464-906b-a00f3578b81b",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -3968,
+        -816
+      ],
+      "id": "b6016ac8-0f24-4ee8-9398-08e7b0ece80d",
+      "name": "Webhook",
+      "webhookId": "0a30762f-3cd3-4464-906b-a00f3578b81b"
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5678/webhook/f43d05a8-ab8f-4805-b357-bd094baa50e1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -2368,
+        -976
+      ],
+      "id": "c51f8813-4831-42b2-90f2-3f1e5ef3e4f5",
+      "name": "Start Stego"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:5000/angles/analyze",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "texts",
+              "value": "={{ $json.dictionary }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": "={{ 1000 * 60 * 60 * 2 }}"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -1968,
+        -688
+      ],
+      "id": "f847dc67-057c-4f32-9ccc-69f9f2ee4afb",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {}
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        -2624,
+        -976
+      ],
+      "id": "cc3d8918-35aa-4701-94f8-a537af05df87",
+      "name": "Aggregate1"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Add a new field called 'myNewField' to the JSON of the item\nconst item = $('Get Post').item.json;\nitem.angles = $json.results;\nitem.options_count = $json.results.length;\n\nreturn item;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1728,
+        -688
+      ],
+      "id": "237086f9-e713-401a-80a9-16eedff68eee",
+      "name": "Set Angles on Post"
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "GetListPosts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KeywordsSetsGeneration": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local Summarization Minstral": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "ForEachDict": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JoinTangents": {
+      "main": [
+        []
+      ]
+    },
+    "Angles Agent": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Angles Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "Groq Chat Model1": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "singular file names": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetListPosts": {
+      "main": [
+        [
+          {
+            "node": "singular file names",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Post": {
+      "main": [
+        [
+          {
+            "node": "Search Results Patch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'CacheSummarizer'": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'JSON validator'": {
+      "ai_tool": [
+        [
+          {
+            "node": "Angles Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Results Patch": {
+      "main": [
+        [
+          {
+            "node": "KeywordsSetsGeneration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Aggregate1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items1": {
+      "main": [
+        [
+          {
+            "node": "JoinTangents",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call 'CacheSummarizer'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Angles Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "gpt-oss": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Structured Output Parser",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Angles Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "GetListPosts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Set Angles on Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate1": {
+      "main": [
+        [
+          {
+            "node": "Start Stego",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Angles on Post": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "f159ffd9-ebf8-437d-8ecc-62edaf5ce1b7",
+  "activeVersionId": "f159ffd9-ebf8-437d-8ecc-62edaf5ce1b7",
+  "versionCounter": 140,
+  "triggerCount": 1,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2025-12-21T08:47:52.526Z",
+      "createdAt": "2025-12-21T08:47:52.526Z",
+      "role": "workflow:owner",
+      "workflowId": "GKmFzs1YuxtNztna",
+      "projectId": "OjdtAcp29h8ZUA6k",
+      "project": {
+        "updatedAt": "2025-10-01T18:42:40.745Z",
+        "createdAt": "2025-10-01T18:31:22.020Z",
+        "id": "OjdtAcp29h8ZUA6k",
+        "name": "Nasooh AlOlabi <nasooholabi@proton.me>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "198cbed9-2053-49b6-8798-4b778fe5cd11"
+      }
+    }
+  ]
+}

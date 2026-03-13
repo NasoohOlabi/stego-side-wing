@@ -1,0 +1,236 @@
+"""LLM adapter for multiple providers."""
+import json
+import os
+from typing import Any, Dict, List, Optional
+
+import dotenv
+import openai
+import requests
+
+dotenv.load_dotenv()
+
+
+class LLMAdapter:
+    """Adapter for LLM providers (OpenAI, Gemini, Groq, LM Studio)."""
+    
+    def __init__(self):
+        self.openai_api_key = os.environ.get("OPENAI_API_KEY") or dotenv.get_key(
+            ".env", "OPENAI_API_KEY"
+        )
+        self.google_palm_api_key = os.environ.get(
+            "GOOGLE_PALM_API_KEY"
+        ) or dotenv.get_key(".env", "GOOGLE_PALM_API_KEY")
+        self.groq_api_key = os.environ.get("GROQ_API_KEY") or dotenv.get_key(
+            ".env", "GROQ_API_KEY"
+        )
+        self.lm_studio_url = os.environ.get(
+            "LM_STUDIO_URL", "http://192.168.100.136:1234/v1"
+        )
+        self.lm_studio_api_token = os.environ.get(
+            "LM_STUDIO_API_TOKEN", "lm-studio"
+        )
+    
+    def call_llm(
+        self,
+        prompt: str,
+        system_message: Optional[str] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+        temperature: float = 0.0,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """
+        Call LLM with prompt.
+        
+        Args:
+            prompt: User prompt
+            system_message: Optional system message
+            model: Model name (if None, uses default based on provider)
+            provider: 'openai', 'gemini', 'groq', 'lm_studio', or None (auto-select)
+            temperature: Temperature setting
+            max_tokens: Max tokens to generate
+        
+        Returns:
+            Generated text
+        """
+        # Auto-select provider if not specified
+        if provider is None:
+            provider = self._select_provider()
+        
+        if provider == "openai":
+            return self._call_openai(prompt, system_message, model, temperature, max_tokens)
+        elif provider == "gemini":
+            return self._call_gemini(prompt, system_message, model, temperature, max_tokens)
+        elif provider == "groq":
+            return self._call_groq(prompt, system_message, model, temperature, max_tokens)
+        elif provider == "lm_studio":
+            return self._call_lm_studio(prompt, system_message, model, temperature, max_tokens)
+        else:
+            raise ValueError(f"Unknown provider: {provider}")
+    
+    def _select_provider(self) -> str:
+        """Select available provider."""
+        if self.lm_studio_url:
+            return "lm_studio"
+        elif self.openai_api_key:
+            return "openai"
+        elif self.google_palm_api_key:
+            return "gemini"
+        elif self.groq_api_key:
+            return "groq"
+        else:
+            raise RuntimeError("No LLM provider configured")
+    
+    def _call_openai(
+        self,
+        prompt: str,
+        system_message: Optional[str],
+        model: Optional[str],
+        temperature: float,
+        max_tokens: Optional[int],
+    ) -> str:
+        """Call OpenAI API."""
+        if not self.openai_api_key:
+            raise RuntimeError("OpenAI API key not configured")
+        
+        client = openai.OpenAI(api_key=self.openai_api_key)
+        
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
+        
+        kwargs: Dict[str, Any] = {
+            "model": model or "gpt-4",
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+        
+        response = client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content or ""
+    
+    def _call_gemini(
+        self,
+        prompt: str,
+        system_message: Optional[str],
+        model: Optional[str],
+        temperature: float,
+        max_tokens: Optional[int],
+    ) -> str:
+        """Call Google Gemini API."""
+        if not self.google_palm_api_key:
+            raise RuntimeError("Google Gemini API key not configured")
+        
+        # Combine system message and prompt
+        full_prompt = prompt
+        if system_message:
+            full_prompt = f"{system_message}\n\n{prompt}"
+        
+        url = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        model_name = model or "gemini-pro"
+        url = url.format(model=model_name)
+        
+        payload: Dict[str, Any] = {
+            "contents": [{"parts": [{"text": full_prompt}]}],
+            "generationConfig": {
+                "temperature": temperature,
+            },
+        }
+        if max_tokens:
+            payload["generationConfig"]["maxOutputTokens"] = max_tokens
+        
+        response = requests.post(
+            url,
+            params={"key": self.google_palm_api_key},
+            json=payload,
+            timeout=120,
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise RuntimeError("No candidates in Gemini response")
+        
+        return candidates[0]["content"]["parts"][0]["text"]
+    
+    def _call_groq(
+        self,
+        prompt: str,
+        system_message: Optional[str],
+        model: Optional[str],
+        temperature: float,
+        max_tokens: Optional[int],
+    ) -> str:
+        """Call Groq API."""
+        if not self.groq_api_key:
+            raise RuntimeError("Groq API key not configured")
+        
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.groq_api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
+        
+        payload: Dict[str, Any] = {
+            "model": model or "llama3-70b-8192",
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response.raise_for_status()
+        data = response.json()
+        
+        choices = data.get("choices", [])
+        if not choices:
+            raise RuntimeError("No choices in Groq response")
+        
+        return choices[0]["message"]["content"]
+    
+    def _call_lm_studio(
+        self,
+        prompt: str,
+        system_message: Optional[str],
+        model: Optional[str],
+        temperature: float,
+        max_tokens: Optional[int],
+    ) -> str:
+        """Call LM Studio API."""
+        url = f"{self.lm_studio_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.lm_studio_api_token}",
+            "Content-Type": "application/json",
+        }
+        
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
+        
+        payload: Dict[str, Any] = {
+            "model": model or "openai/gpt-oss-20b",
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=300)
+        response.raise_for_status()
+        data = response.json()
+        
+        choices = data.get("choices", [])
+        if not choices:
+            raise RuntimeError("No choices in LM Studio response")
+        
+        return choices[0]["message"]["content"]

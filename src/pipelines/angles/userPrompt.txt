@@ -1,0 +1,28 @@
+I have a block of texts from any domain — it could be educational, technical, journalistic, creative, or conversational. I want you to extract phrases or quotes that could spark commentary, opinions, or deeper exploration. For each quote, generate a structured JSON object with:
+- `"source_quote"`: A short phrase or sentence from the text that could inspire discussion.
+- `"tangent"`: A brief description of the idea, opinion, or deeper topic I could explore based on that quote.
+- `"category"`: A high-level theme that groups the tangent (e.g. "Politics", "Technology", "Education", "Philosophy", "Culture", "Business").
+Please give me at least 15 items. Here's an example of the format:
+```json
+[
+  {
+    "source_quote": "this might even look good on your resume",
+    "tangent": "Explore what makes a project resume-worthy and how to present it to recruiters.",
+    "category": "Career Advice"
+  },
+  {
+    "source_quote": "we need to rethink how we educate children",
+    "tangent": "Discuss alternative education models like Montessori, unschooling, or project-based learning.",
+    "category": "Education"
+  },
+  {
+    "source_quote": "the algorithm decides what you see",
+    "tangent": "Analyze the ethical implications of algorithmic curation and its impact on public discourse.",
+    "category": "Technology"
+  }
+]
+```
+
+```plaintext
+{{ }}
+```

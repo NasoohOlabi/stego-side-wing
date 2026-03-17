@@ -214,7 +214,6 @@ def search_google(query: str, first: int = 1, count: int = 10) -> Dict[str, List
             )
             continue
 
-    # All API keys failed
     raise ValueError(
-        f"All {len(api_keys)} keys failed to fetch results. Errors: {errors}"
+        f"All {len(api_keys)} Google keys failed to fetch results. Errors: {errors}"
     )

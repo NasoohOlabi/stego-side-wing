@@ -3,6 +3,7 @@ import atexit
 
 from flask import Flask
 from flask_caching import Cache
+from flask_cors import CORS
 
 from infrastructure.event_loop import start_event_loop, stop_event_loop
 
@@ -23,6 +24,7 @@ def create_app() -> Flask:
         Configured Flask app instance
     """
     app = Flask(__name__)
+    CORS(app)
     
     # Start the persistent event loop at module level
     # This ensures it's available before any requests are handled
@@ -42,6 +44,7 @@ def create_app() -> Flask:
     
     # Register blueprints
     from app.routes import (
+        api_v1_routes,
         analysis_routes,
         angles_routes,
         kv_routes,
@@ -50,6 +53,7 @@ def create_app() -> Flask:
         semantic_routes,
     )
     
+    app.register_blueprint(api_v1_routes.bp)
     app.register_blueprint(posts_routes.bp)
     app.register_blueprint(search_routes.bp)
     app.register_blueprint(analysis_routes.bp)
@@ -61,7 +65,10 @@ def create_app() -> Flask:
     @app.route("/", methods=["GET"])
     def index():
         """Simple welcome message for the API root."""
-        return "Welcome to the Reddit Post API. Available endpoints: /random_post (GET), /process_file (POST), /generate_keywords (POST), /semantic_search (POST), /needle_finder (POST)"
+        return (
+            "Welcome to stego-side-wing API. "
+            "Use /api/v1/health and /api/v1/state/steps for the versioned API surface."
+        )
     
     # Cleanup on app shutdown
     atexit.register(stop_event_loop)

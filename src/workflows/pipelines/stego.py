@@ -888,6 +888,27 @@ class StegoPipeline:
         If post_id is not provided, select one unprocessed final-step post using tag.
         If payload is not provided, load default payload/tag from Stego workflow JSON.
         """
+        def _select_next_post_id() -> str:
+            posts_list = self.backend.posts_list(
+                step="final-step",
+                count=1,
+                offset=max(0, int(list_offset)),
+                tag=resolved_tag,
+            )
+            file_names = posts_list.get("fileNames", [])
+            if not file_names:
+                raise ValueError(
+                    f"No unprocessed posts found for step='final-step' and tag='{resolved_tag}'."
+                )
+            first_file = file_names[0]
+            next_post_id = first_file[:-5] if first_file.endswith(".json") else first_file
+            logger.info(
+                "[STEGO][PROCESS] auto-selected post_id=%s for tag=%s",
+                next_post_id,
+                resolved_tag,
+            )
+            return next_post_id
+
         logger.info(
             "[STEGO][PROCESS] start post_id=%s list_offset=%s",
             post_id,
@@ -905,30 +926,34 @@ class StegoPipeline:
 
         resolved_post_id = post_id
         if not resolved_post_id:
-            posts_list = self.backend.posts_list(
-                step="final-step",
-                count=1,
-                offset=max(0, int(list_offset)),
-                tag=resolved_tag,
-            )
-            file_names = posts_list.get("fileNames", [])
-            if not file_names:
-                raise ValueError(
-                    f"No unprocessed posts found for step='final-step' and tag='{resolved_tag}'."
-                )
-            first_file = file_names[0]
-            resolved_post_id = first_file[:-5] if first_file.endswith(".json") else first_file
-            logger.info(
-                "[STEGO][PROCESS] auto-selected post_id=%s for tag=%s",
-                resolved_post_id,
-                resolved_tag,
-            )
+            resolved_post_id = _select_next_post_id()
 
         # n8n Stego reads post data from final-step; keep fallback for local compatibility.
         try:
             post = self.backend.get_post_local(f"{resolved_post_id}.json", step="final-step")
         except FileNotFoundError:
-            post = self.backend.get_post_local(f"{resolved_post_id}.json", step="angles-step")
+            try:
+                post = self.backend.get_post_local(f"{resolved_post_id}.json", step="angles-step")
+            except FileNotFoundError:
+                # If caller passed an outdated/nonexistent post_id, keep API parity with n8n:
+                # pick next unprocessed post for the same tag instead of hard-failing.
+                if post_id:
+                    logger.warning(
+                        "[STEGO][PROCESS] post_id=%s not found; falling back to next unprocessed for tag=%s",
+                        resolved_post_id,
+                        resolved_tag,
+                    )
+                    resolved_post_id = _select_next_post_id()
+                    try:
+                        post = self.backend.get_post_local(
+                            f"{resolved_post_id}.json", step="final-step"
+                        )
+                    except FileNotFoundError:
+                        post = self.backend.get_post_local(
+                            f"{resolved_post_id}.json", step="angles-step"
+                        )
+                else:
+                    raise
 
         result = self.encode(payload=resolved_payload, post=post, tag=resolved_tag)
         if result.get("succeeded"):

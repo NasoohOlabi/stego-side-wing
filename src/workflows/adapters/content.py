@@ -46,6 +46,67 @@ class ContentAdapter:
         self.local = LocalContentClient()
         self.http = HttpContentClient(self.base_url)
 
+    @staticmethod
+    def _normalize_result(url: str, result_data: Any) -> FetchUrlResult:
+        """Coerce multiple crawler payload shapes into canonical FetchUrlResult."""
+        if isinstance(result_data, dict):
+            text = result_data.get("text")
+            if isinstance(text, str) and text.strip():
+                return FetchUrlResult(
+                    url=url,
+                    success=bool(result_data.get("success", True)),
+                    text=text,
+                    content_type=result_data.get("content_type"),
+                    error=result_data.get("error"),
+                )
+            raw_content = result_data.get("raw_content")
+            if isinstance(raw_content, str) and raw_content.strip():
+                return FetchUrlResult(
+                    url=url,
+                    success=True,
+                    text=raw_content,
+                    content_type=result_data.get("content_type", "text/plain"),
+                    error=result_data.get("error"),
+                )
+            if result_data.get("error"):
+                return FetchUrlResult(
+                    url=url,
+                    success=False,
+                    text=None,
+                    content_type=result_data.get("content_type"),
+                    error=str(result_data.get("error")),
+                )
+            # Structured article object without text/success fields.
+            return FetchUrlResult(
+                url=url,
+                success=True,
+                text=json.dumps(result_data, ensure_ascii=False),
+                content_type=result_data.get("content_type", "application/json"),
+                error=None,
+            )
+
+        if isinstance(result_data, list):
+            if not result_data:
+                return FetchUrlResult(url=url, success=False, error="Empty extraction list")
+            return FetchUrlResult(
+                url=url,
+                success=True,
+                text=json.dumps(result_data, ensure_ascii=False),
+                content_type="application/json",
+                error=None,
+            )
+
+        if result_data is None:
+            return FetchUrlResult(url=url, success=False, error="No extraction result")
+
+        return FetchUrlResult(
+            url=url,
+            success=True,
+            text=str(result_data),
+            content_type="text/plain",
+            error=None,
+        )
+
     def fetch_url_content(self, url: str, use_cache: bool = True) -> FetchUrlResult:
         if not url or not url.strip():
             return FetchUrlResult(url=url, success=False, error="Empty URL")
@@ -63,15 +124,11 @@ class ContentAdapter:
                 api_response = self.http.fetch(url)
             except Exception as e:
                 return FetchUrlResult(url=url, success=False, error=f"Fetch error: {str(e)}")
-
-        result_data = api_response.get("result", {})
-        result = FetchUrlResult(
-            url=url,
-            success=result_data.get("success", False),
-            text=result_data.get("text"),
-            content_type=result_data.get("content_type"),
-            error=result_data.get("error"),
-        )
+        if isinstance(api_response, dict):
+            result_data = api_response.get("result")
+        else:
+            result_data = api_response
+        result = self._normalize_result(url=url, result_data=result_data)
         if result.success and result.text:
             self._cache_content(url, api_response)
         return result
@@ -85,14 +142,9 @@ class ContentAdapter:
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 cached_response = json.load(f)
-            result_data = cached_response.get("result", {})
-            return FetchUrlResult(
-                url=url,
-                success=result_data.get("success", False),
-                text=result_data.get("text"),
-                content_type=result_data.get("content_type"),
-                error=result_data.get("error"),
-            )
+            result_data = cached_response.get("result") if isinstance(cached_response, dict) else cached_response
+            normalized = self._normalize_result(url=url, result_data=result_data)
+            return normalized
         except Exception:
             return None
 

@@ -96,15 +96,21 @@ class ResearchPipeline:
                 
                 for result in results:
                     link = result.get("link", "")
+                    if not link:
+                        continue
                     # Skip PDFs and duplicates
-                    if link.endswith(".pdf") or link in seen_links:
+                    if link.endswith(".pdf"):
+                        continue
+                    if link in seen_links:
                         continue
                     seen_links.add(link)
                     all_search_results.append(result)
                     
             except Exception as e:
                 print(f"Error searching for term '{term}': {e}")
-                continue
+                raise RuntimeError(
+                    f"Google search failed for post {post_id} and term '{term}': {e}"
+                ) from e
         
         # Fetch content for search results (in batches)
         fetched_texts = []
@@ -186,5 +192,5 @@ class ResearchPipeline:
                         print(f"Error saving post to backend for {post_id}: {e}")
                 researched_posts.append(researched)
             except Exception as e:
-                print(f"Error processing post {post_id}: {e}")
+                raise RuntimeError(f"Error processing post {post_id}: {e}") from e
         return researched_posts

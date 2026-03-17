@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List
 
 import requests
 
 from infrastructure.cache import deterministic_hash_sha256
+from infrastructure.config import get_env, get_lm_studio_url
 
 ANGLES_DIR = Path(__file__).resolve().parent
 REPO_ROOT = ANGLES_DIR.parent.parent
@@ -21,8 +21,8 @@ SYSTEM_PROMPT = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 USER_PROMPT_TEMPLATE = USER_PROMPT_PATH.read_text(encoding="utf-8")
 
 
-LM_STUDIO_URL = os.environ.get("LM_STUDIO_URL", "http://192.168.100.136:1234/v1")
-LM_STUDIO_API_TOKEN = os.environ.get("LM_STUDIO_API_TOKEN", "lm-studio")
+LM_STUDIO_URL = get_lm_studio_url()
+LM_STUDIO_API_TOKEN = get_env("LM_STUDIO_API_TOKEN", "lm-studio") or "lm-studio"
 CHAT_ENDPOINT = f"{LM_STUDIO_URL.rstrip('/')}/chat/completions"
 
 MODEL_NAME = "openai/gpt-oss-20b"

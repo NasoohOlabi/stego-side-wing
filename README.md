@@ -24,6 +24,14 @@ uv run python src/API.py
 `src/API.py` is a compatibility wrapper over the app factory in `src/app/app_factory.py`.
 Defaults: `API_HOST=192.168.100.136`, `API_PORT=5001`.
 
+### API dev mode
+
+```bash
+uv run python src/API.py --dev --host 127.0.0.1 --port 5001
+```
+
+You can also enable dev mode with `API_DEBUG=1`.
+
 ## Run workflow CLI
 
 ```bash

@@ -1,11 +1,15 @@
 """LLM adapter for multiple providers."""
 import json
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import openai
 import requests
 
-from infrastructure.config import get_env
+from infrastructure.config import REPO_ROOT, get_env, get_lm_studio_url
+
+
+PROMPTS_LOG_PATH = REPO_ROOT / "prompts.log"
 
 
 class LLMAdapter:
@@ -15,8 +19,36 @@ class LLMAdapter:
         self.openai_api_key = get_env("OPENAI_API_KEY")
         self.google_palm_api_key = get_env("GOOGLE_PALM_API_KEY")
         self.groq_api_key = get_env("GROQ_API_KEY")
-        self.lm_studio_url = get_env("LM_STUDIO_URL", "http://192.168.100.136:1234/v1")
+        self.lm_studio_url = get_lm_studio_url()
         self.lm_studio_api_token = get_env("LM_STUDIO_API_TOKEN", "lm-studio")
+
+    def _log_evaluated_prompt(
+        self,
+        provider: str,
+        model: str,
+        prompt: str,
+        system_message: Optional[str],
+        temperature: float,
+        max_tokens: Optional[int],
+    ) -> None:
+        """Append an evaluated workflow prompt entry to prompts.log."""
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "scope": "workflows",
+            "provider": provider,
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "system_message": system_message or "",
+            "user_prompt": prompt,
+        }
+        try:
+            PROMPTS_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with PROMPTS_LOG_PATH.open("a", encoding="utf-8") as log_file:
+                log_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:
+            # Logging must be best-effort and never block LLM execution.
+            return
     
     def call_llm(
         self,
@@ -88,8 +120,17 @@ class LLMAdapter:
             messages.append({"role": "system", "content": system_message})
         messages.append({"role": "user", "content": prompt})
         
+        resolved_model = model or "gpt-4"
+        self._log_evaluated_prompt(
+            provider="openai",
+            model=resolved_model,
+            prompt=prompt,
+            system_message=system_message,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
         kwargs: Dict[str, Any] = {
-            "model": model or "gpt-4",
+            "model": resolved_model,
             "messages": messages,
             "temperature": temperature,
         }
@@ -118,6 +159,14 @@ class LLMAdapter:
         
         url = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         model_name = model or "gemini-pro"
+        self._log_evaluated_prompt(
+            provider="gemini",
+            model=model_name,
+            prompt=prompt,
+            system_message=system_message,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
         url = url.format(model=model_name)
         
         payload: Dict[str, Any] = {
@@ -167,8 +216,17 @@ class LLMAdapter:
             messages.append({"role": "system", "content": system_message})
         messages.append({"role": "user", "content": prompt})
         
+        resolved_model = model or "llama3-70b-8192"
+        self._log_evaluated_prompt(
+            provider="groq",
+            model=resolved_model,
+            prompt=prompt,
+            system_message=system_message,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
         payload: Dict[str, Any] = {
-            "model": model or "llama3-70b-8192",
+            "model": resolved_model,
             "messages": messages,
             "temperature": temperature,
         }
@@ -205,8 +263,17 @@ class LLMAdapter:
             messages.append({"role": "system", "content": system_message})
         messages.append({"role": "user", "content": prompt})
         
+        resolved_model = model or "openai/gpt-oss-20b"
+        self._log_evaluated_prompt(
+            provider="lm_studio",
+            model=resolved_model,
+            prompt=prompt,
+            system_message=system_message,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
         payload: Dict[str, Any] = {
-            "model": model or "openai/gpt-oss-20b",
+            "model": resolved_model,
             "messages": messages,
             "temperature": temperature,
         }

@@ -138,3 +138,45 @@ def test_process_post_auto_selects_next_unprocessed_post_with_tag():
         "tag": "same-tag",
     }
     assert calls == [("final-step", "p10_same-tag.json")]
+
+
+def test_process_post_falls_back_to_auto_select_when_post_id_missing_on_disk():
+    saved = []
+    selected = {}
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+
+    def fake_posts_list(step, count, offset, tag):
+        selected.update({"step": step, "count": count, "offset": offset, "tag": tag})
+        return {"fileNames": ["p11.json"]}
+
+    def fake_get_post_local(filename, step):
+        if filename == "missing-post.json":
+            raise FileNotFoundError("missing")
+        return {
+            "id": "p11",
+            "angles": [{"source_quote": "q", "tangent": "t", "category": "c"}],
+        }
+
+    pipeline.backend = SimpleNamespace(
+        posts_list=fake_posts_list,
+        get_post_local=fake_get_post_local,
+        save_object_local=lambda data, step, filename: saved.append((step, filename)),
+    )
+    pipeline._load_default_payload_and_tag = lambda: ("default payload", "same-tag")
+    pipeline.encode = lambda payload, post, tag: {
+        "succeeded": True,
+        "post": post,
+        "stego_text": "ok",
+        "tag": tag,
+    }
+
+    result = pipeline.process_post(post_id="missing-post")
+
+    assert result["succeeded"] is True
+    assert selected == {
+        "step": "final-step",
+        "count": 1,
+        "offset": 1,
+        "tag": "same-tag",
+    }
+    assert saved == [("final-step", "p11_same-tag.json")]

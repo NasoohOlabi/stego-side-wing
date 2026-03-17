@@ -9,6 +9,7 @@ import httpx
 from icecream import ic  # Import icecream for colorful logging
 from openai import OpenAI
 
+from infrastructure.config import get_lm_studio_url
 from pipelines.headless_browser_analyzer import WebAnalyzer
 from integrations.news_api import (
     Article,
@@ -34,7 +35,7 @@ def _httpx_client_init_with_proxies(
 
 httpx.Client.__init__ = _httpx_client_init_with_proxies
 
-MODEL_URL = "http://192.168.100.136:1234/v1"
+MODEL_URL = get_lm_studio_url()
 MODEL_NAME = "mistral-nemo-instruct-2407-abliterated"
 # MODEL_NAME = "openai/gpt-oss-20b"
 

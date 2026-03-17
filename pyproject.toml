@@ -9,6 +9,7 @@ dependencies = [
     "beautifulsoup4>=4.14.3",
     "crawl4ai>=0.8.0",
     "flask-caching>=2.3.1",
+    "flask-cors>=6.0.1",
     "flask[async]>=3.1.2",
     "httpx>=0.28.1",
     "icecream>=2.1.10",

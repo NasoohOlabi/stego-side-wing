@@ -2,7 +2,7 @@
 import json
 import os
 import sqlite3
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 DB_FILE = "kv_store.db"
 OLD_DB_FILE = "kv_store.json"
@@ -135,3 +135,71 @@ def get_value(key: str) -> Optional[Dict[str, Any]]:
         value = json.loads(row[0])
         return {"k": key, "v": value}
     return None
+
+
+def list_values(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
+    """
+    List key-value entries with basic pagination.
+
+    Args:
+        limit: Maximum number of entries to return
+        offset: Number of entries to skip
+
+    Returns:
+        Dict containing entries and pagination metadata
+    """
+    safe_limit = max(1, min(int(limit), 1000))
+    safe_offset = max(0, int(offset))
+
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM kv")
+    total = int(cursor.fetchone()[0])
+    cursor.execute(
+        "SELECT key, value FROM kv ORDER BY key ASC LIMIT ? OFFSET ?",
+        (safe_limit, safe_offset),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    items: List[Dict[str, Any]] = []
+    for key, raw_value in rows:
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            parsed = raw_value
+        items.append({"k": key, "v": parsed})
+
+    return {
+        "items": items,
+        "pagination": {
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "returned": len(items),
+            "total": total,
+        },
+    }
+
+
+def delete_value(key: str) -> Dict[str, Any]:
+    """
+    Delete an entry by key.
+
+    Args:
+        key: Key name
+
+    Returns:
+        Dict with deletion result and existence flag
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM kv WHERE key = ?", (key,))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "success",
+        "deleted": deleted,
+        "key": key,
+    }

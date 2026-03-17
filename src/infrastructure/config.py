@@ -61,6 +61,21 @@ def get_env_required(key: str) -> str:
     return value
 
 
+def get_lm_studio_url(default: Optional[str] = None) -> str:
+    """
+    Get LM Studio base URL normalized to include /v1.
+
+    This allows either a root tunnel URL (e.g. https://...trycloudflare.com/)
+    or a full /v1 URL in the environment.
+    """
+    fallback = default or "https://approx-chocolate-earth-federation.trycloudflare.com/"
+    raw_value = get_env("LM_STUDIO_URL", fallback) or fallback
+    normalized = raw_value.rstrip("/")
+    if not normalized.endswith("/v1"):
+        normalized = f"{normalized}/v1"
+    return normalized
+
+
 # Common configuration constants
 POSTS_DIRECTORY = "datasets/news_cleaned"
 

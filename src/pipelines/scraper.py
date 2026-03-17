@@ -8,9 +8,10 @@ from typing import Any, Dict, Optional, Type
 from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig, LLMConfig
 from crawl4ai.extraction_strategy import LLMExtractionStrategy
 from pydantic import BaseModel
+from infrastructure.config import get_lm_studio_url
 
 # --- Configuration Constants ---
-LM_STUDIO_URL = "http://192.168.100.136:1234/v1"
+LM_STUDIO_URL = get_lm_studio_url()
 
 API_TOKEN = "lm-studio"  # Placeholder for local server
 

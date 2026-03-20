@@ -9,7 +9,8 @@ import requests
 from infrastructure.config import REPO_ROOT, get_env, get_lm_studio_url
 
 
-PROMPTS_LOG_PATH = REPO_ROOT / "prompts.log"
+PROMPTS_LOG_TIMESTAMP = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+PROMPTS_LOG_PATH = REPO_ROOT / "logs" / f"stego_prompts_{PROMPTS_LOG_TIMESTAMP}.log"
 
 
 class LLMAdapter:
@@ -31,7 +32,7 @@ class LLMAdapter:
         temperature: float,
         max_tokens: Optional[int],
     ) -> None:
-        """Append an evaluated workflow prompt entry to prompts.log."""
+        """Append an evaluated workflow prompt entry to a timestamped log."""
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "scope": "workflows",

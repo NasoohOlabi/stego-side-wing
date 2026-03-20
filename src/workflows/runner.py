@@ -132,9 +132,16 @@ class WorkflowRunner:
         payload: Optional[str] = None,
         tag: Optional[str] = None,
         list_offset: int = 1,
+        run_all: bool = False,
+        max_posts: Optional[int] = None,
         on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """Run Stego pipeline."""
+        if max_posts is not None and max_posts < 1:
+            raise ValueError("'max_posts' must be >= 1 when provided")
+        if run_all and post_id:
+            raise ValueError("'post_id' cannot be combined with run_all=true")
+
         self._emit(
             on_progress,
             "stage_start",
@@ -143,21 +150,106 @@ class WorkflowRunner:
                 "post_id": post_id,
                 "tag": tag,
                 "list_offset": list_offset,
+                "run_all": run_all,
+                "max_posts": max_posts,
             },
         )
-        result = self.stego.process_post(
-            post_id=post_id,
-            payload=payload,
-            tag=tag,
-            list_offset=list_offset,
-        )
+        if not run_all:
+            result = self.stego.process_post(
+                post_id=post_id,
+                payload=payload,
+                tag=tag,
+                list_offset=list_offset,
+            )
+            self._emit(
+                on_progress,
+                "stage_done",
+                {
+                    "stage": "stego",
+                    "succeeded": bool(result.get("succeeded")),
+                    "retry_count": int(result.get("retry_count", 0)),
+                },
+            )
+            return result
+
+        results: List[Dict[str, Any]] = []
+        success_count = 0
+        failure_count = 0
+        seen_failed_post_ids: set[str] = set()
+        stop_reason = "no_unprocessed_posts"
+
+        while True:
+            if max_posts is not None and len(results) >= max_posts:
+                stop_reason = "max_posts_reached"
+                break
+            try:
+                result = self.stego.process_post(
+                    post_id=None,
+                    payload=payload,
+                    tag=tag,
+                    list_offset=list_offset,
+                )
+            except ValueError as exc:
+                if "No unprocessed posts found" in str(exc):
+                    stop_reason = "no_unprocessed_posts"
+                    break
+                raise
+
+            results.append(result)
+            succeeded = bool(result.get("succeeded"))
+            post_obj = result.get("post")
+            post_id_value = (
+                str(post_obj.get("id"))
+                if isinstance(post_obj, dict) and post_obj.get("id") is not None
+                else None
+            )
+            self._emit(
+                on_progress,
+                "stage_progress",
+                {
+                    "stage": "stego",
+                    "run_all": True,
+                    "processed_count": len(results),
+                    "post_id": post_id_value,
+                    "succeeded": succeeded,
+                    "retry_count": int(result.get("retry_count", 0)),
+                },
+            )
+
+            if succeeded:
+                success_count += 1
+                continue
+
+            failure_count += 1
+            if not post_id_value:
+                stop_reason = "failed_post_without_id"
+                break
+            if post_id_value in seen_failed_post_ids:
+                stop_reason = "repeat_failed_post"
+                break
+            seen_failed_post_ids.add(post_id_value)
+
+        result = {
+            "run_all": True,
+            "tag": tag,
+            "list_offset": list_offset,
+            "max_posts": max_posts,
+            "processed_count": len(results),
+            "succeeded_count": success_count,
+            "failed_count": failure_count,
+            "stopped_reason": stop_reason,
+            "results": results,
+        }
         self._emit(
             on_progress,
             "stage_done",
             {
                 "stage": "stego",
-                "succeeded": bool(result.get("succeeded")),
-                "retry_count": int(result.get("retry_count", 0)),
+                "run_all": True,
+                "processed_count": len(results),
+                "succeeded_count": success_count,
+                "failed_count": failure_count,
+                "stopped_reason": stop_reason,
             },
         )
         return result

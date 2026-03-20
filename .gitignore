@@ -9,7 +9,7 @@ wheels/
 # Virtual environments
 .venv
 cache-directory
-datasets
+datasets*
 output-results
 _cache-directory
 .env

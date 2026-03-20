@@ -15,6 +15,7 @@ from workflows.utils.text_utils import build_post_text_dictionary, flatten_comme
 MAX_LITERAL_LEN = 250
 STEGO_WORKFLOW_ID = "27rZrYtywu3k9e7Q"
 STEGO_DEFAULT_OFFSET = 1
+STEGO_LLM_MODEL = "openai/gpt-oss-20b"
 logger = logging.getLogger(__name__)
 N8N_STEGO_SYSTEM_TEMPLATE = (
     "ROLE: Human Redditor — stay in character at all times.\n\n"
@@ -562,7 +563,7 @@ class StegoPipeline:
         response = self.llm.call_llm(
             prompt=prompt,
             system_message=system_message,
-            model=self.config.model,
+            model=STEGO_LLM_MODEL,
             provider="lm_studio",
             temperature=0.7,
         )
@@ -956,21 +957,22 @@ class StegoPipeline:
                     raise
 
         result = self.encode(payload=resolved_payload, post=post, tag=resolved_tag)
-        if result.get("succeeded"):
-            result_post_id = str(post.get("id") or resolved_post_id)
-            filename = (
-                f"{result_post_id}_{resolved_tag}.json"
-                if resolved_tag
-                else f"{result_post_id}.json"
-            )
-            self.backend.save_object_local(result, step=step, filename=filename)
-            logger.info(
-                "[STEGO][PROCESS] saved result post_id=%s step=%s filename=%s",
-                result_post_id,
-                step,
-                filename,
-            )
-        else:
+        result_post_id = str(post.get("id") or resolved_post_id)
+        filename = (
+            f"{result_post_id}_{resolved_tag}.json"
+            if resolved_tag
+            else f"{result_post_id}.json"
+        )
+        # Keep parity with n8n workflow: write final output artifact into ./output-results.
+        self.backend.save_object_local(result, step="final-step", filename=filename)
+        logger.info(
+            "[STEGO][PROCESS] saved result post_id=%s step=%s filename=%s",
+            result_post_id,
+            "final-step",
+            filename,
+        )
+
+        if not result.get("succeeded"):
             logger.error(
                 "[STEGO][PROCESS] failed post_id=%s error=%s",
                 resolved_post_id,

@@ -27,6 +27,7 @@ from services.state_service import (
     read_json_file,
     write_json_file,
 )
+from services.workflow_run_tracker import end_run, iter_snapshot, register_run, track_workflow
 from workflows.runner import WorkflowRunner
 
 bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
@@ -73,6 +74,23 @@ def _body_int(body: dict[str, Any], key: str, default: int) -> tuple[int | None,
         return int(value), None
     except (TypeError, ValueError):
         return None, fail(f"'{key}' must be an integer", status=400)
+
+
+def _body_bool(
+    body: dict[str, Any], key: str, default: bool = False
+) -> tuple[bool, tuple[Any, int] | None]:
+    value = body.get(key, default)
+    if isinstance(value, bool):
+        return value, None
+    if isinstance(value, (int, float)):
+        return value != 0, None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in TRUE_VALUES:
+            return True, None
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False, None
+    return False, fail(f"'{key}' must be a boolean", status=400)
 
 
 def _optional_body_str(body: dict[str, Any], key: str) -> tuple[str | None, tuple[Any, int] | None]:
@@ -136,6 +154,11 @@ class _WorkflowLogHandler(logging.Handler):
             return
 
 
+def _sync_workflow(command: str, run_fn: Callable[[], Any]) -> Any:
+    with track_workflow(command):
+        return run_fn()
+
+
 def _stream_workflow(
     command: str,
     executor: Callable[[Callable[[str, dict[str, Any]], None]], Any],
@@ -147,34 +170,38 @@ def _stream_workflow(
         events.put((event, payload))
 
     def _worker() -> None:
-        workflow_logger = logging.getLogger("workflows")
-        original_level = workflow_logger.level
-        level_changed = False
-        log_handler = _WorkflowLogHandler(events)
-        log_handler.setFormatter(logging.Formatter("%(message)s"))
-        log_handler.setLevel(logging.INFO)
-        workflow_logger.addHandler(log_handler)
-        if original_level > logging.INFO:
-            workflow_logger.setLevel(logging.INFO)
-            level_changed = True
-
+        run_id = register_run(command, "stream")
         try:
-            _emit("status", {"phase": "started", "command": command})
-            result = executor(_emit)
-            _emit("result", {"command": command, "result": result})
-        except Exception as exc:
-            _emit(
-                "error",
-                {
-                    "command": command,
-                    "message": "Workflow execution failed",
-                    "details": str(exc),
-                },
-            )
+            workflow_logger = logging.getLogger("workflows")
+            original_level = workflow_logger.level
+            level_changed = False
+            log_handler = _WorkflowLogHandler(events)
+            log_handler.setFormatter(logging.Formatter("%(message)s"))
+            log_handler.setLevel(logging.INFO)
+            workflow_logger.addHandler(log_handler)
+            if original_level > logging.INFO:
+                workflow_logger.setLevel(logging.INFO)
+                level_changed = True
+
+            try:
+                _emit("status", {"phase": "started", "command": command})
+                result = executor(_emit)
+                _emit("result", {"command": command, "result": result})
+            except Exception as exc:
+                _emit(
+                    "error",
+                    {
+                        "command": command,
+                        "message": "Workflow execution failed",
+                        "details": str(exc),
+                    },
+                )
+            finally:
+                workflow_logger.removeHandler(log_handler)
+                if level_changed:
+                    workflow_logger.setLevel(original_level)
         finally:
-            workflow_logger.removeHandler(log_handler)
-            if level_changed:
-                workflow_logger.setLevel(original_level)
+            end_run(run_id)
             done.set()
 
     worker = threading.Thread(target=_worker, name=f"workflow-stream-{command}", daemon=True)
@@ -390,10 +417,13 @@ def wf_data_load() -> Any:
         )
 
     try:
-        data = runner.run_data_load(
-            count=parsed_count,
-            offset=parsed_offset,
-            batch_size=parsed_batch_size,
+        data = _sync_workflow(
+            "data-load",
+            lambda: runner.run_data_load(
+                count=parsed_count,
+                offset=parsed_offset,
+                batch_size=parsed_batch_size,
+            ),
         )
         return ok(data)
     except Exception as exc:
@@ -427,9 +457,12 @@ def wf_research() -> Any:
         )
 
     try:
-        data = runner.run_research(
-            count=parsed_count,
-            offset=parsed_offset,
+        data = _sync_workflow(
+            "research",
+            lambda: runner.run_research(
+                count=parsed_count,
+                offset=parsed_offset,
+            ),
         )
         return ok(data)
     except Exception as exc:
@@ -463,9 +496,12 @@ def wf_gen_angles() -> Any:
         )
 
     try:
-        data = runner.run_gen_angles(
-            count=parsed_count,
-            offset=parsed_offset,
+        data = _sync_workflow(
+            "gen-angles",
+            lambda: runner.run_gen_angles(
+                count=parsed_count,
+                offset=parsed_offset,
+            ),
         )
         return ok(data)
     except Exception as exc:
@@ -491,6 +527,16 @@ def wf_stego() -> Any:
         parsed_list_offset = int(list_offset)
     except (TypeError, ValueError):
         return fail("'list_offset' must be an integer", status=400)
+    run_all, err = _body_bool(body, "run_all", default=False)
+    if err:
+        return err
+    max_posts = body.get("max_posts")
+    parsed_max_posts: Optional[int] = None
+    if max_posts is not None:
+        try:
+            parsed_max_posts = int(max_posts)
+        except (TypeError, ValueError):
+            return fail("'max_posts' must be an integer when provided", status=400)
 
     if _wants_workflow_stream(body):
         return _stream_workflow(
@@ -500,6 +546,8 @@ def wf_stego() -> Any:
                 payload=payload,
                 tag=tag,
                 list_offset=parsed_list_offset,
+                run_all=run_all,
+                max_posts=parsed_max_posts,
                 on_progress=lambda event, progress_payload: emit(
                     "progress",
                     {"event": event, **progress_payload},
@@ -508,11 +556,16 @@ def wf_stego() -> Any:
         )
 
     try:
-        data = runner.run_stego(
-            post_id=post_id,
-            payload=payload,
-            tag=tag,
-            list_offset=parsed_list_offset,
+        data = _sync_workflow(
+            "stego",
+            lambda: runner.run_stego(
+                post_id=post_id,
+                payload=payload,
+                tag=tag,
+                list_offset=parsed_list_offset,
+                run_all=run_all,
+                max_posts=parsed_max_posts,
+            ),
         )
         return ok(data)
     except Exception as exc:
@@ -552,15 +605,17 @@ def wf_decode() -> Any:
         )
 
     try:
-        return ok(
-            {
+        payload_out = _sync_workflow(
+            "decode",
+            lambda: {
                 "decoded_index": runner.run_decode(
                     stego_text=stego_text,
                     angles=angles,
                     few_shots=few_shots,
                 )
-            }
+            },
         )
+        return ok(payload_out)
     except Exception as exc:
         return fail("Workflow execution failed", status=500, details=str(exc))
 
@@ -591,11 +646,14 @@ def wf_gen_terms() -> Any:
         )
 
     try:
-        data = runner.run_gen_search_terms(
-            post_id=post_id,
-            post_title=body.get("post_title"),
-            post_text=body.get("post_text"),
-            post_url=body.get("post_url"),
+        data = _sync_workflow(
+            "gen-terms",
+            lambda: runner.run_gen_search_terms(
+                post_id=post_id,
+                post_title=body.get("post_title"),
+                post_text=body.get("post_text"),
+                post_url=body.get("post_url"),
+            ),
         )
         return ok(data)
     except Exception as exc:
@@ -628,9 +686,12 @@ def wf_full() -> Any:
         )
 
     try:
-        data = runner.run_full_pipeline(
-            start_step=start_step,
-            count=parsed_count,
+        data = _sync_workflow(
+            "full",
+            lambda: runner.run_full_pipeline(
+                start_step=start_step,
+                count=parsed_count,
+            ),
         )
         return ok(data)
     except Exception as exc:
@@ -644,8 +705,15 @@ def wf_pipelines() -> tuple[Any, int]:
             "commands": list(WORKFLOW_COMMANDS),
             "endpoints": [f"/api/v1/workflows/{name}" for name in WORKFLOW_COMMANDS],
             "generic_run_endpoint": "/api/v1/workflows/run",
+            "runs_status_endpoint": "/api/v1/workflows/runs",
         }
     )
+
+
+@bp.route("/workflows/runs", methods=["GET"])
+def wf_runs() -> tuple[Any, int]:
+    runs = list(iter_snapshot())
+    return ok({"runs": runs, "count": len(runs)})
 
 
 @bp.route("/workflows/run", methods=["POST"])
@@ -714,6 +782,16 @@ def wf_run() -> Any:
         list_offset, err = _body_int(body, "list_offset", 1)
         if err:
             return err
+        run_all, err = _body_bool(body, "run_all", default=False)
+        if err:
+            return err
+        max_posts = body.get("max_posts")
+        parsed_max_posts: Optional[int] = None
+        if max_posts is not None:
+            try:
+                parsed_max_posts = int(max_posts)
+            except (TypeError, ValueError):
+                return fail("'max_posts' must be an integer when provided", status=400)
         post_id, err = _optional_body_str(body, "post_id")
         if err:
             return err
@@ -731,6 +809,8 @@ def wf_run() -> Any:
                 payload=payload,
                 tag=tag,
                 list_offset=list_offset,
+                run_all=run_all,
+                max_posts=parsed_max_posts,
                 on_progress=progress_cb,
             )
 
@@ -797,7 +877,7 @@ def wf_run() -> Any:
         )
 
     try:
-        data = execute(None)
+        data = _sync_workflow(command, lambda: execute(None))
         return ok({"command": command, "result": data})
     except Exception as exc:
         return fail("Workflow execution failed", status=500, details=str(exc))

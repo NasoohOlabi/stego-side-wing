@@ -33,7 +33,8 @@ def get_paths_map() -> Dict[str, str]:
     paths["db.research_terms"] = str(resolve_path("./datasets/research_terms_cache.db"))
     paths["log.workflow_cli"] = str(resolve_path("./logs/workflow_cli.log"))
     paths["log.prompts"] = str(resolve_path("./prompts.log"))
-    paths["log.workflow_prompts"] = str(resolve_path("./prompts.log"))
+    paths["log.workflow_prompts_dir"] = str(resolve_path("./logs"))
+    paths["log.workflow_prompts_glob"] = str(resolve_path("./logs/stego_prompts_*.log"))
     return paths
 
 

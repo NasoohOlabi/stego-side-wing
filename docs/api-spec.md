@@ -67,6 +67,11 @@ No auth is currently enforced in this service. Frontend should treat this API as
 - `GET /workflows/pipelines`
   - Returns available pipeline commands and workflow execution endpoints.
 
+- `GET /workflows/runs`
+  - Returns currently executing workflow runs in this API process.
+  - Response `data`: `{ "runs": [...], "count": <int> }`.
+  - Each run: `id`, `command`, `mode` (`sync` | `stream`), `started_at` (Unix seconds), `elapsed_ms`.
+
 - `POST /workflows/run`
   - Generic workflow runner.
   - Body: `command` (`data-load|research|gen-angles|stego|decode|gen-terms|full`) + same fields as the matching dedicated endpoint.
@@ -88,12 +93,19 @@ No auth is currently enforced in this service. Frontend should treat this API as
   - Streaming defaults to SSE; disable via `?stream=0` or `{ "stream": false }`.
 
 - `POST /workflows/stego`
-  - Body: `post_id?`, `payload?`, `tag?`, `list_offset?`
+  - Body: `post_id?`, `payload?`, `tag?`, `list_offset?`, `run_all?`, `max_posts?`
   - Behavior:
     - `post_id` is optional.
     - When `post_id` is omitted, the API auto-selects the next unprocessed post from `final-step` for the same `tag`.
     - If a provided `post_id` is not found in `final-step` or `angles-step`, it falls back to the same auto-selection behavior.
     - `payload` is optional; when omitted, the workflow uses the default payload from `workflows/27rZrYtywu3k9e7Q.json` (`SetSecretData.payload`).
+    - `run_all` (default `false`) makes stego process posts recursively for the same tag until no unprocessed posts remain.
+    - `max_posts` optionally limits how many posts are processed when `run_all=true`.
+    - `post_id` cannot be combined with `run_all=true`.
+  - `run_all` response shape:
+    - `run_all`, `tag`, `list_offset`, `max_posts`
+    - `processed_count`, `succeeded_count`, `failed_count`, `stopped_reason`
+    - `results` (array of per-post stego outputs)
   - Streaming defaults to SSE; disable via `?stream=0` or `{ "stream": false }`.
 
 - `POST /workflows/decode`

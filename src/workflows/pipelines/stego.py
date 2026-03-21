@@ -8,14 +8,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
-from workflows.pipelines.decode import DecodePipeline
+from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
 from workflows.utils.text_utils import build_post_text_dictionary, flatten_comments
 
 
 MAX_LITERAL_LEN = 250
 STEGO_WORKFLOW_ID = "27rZrYtywu3k9e7Q"
 STEGO_DEFAULT_OFFSET = 1
-STEGO_LLM_MODEL = "openai/gpt-oss-20b"
+STEGO_LLM_MODEL = DECODE_LLM_MODEL
 logger = logging.getLogger(__name__)
 N8N_STEGO_SYSTEM_TEMPLATE = (
     "ROLE: Human Redditor — stay in character at all times.\n\n"

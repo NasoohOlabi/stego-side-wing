@@ -137,8 +137,9 @@ class WorkflowRunner:
         on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """Run Stego pipeline."""
-        if max_posts is not None and max_posts < 1:
-            raise ValueError("'max_posts' must be >= 1 when provided")
+        max_posts_cap: Optional[int] = (
+            max_posts if max_posts is not None and max_posts >= 1 else None
+        )
         if run_all and post_id:
             raise ValueError("'post_id' cannot be combined with run_all=true")
 
@@ -151,7 +152,7 @@ class WorkflowRunner:
                 "tag": tag,
                 "list_offset": list_offset,
                 "run_all": run_all,
-                "max_posts": max_posts,
+                "max_posts": max_posts_cap,
             },
         )
         if not run_all:
@@ -179,7 +180,7 @@ class WorkflowRunner:
         stop_reason = "no_unprocessed_posts"
 
         while True:
-            if max_posts is not None and len(results) >= max_posts:
+            if max_posts_cap is not None and len(results) >= max_posts_cap:
                 stop_reason = "max_posts_reached"
                 break
             try:
@@ -233,7 +234,7 @@ class WorkflowRunner:
             "run_all": True,
             "tag": tag,
             "list_offset": list_offset,
-            "max_posts": max_posts,
+            "max_posts": max_posts_cap,
             "processed_count": len(results),
             "succeeded_count": success_count,
             "failed_count": failure_count,
@@ -310,6 +311,7 @@ class WorkflowRunner:
         self,
         start_step: str = "filter-url-unresolved",
         count: int = 1,
+        payload: Optional[str] = None,
         on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     ) -> List[Dict]:
         """
@@ -326,7 +328,12 @@ class WorkflowRunner:
         self._emit(
             on_progress,
             "workflow_start",
-            {"workflow": "full", "start_step": start_step, "count": count},
+            {
+                "workflow": "full",
+                "start_step": start_step,
+                "count": count,
+                "payload_provided": bool(payload),
+            },
         )
         
         if start_step == "filter-url-unresolved":

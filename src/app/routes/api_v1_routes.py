@@ -103,6 +103,27 @@ def _optional_body_str(body: dict[str, Any], key: str) -> tuple[str | None, tupl
     return normalized or None, None
 
 
+def _optional_payload_field(body: dict[str, Any], key: str = "payload") -> tuple[str | None, tuple[Any, int] | None]:
+    """Optional stego-style payload: string, or JSON object/array coerced to a string."""
+    value = body.get(key)
+    if value is None:
+        return None, None
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None, None
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, separators=(",", ":"), default=str), None
+        except (TypeError, ValueError):
+            return None, fail(f"'{key}' must be JSON-serializable when provided as object or array", status=400)
+    if isinstance(value, (bool, int, float)):
+        return str(value), None
+    return None, fail(
+        f"'{key}' must be a string, number, boolean, object, or array when provided",
+        status=400,
+    )
+
+
 def _is_truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -516,7 +537,7 @@ def wf_stego() -> Any:
     post_id, err = _optional_body_str(body, "post_id")
     if err:
         return err
-    payload, err = _optional_body_str(body, "payload")
+    payload, err = _optional_payload_field(body, "payload")
     if err:
         return err
     tag, err = _optional_body_str(body, "tag")
@@ -534,9 +555,11 @@ def wf_stego() -> Any:
     parsed_max_posts: Optional[int] = None
     if max_posts is not None:
         try:
-            parsed_max_posts = int(max_posts)
+            parsed = int(max_posts)
         except (TypeError, ValueError):
             return fail("'max_posts' must be an integer when provided", status=400)
+        if parsed >= 1:
+            parsed_max_posts = parsed
 
     if _wants_workflow_stream(body):
         return _stream_workflow(
@@ -671,6 +694,9 @@ def wf_full() -> Any:
         parsed_count = int(count)
     except (TypeError, ValueError):
         return fail("'count' must be an integer", status=400)
+    pipeline_payload, err = _optional_payload_field(body, "payload")
+    if err:
+        return err
 
     if _wants_workflow_stream(body):
         return _stream_workflow(
@@ -678,6 +704,7 @@ def wf_full() -> Any:
             lambda emit: runner.run_full_pipeline(
                 start_step=start_step,
                 count=parsed_count,
+                payload=pipeline_payload,
                 on_progress=lambda event, payload: emit(
                     "progress",
                     {"event": event, **payload},
@@ -691,6 +718,7 @@ def wf_full() -> Any:
             lambda: runner.run_full_pipeline(
                 start_step=start_step,
                 count=parsed_count,
+                payload=pipeline_payload,
             ),
         )
         return ok(data)
@@ -789,13 +817,15 @@ def wf_run() -> Any:
         parsed_max_posts: Optional[int] = None
         if max_posts is not None:
             try:
-                parsed_max_posts = int(max_posts)
+                parsed = int(max_posts)
             except (TypeError, ValueError):
                 return fail("'max_posts' must be an integer when provided", status=400)
+            if parsed >= 1:
+                parsed_max_posts = parsed
         post_id, err = _optional_body_str(body, "post_id")
         if err:
             return err
-        payload, err = _optional_body_str(body, "payload")
+        payload, err = _optional_payload_field(body, "payload")
         if err:
             return err
         tag, err = _optional_body_str(body, "tag")
@@ -855,11 +885,15 @@ def wf_run() -> Any:
             return err
         assert count is not None
         start_step = str(body.get("start_step", "filter-url-unresolved"))
+        pipeline_payload, err = _optional_payload_field(body, "payload")
+        if err:
+            return err
 
         def execute(progress_cb: Optional[Callable[[str, dict[str, Any]], None]]) -> Any:
             return runner.run_full_pipeline(
                 start_step=start_step,
                 count=count,
+                payload=pipeline_payload,
                 on_progress=progress_cb,
             )
 

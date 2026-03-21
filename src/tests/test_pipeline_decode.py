@@ -19,7 +19,6 @@ def test_decode_uses_llm_integer_when_valid_candidate():
         semantic_search=lambda text, objects, n: {"results": [{"object": angles[1]}]}
     )
     pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "1")
-    pipeline.config = SimpleNamespace(model="dummy")
 
     assert pipeline.decode("message", angles) == 1
 
@@ -37,7 +36,6 @@ def test_decode_interprets_rank_when_llm_returns_rank_not_index():
         }
     )
     pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "1")
-    pipeline.config = SimpleNamespace(model="dummy")
 
     assert pipeline.decode("message", angles) == 2
 
@@ -52,7 +50,6 @@ def test_decode_falls_back_to_top_semantic_match_when_llm_invalid():
         semantic_search=lambda text, objects, n: {"results": [{"object": angles[1]}]}
     )
     pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "not a number")
-    pipeline.config = SimpleNamespace(model="dummy")
 
     assert pipeline.decode("message", angles) == 1
 
@@ -64,6 +61,5 @@ def test_decode_returns_none_on_runtime_error():
         semantic_search=lambda text, objects, n: (_ for _ in ()).throw(RuntimeError("down"))
     )
     pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "0")
-    pipeline.config = SimpleNamespace(model="dummy")
 
     assert pipeline.decode("message", angles) is None

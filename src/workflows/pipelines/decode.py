@@ -1,4 +1,9 @@
-"""Decode steganographic text back to angle index."""
+"""Decode steganographic text back to angle index.
+
+Parity with n8n workflow ``workflows/tWT6U8IK_9oUBlJMRl0oa.json`` (Decode):
+HTTP semantic_search with n=20, then G Decode agent with model gpt-oss-20b
+(``openai/gpt-oss-20b`` via LM Studio / OpenAI-compatible), retries max 5.
+"""
 import json
 import logging
 import re
@@ -6,9 +11,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
-from workflows.config import get_config
 
 logger = logging.getLogger(__name__)
+
+# Must match ``gpt-oss`` node + stego encoder (``stego.STEGO_LLM_MODEL``).
+DECODE_LLM_MODEL = "openai/gpt-oss-20b"
+# HTTP Request body ``n`` in Decode workflow.
+DECODE_SEMANTIC_TOP_N = 20
+# G Decode node: retryOnFail / maxTries.
+DECODE_LLM_MAX_TRIES = 5
 
 
 def _angle_signature(angle: Dict[str, Any]) -> Tuple[str, str, str]:
@@ -25,7 +36,6 @@ class DecodePipeline:
     def __init__(self):
         self.backend = BackendAPIAdapter()
         self.llm = LLMAdapter()
-        self.config = get_config()
 
     def _find_angle_index(
         self,
@@ -68,11 +78,10 @@ class DecodePipeline:
                 len(few_shots or []),
             )
 
-            top_n = min(5, len(angles))
             search_result = self.backend.semantic_search(
                 text=stego_text,
                 objects=angles,
-                n=top_n,
+                n=DECODE_SEMANTIC_TOP_N,
             )
 
             results = search_result.get("results", [])
@@ -85,7 +94,7 @@ class DecodePipeline:
                 lookup.setdefault(_angle_signature(angle), []).append(idx)
 
             top_candidates: List[Dict[str, Any]] = []
-            for rank, result in enumerate(results[:top_n], start=1):
+            for rank, result in enumerate(results[:DECODE_SEMANTIC_TOP_N], start=1):
                 obj = result.get("object", {})
                 if not isinstance(obj, dict):
                     continue
@@ -118,7 +127,7 @@ class DecodePipeline:
 
             semantic_objects = [
                 result.get("object")
-                for result in results[:top_n]
+                for result in results[:DECODE_SEMANTIC_TOP_N]
                 if isinstance(result, dict) and isinstance(result.get("object"), dict)
             ]
             system_candidates_text = json.dumps(
@@ -145,13 +154,30 @@ class DecodePipeline:
             logger.info("[DECODE][PROMPT][SYSTEM]\n%s", system_message)
             logger.info("[DECODE][PROMPT][USER]\n%s", prompt)
 
-            response = self.llm.call_llm(
-                prompt=prompt,
-                system_message=system_message,
-                model=self.config.model,
-                provider="lm_studio",
-                temperature=0.0,
-            )
+            response: Optional[str] = None
+            last_exc: Optional[BaseException] = None
+            for attempt in range(1, DECODE_LLM_MAX_TRIES + 1):
+                try:
+                    response = self.llm.call_llm(
+                        prompt=prompt,
+                        system_message=system_message,
+                        model=DECODE_LLM_MODEL,
+                        provider="lm_studio",
+                        temperature=0.0,
+                    )
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning(
+                        "[DECODE][LLM] attempt %s/%s failed: %s",
+                        attempt,
+                        DECODE_LLM_MAX_TRIES,
+                        exc,
+                    )
+            if response is None:
+                logger.error("[DECODE][LLM] exhausted retries", exc_info=last_exc)
+                return None
+
             logger.info("[DECODE][LLM][RAW] %s", response.strip())
 
             numbers = [int(x) for x in re.findall(r"\d+", response.strip())]
@@ -160,7 +186,7 @@ class DecodePipeline:
                     logger.info("[DECODE][LLM] Selected index=%s", number)
                     return number
 
-            # Rank-based fallback: handle LLM responses like "1".."5" (candidate rank).
+            # Rank-based fallback: LLM returns 1-based rank within semantic shortlist.
             for number in numbers:
                 if 1 <= number <= len(top_candidates):
                     ranked_idx = top_candidates[number - 1]["index"]

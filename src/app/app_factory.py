@@ -1,11 +1,16 @@
 """Flask application factory."""
 import atexit
+import logging
+import time
+import uuid
 
-from flask import Flask
+from flask import Flask, g, request
 from flask_caching import Cache
 from flask_cors import CORS
 
+from infrastructure.config import REPO_ROOT
 from infrastructure.event_loop import start_event_loop, stop_event_loop
+from infrastructure.json_logging import configure_api_logging
 
 # Suppress LiteLLM debug info to reduce verbose logging
 try:
@@ -16,15 +21,53 @@ except ImportError:
     pass  # litellm may not be directly imported, but used by crawl4ai
 
 
-def create_app() -> Flask:
+def create_app(
+    *,
+    log_level: str | None = None,
+    log_file: str | None = None,
+    enable_file_log: bool = True,
+) -> Flask:
     """
     Create and configure Flask application.
-    
+
     Returns:
         Configured Flask app instance
     """
+    configure_api_logging(
+        level=log_level if log_level is not None else "",
+        log_file=log_file,
+        enable_file_log=enable_file_log,
+        repo_root=REPO_ROOT,
+    )
+    log = logging.getLogger("app")
     app = Flask(__name__)
     CORS(app)
+
+    @app.before_request
+    def _api_assign_request_id() -> None:
+        g._api_request_id = str(uuid.uuid4())
+        g._api_request_t0 = time.perf_counter()
+
+    @app.after_request
+    def _api_log_access(response):  # type: ignore[no-untyped-def]
+        t0 = getattr(g, "_api_request_t0", None)
+        duration_ms = None
+        if t0 is not None:
+            duration_ms = round((time.perf_counter() - t0) * 1000, 3)
+        logging.getLogger("app.http").info(
+            "http_access",
+            extra={
+                "event": "http_access",
+                "request_id": getattr(g, "_api_request_id", None),
+                "method": request.method,
+                "path": request.path,
+                "status": response.status_code,
+                "duration_ms": duration_ms,
+                "blueprint": request.blueprint,
+                "endpoint": request.endpoint,
+            },
+        )
+        return response
     
     # Start the persistent event loop at module level
     # This ensures it's available before any requests are handled
@@ -72,5 +115,10 @@ def create_app() -> Flask:
     
     # Cleanup on app shutdown
     atexit.register(stop_event_loop)
-    
+
+    log.info(
+        "app_ready",
+        extra={"event": "app_startup", "component": "flask", "repo_root": str(REPO_ROOT)},
+    )
+
     return app

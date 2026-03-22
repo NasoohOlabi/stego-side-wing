@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -116,6 +117,20 @@ def _log_prompt(
         log_file.write(log_entry)
 
 
+def _emit_status(message: str) -> None:
+    """Write ASCII-safe status lines without breaking on Windows consoles."""
+    try:
+        sys.stdout.write(message + "\n")
+    except UnicodeEncodeError:
+        safe_message = message.encode("ascii", "replace").decode("ascii")
+        try:
+            sys.stdout.write(safe_message + "\n")
+        except Exception:
+            return
+    except Exception:
+        return
+
+
 def _build_user_prompt(batch: List[str]) -> str:
     combined = SEPARATOR.join(batch).strip()
     if "{{ }}" not in USER_PROMPT_TEMPLATE:
@@ -168,7 +183,12 @@ def _call_llm_with_messages(messages: List[Dict[str, str]]) -> str:
         "Content-Type": "application/json",
     }
 
-    response = requests.post(CHAT_ENDPOINT, json=payload, headers=headers)
+    response = requests.post(
+        CHAT_ENDPOINT,
+        json=payload,
+        headers=headers,
+        timeout=REQUEST_TIMEOUT,
+    )
     response.raise_for_status()
     data = response.json()
 
@@ -251,15 +271,15 @@ def analyze_angles_from_texts(texts: List[str]) -> List[Dict[str, str]]:
         cache_file = ANGLES_CACHE_DIR / f"{cache_key}.json"
 
         if cache_file.exists():
-            print(f"📂 Cache HIT for angles analysis (text hash: {cache_key[:10]}...)")
+            _emit_status(f"[angles] cache hit {cache_key[:10]}...")
             try:
                 cached_data = json.loads(cache_file.read_text(encoding="utf-8"))
                 all_responses.extend(cached_data)
                 continue
             except Exception as e:
-                print(f"⚠️ Error reading cache for text {cache_key}: {e}")
+                _emit_status(f"[angles] cache read error {cache_key[:10]}...: {e}")
 
-        print(f"📂 Cache MISS for angles analysis (text hash: {cache_key[:10]}...)")
+        _emit_status(f"[angles] cache miss {cache_key[:10]}...")
 
         segments = _split_long_text(text, MAX_CHARS_PER_TEXT)
         if not segments:
@@ -282,7 +302,7 @@ def analyze_angles_from_texts(texts: List[str]) -> List[Dict[str, str]]:
                 encoding="utf-8",
             )
         except Exception as e:
-            print(f"⚠️ Error saving cache for text {cache_key}: {e}")
+            _emit_status(f"[angles] cache save error {cache_key[:10]}...: {e}")
 
         all_responses.extend(text_responses)
 

@@ -1,5 +1,9 @@
 """Angles analysis service."""
+import logging
+
 from pipelines.angles.angle_runner import analyze_angles_from_texts
+
+logger = logging.getLogger(__name__)
 
 
 def analyze_angles(texts: object) -> list[dict[str, str]]:
@@ -24,6 +28,14 @@ def analyze_angles(texts: object) -> list[dict[str, str]]:
 
     try:
         cast_texts = [x for x in texts if isinstance(x, str)]
+        logger.info(
+            "analyze_angles",
+            extra={
+                "event": "angles",
+                "action": "analyze",
+                "text_blocks": len(cast_texts),
+            },
+        )
         results = analyze_angles_from_texts(cast_texts)
         return results
     except ValueError as e:

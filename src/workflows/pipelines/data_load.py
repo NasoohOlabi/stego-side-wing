@@ -1,9 +1,13 @@
 """DataLoad pipeline: fetch URL content for unresolved posts."""
+import logging
 from typing import Dict, List
 
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.contracts import PostPayload
 from workflows.pipelines.fetch_url_content import FetchUrlContentPipeline
+from workflows.utils.protocol_utils import stable_hash, text_preview
+
+logger = logging.getLogger(__name__)
 
 
 class DataLoadPipeline:
@@ -65,7 +69,7 @@ class DataLoadPipeline:
                         batch_results.append(post)
                     
                 except Exception as e:
-                    print(f"Error processing post {file_name}: {e}")
+                    logger.exception("data_load failed for file=%s step=%s", file_name, step)
                     continue
             
             # Save processed posts
@@ -80,6 +84,81 @@ class DataLoadPipeline:
                         self.backend.save_post_local(post, step="filter-url-unresolved")
                         processed_posts.append(post)
                     except Exception as e:
-                        print(f"Error saving post {post_id}: {e}")
+                        logger.exception("data_load save failed for post_id=%s", post_id)
         
         return processed_posts
+
+    def preview_post_id(
+        self,
+        post_id: str,
+        step: str = "filter-url-unresolved",
+        use_cache: bool = True,
+    ) -> Dict:
+        """Fetch one post live without mutating step artifacts."""
+        file_name = f"{post_id}.json"
+        post = self.backend.get_post_local(file_name, step)
+        url = post.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError(f"Post {post_id} does not contain a valid 'url'")
+
+        fetch_result = self.fetch_pipeline.fetch(url.strip(), use_cache=use_cache)
+        report = {
+            "post_id": post_id,
+            "step": step,
+            "url": url.strip(),
+            "use_cache": use_cache,
+            "fetch_success": fetch_result.success,
+            "content_type": fetch_result.content_type,
+            "error": fetch_result.error,
+        }
+        if not fetch_result.success or not fetch_result.text:
+            logger.warning(
+                "data_load preview failed post_id=%s use_cache=%s error=%s",
+                post_id,
+                use_cache,
+                fetch_result.error,
+            )
+            return {"post": post, "report": report}
+
+        post["selftext"] = fetch_result.text
+        report.update(
+            {
+                "selftext_length": len(fetch_result.text),
+                "selftext_hash": stable_hash(fetch_result.text),
+                "selftext_preview": text_preview(fetch_result.text),
+            }
+        )
+        logger.info(
+            "data_load preview post_id=%s use_cache=%s selftext_hash=%s length=%s",
+            post_id,
+            use_cache,
+            report["selftext_hash"],
+            report["selftext_length"],
+        )
+        return {"post": post, "report": report}
+
+    def process_post_id(
+        self,
+        post_id: str,
+        step: str = "filter-url-unresolved",
+        use_cache: bool = True,
+    ) -> Dict:
+        """
+        Process a single post by ID and persist the DataLoad output.
+
+        Args:
+            post_id: Post identifier without `.json`
+            step: Workflow step name
+
+        Returns:
+            Processed post dictionary
+        """
+        preview = self.preview_post_id(post_id=post_id, step=step, use_cache=use_cache)
+        post = preview["post"]
+        report = preview["report"]
+        if not report.get("fetch_success") or not post.get("selftext"):
+            raise RuntimeError(
+                f"Failed to fetch URL content for post {post_id}: {report.get('error')}"
+            )
+        self.backend.save_post_local(post, step=step)
+        return post

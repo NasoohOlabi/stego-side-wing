@@ -6,9 +6,12 @@ ensuring all async operations (including litellm's LoggingWorker) use the same l
 This prevents RuntimeError: Queue is bound to a different event loop.
 """
 import asyncio
-import threading
 import atexit
+import logging
+import threading
 from typing import Any, Coroutine, Optional, TypeVar
+
+_logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -26,22 +29,31 @@ class EventLoopManager:
         """Start the event loop in a background thread."""
         with self._lock:
             if self._running:
+                _logger.debug(
+                    "event_loop_already_running",
+                    extra={"event": "event_loop", "action": "start", "skipped": True},
+                )
                 return
-            
+
             self._running = True
-            
+
             def run_loop():
                 """Run the event loop in this thread."""
                 self._loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self._loop)
                 self._loop.run_forever()
-            
+
             self._thread = threading.Thread(target=run_loop, daemon=True, name="EventLoopThread")
             self._thread.start()
-            
+
             # Wait for loop to be created
             while self._loop is None:
                 threading.Event().wait(0.01)
+
+            _logger.info(
+                "event_loop_started",
+                extra={"event": "event_loop", "action": "start", "bg_thread": "EventLoopThread"},
+            )
     
     def stop(self):
         """Stop the event loop and background thread."""
@@ -64,7 +76,7 @@ class EventLoopManager:
             
             self._loop = None
             self._thread = None
-    
+
     def get_loop(self) -> asyncio.AbstractEventLoop:
         """Get the persistent event loop."""
         if not self._running or self._loop is None:

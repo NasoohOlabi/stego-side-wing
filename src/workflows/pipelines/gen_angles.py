@@ -1,15 +1,23 @@
 """Generate angles from post content."""
+import logging
 from typing import Any, Dict, List
 
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
 from workflows.contracts import AngleResult
+from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.text_utils import (
     build_post_text_dictionary,
     flatten_comments,
     parse_json_array_response,
 )
+from pipelines.angles.angle_runner import MODEL_NAME as ANGLES_MODEL_NAME
+from pipelines.angles.angle_runner import SYSTEM_PROMPT as ANGLES_SYSTEM_PROMPT
+from pipelines.angles.angle_runner import TEMPERATURE as ANGLES_TEMPERATURE
+from pipelines.angles.angle_runner import USER_PROMPT_TEMPLATE as ANGLES_USER_PROMPT_TEMPLATE
+
+logger = logging.getLogger(__name__)
 
 
 class GenAnglesPipeline:
@@ -27,29 +35,42 @@ class GenAnglesPipeline:
     def _build_dictionary(self, post: Dict) -> List[str]:
         """Build dictionary of texts from post."""
         return build_post_text_dictionary(post)
-    
-    def generate_angles(self, post: Dict) -> List[Dict[str, Any]]:
-        """
-        Generate angles from post content.
-        
-        Args:
-            post: Post dictionary with content, search_results, comments
-        
-        Returns:
-            List of angle dictionaries
-        """
-        # Build dictionary of texts
+
+    def preview_post(
+        self,
+        post: Dict[str, Any],
+        allow_fallback: bool = False,
+    ) -> Dict[str, Any]:
+        """Generate angles without mutating or saving artifacts."""
+        post_id = str(post.get("id") or "<unknown>")
         dictionary = self._build_dictionary(post)
-        
+        report = {
+            "post_id": post_id,
+            "input_count": len(dictionary),
+            "input_hash": stable_hash(dictionary),
+            "input_items": [
+                {
+                    "index": idx,
+                    "length": len(text),
+                    "hash": stable_hash(text),
+                    "preview": text_preview(text),
+                }
+                for idx, text in enumerate(dictionary)
+            ],
+            "provider": "lm_studio",
+            "model": ANGLES_MODEL_NAME,
+            "temperature": ANGLES_TEMPERATURE,
+            "system_prompt_hash": stable_hash(ANGLES_SYSTEM_PROMPT),
+            "user_prompt_template_hash": stable_hash(ANGLES_USER_PROMPT_TEMPLATE),
+            "used_fallback": False,
+        }
         if not dictionary:
-            return []
-        
-        # Use backend API for angle analysis (leverages existing angle_runner)
+            report.update({"angles": [], "angles_hash": stable_hash([]), "options_count": 0})
+            return {"post": dict(post, angles=[], options_count=0), "report": report}
+
         try:
             response = self.backend.analyze_angles(dictionary)
             results = response.get("results", [])
-            
-            # Convert to angle format
             angles = []
             for result in results:
                 if isinstance(result, dict):
@@ -60,13 +81,55 @@ class GenAnglesPipeline:
                     }
                     if angle["source_quote"] and angle["tangent"] and angle["category"]:
                         angles.append(angle)
-            
-            return angles
-            
+            processed_post = dict(post)
+            processed_post["angles"] = angles
+            processed_post["options_count"] = len(angles)
+            report.update(
+                {
+                    "angles": angles,
+                    "angles_hash": stable_hash(angles),
+                    "options_count": len(angles),
+                }
+            )
+            logger.info(
+                "angles preview post_id=%s input_count=%s angles=%s hash=%s",
+                post_id,
+                len(dictionary),
+                len(angles),
+                report["angles_hash"],
+            )
+            return {"post": processed_post, "report": report}
         except Exception as e:
-            print(f"Error generating angles via API: {e}")
-            # Fallback: use LLM directly
-            return self._generate_angles_llm(dictionary)
+            if not allow_fallback:
+                logger.exception("angles generation failed post_id=%s", post_id)
+                raise RuntimeError(f"Angles generation failed for post {post_id}: {e}") from e
+            logger.exception("angles api failed; using fallback for post_id=%s", post_id)
+            angles = self._generate_angles_llm(dictionary)
+            processed_post = dict(post)
+            processed_post["angles"] = angles
+            processed_post["options_count"] = len(angles)
+            report.update(
+                {
+                    "used_fallback": True,
+                    "angles": angles,
+                    "angles_hash": stable_hash(angles),
+                    "options_count": len(angles),
+                    "fallback_error": str(e),
+                }
+            )
+            return {"post": processed_post, "report": report}
+    
+    def generate_angles(self, post: Dict, allow_fallback: bool = False) -> List[Dict[str, Any]]:
+        """
+        Generate angles from post content.
+        
+        Args:
+            post: Post dictionary with content, search_results, comments
+        
+        Returns:
+            List of angle dictionaries
+        """
+        return list(self.preview_post(post, allow_fallback=allow_fallback)["report"]["angles"])
     
     def _generate_angles_llm(self, texts: List[str]) -> List[Dict[str, Any]]:
         """Generate angles using LLM directly."""
@@ -117,13 +180,14 @@ The entire output **MUST** be the raw JSON array beginning with `[` and ending w
             ]
             
         except Exception as e:
-            print(f"Error generating angles with LLM: {e}")
+            logger.exception("angles fallback llm failed")
             return []
     
     def process_post(
         self,
         post: Dict,
         step: str = "angles-step",
+        allow_fallback: bool = False,
     ) -> Dict:
         """
         Process a post to generate angles.
@@ -135,14 +199,7 @@ The entire output **MUST** be the raw JSON array beginning with `[` and ending w
         Returns:
             Post dictionary with angles added
         """
-        # Generate angles
-        angles = self.generate_angles(post)
-        
-        # Update post
-        post["angles"] = angles
-        post["options_count"] = len(angles)
-        
-        return post
+        return self.preview_post(post, allow_fallback=allow_fallback)["post"]
     
     def process_posts(
         self,
@@ -173,22 +230,50 @@ The entire output **MUST** be the raw JSON array beginning with `[` and ending w
             try:
                 posts.append(self.backend.get_post_local(file_name, step))
             except Exception as e:
-                print(f"Error loading post {file_name}: {e}")
+                logger.exception("angles load failed file=%s", file_name)
         return self.process_post_objects(posts=posts, step=step)
 
     def process_post_objects(
         self,
         posts: List[Dict[str, Any]],
         step: str = "angles-step",
+        allow_fallback: bool = False,
     ) -> List[Dict[str, Any]]:
         """Process already-loaded post objects and persist angle-enriched versions."""
         processed_posts: List[Dict[str, Any]] = []
         for post in posts:
             post_id = post.get("id", "<unknown>")
             try:
-                processed = self.process_post(post, step)
+                processed = self.process_post(post, step, allow_fallback=allow_fallback)
                 self.backend.save_post_local(processed, step=step)
                 processed_posts.append(processed)
             except Exception as e:
-                print(f"Error processing post {post_id}: {e}")
+                logger.exception("angles process failed post_id=%s", post_id)
         return processed_posts
+
+    def process_post_id(
+        self,
+        post_id: str,
+        step: str = "angles-step",
+        allow_fallback: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Process one post by ID and persist angle output.
+
+        Args:
+            post_id: Post identifier without `.json`
+            step: Workflow step name
+
+        Returns:
+            Processed post dictionary with angles
+        """
+        file_name = f"{post_id}.json"
+        post = self.backend.get_post_local(file_name, step)
+        results = self.process_post_objects(
+            posts=[post],
+            step=step,
+            allow_fallback=allow_fallback,
+        )
+        if not results:
+            raise RuntimeError(f"GenAngles returned no result for post {post_id}")
+        return results[0]

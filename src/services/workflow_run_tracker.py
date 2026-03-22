@@ -1,12 +1,15 @@
 """In-process registry of workflow runs (API process only)."""
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Generator, Iterator
+
+logger = logging.getLogger(__name__)
 
 _lock = threading.RLock()
 _runs: dict[str, "_RunRecord"] = {}
@@ -29,12 +32,32 @@ def register_run(command: str, mode: str) -> str:
             mode=mode,
             started_at=time.time(),
         )
+    logger.info(
+        "workflow_run_register",
+        extra={
+            "event": "workflow_run",
+            "action": "register",
+            "run_id": run_id,
+            "command": command,
+            "mode": mode,
+        },
+    )
     return run_id
 
 
 def end_run(run_id: str) -> None:
     with _lock:
+        existed = run_id in _runs
         _runs.pop(run_id, None)
+    logger.info(
+        "workflow_run_end",
+        extra={
+            "event": "workflow_run",
+            "action": "end",
+            "run_id": run_id,
+            "had_record": existed,
+        },
+    )
 
 
 def iter_snapshot() -> Iterator[dict[str, Any]]:

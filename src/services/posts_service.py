@@ -1,9 +1,12 @@
 """Posts management service."""
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from infrastructure.config import STEPS
+
+logger = logging.getLogger(__name__)
 
 _LIST_CACHE: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
 
@@ -59,7 +62,20 @@ def list_posts(count: int, step: str, tag: Optional[str] = None, offset: int = 0
         )
 
     # Sort files by size (descending: largest first)
-    return {"fileNames": json_files[offset: offset + count]}
+    out = json_files[offset : offset + count]
+    logger.info(
+        "list_posts",
+        extra={
+            "event": "posts",
+            "action": "list",
+            "step": step,
+            "count_requested": count,
+            "returned": len(out),
+            "offset": offset,
+            "tag": tag,
+        },
+    )
+    return {"fileNames": out}
 
 
 def _get_unprocessed_sorted_files(src_dir: str, dest_dir: str, tag: Optional[str]) -> List[str]:
@@ -121,7 +137,12 @@ def get_post(post: str, step: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"Post file not found: {file_path}")
     
     with open(file_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    logger.info(
+        "get_post",
+        extra={"event": "posts", "action": "get", "step": step, "post": post},
+    )
+    return data
 
 
 def save_post(post_data: Dict[str, Any], step: str) -> Dict[str, Any]:
@@ -152,6 +173,10 @@ def save_post(post_data: Dict[str, Any], step: str) -> Dict[str, Any]:
     with open(dest_file_path, "w", encoding="utf-8") as f:
         json.dump(post_data, f, indent=2, ensure_ascii=False)
 
+    logger.info(
+        "save_post",
+        extra={"event": "posts", "action": "save", "step": step, "post_id": post_id},
+    )
     return {
         "success": True,
         "filename": f"{post_id}.json",
@@ -187,4 +212,8 @@ def save_object(data: Dict[str, Any], step: str, filename: str) -> Dict[str, Any
     with open(dest_file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
+    logger.info(
+        "save_object",
+        extra={"event": "posts", "action": "save_object", "step": step, "file_name": filename},
+    )
     return {"success": True, "filename": filename, "path": dest_file_path}

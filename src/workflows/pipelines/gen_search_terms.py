@@ -1,12 +1,16 @@
 """Generate search terms from post content."""
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
+from workflows.utils.protocol_utils import stable_hash, unique_preserve_order
 from workflows.utils.text_utils import parse_json_array_response
+
+logger = logging.getLogger(__name__)
 
 
 class GenSearchTermsPipeline:
@@ -58,32 +62,13 @@ class GenSearchTermsPipeline:
         )
         conn.commit()
         conn.close()
-    
-    def generate(
-        self,
-        post_id: str,
+
+    @staticmethod
+    def _build_prompt(
         post_title: Optional[str] = None,
         post_text: Optional[str] = None,
         post_url: Optional[str] = None,
-    ) -> List[str]:
-        """
-        Generate search terms for a post.
-        
-        Args:
-            post_id: Post identifier
-            post_title: Post title
-            post_text: Post text content
-            post_url: Post URL
-        
-        Returns:
-            List of search term strings
-        """
-        # Check cache first
-        cached = self._get_cached_terms(post_id)
-        if cached:
-            return cached
-        
-        # Build prompt
+    ) -> str:
         prompt_parts = []
         if post_title:
             prompt_parts.append(f"# Title: {post_title}")
@@ -91,9 +76,27 @@ class GenSearchTermsPipeline:
             prompt_parts.append(f"`{post_url}`")
         if post_text:
             prompt_parts.append(f"## Content:\n{post_text}")
-        
-        prompt = "\n\n".join(prompt_parts)
-        
+        return "\n\n".join(prompt_parts)
+
+    @staticmethod
+    def _normalize_terms(terms: List[str]) -> List[str]:
+        return unique_preserve_order(str(term) for term in terms if str(term).strip())
+
+    def preview_generation(
+        self,
+        post_id: str,
+        post_title: Optional[str] = None,
+        post_text: Optional[str] = None,
+        post_url: Optional[str] = None,
+        use_cache: bool = True,
+        persist_cache: bool = True,
+    ) -> Dict[str, Any]:
+        """Generate search terms and return protocol metadata."""
+        prompt = self._build_prompt(
+            post_title=post_title,
+            post_text=post_text,
+            post_url=post_url,
+        )
         system_message = """You are a creative intelligence that transforms any text into a kaleidoscope of fascinating research pathways. Your mission is to explode a single post into the maximum number of intriguing, non-obvious, and wildly distinct search queries that capture every conceivable dimension of the content. Think like a polymath detective, cultural anthropologist, and trend forecaster combined.
 
 **Maximize these qualities in your queries:**
@@ -125,8 +128,28 @@ class GenSearchTermsPipeline:
 
 **Input:** A post about someone's experience.
 **Your task:** Deconstruct it into the most interesting, obscure, and diverse search queries possible. Cover technical terms, cultural phenomena, historical precedents, psychological mechanisms, tool comparisons, and emerging trends. Leave no conceptual stone unturned. Format as a JSON array of strings, no explanations."""
-        
-        # Call LLM
+
+        cached_terms: Optional[List[str]] = self._get_cached_terms(post_id) if use_cache else None
+        if cached_terms:
+            normalized_cached_terms = self._normalize_terms(cached_terms)
+            logger.info(
+                "search terms cache hit post_id=%s count=%s hash=%s",
+                post_id,
+                len(normalized_cached_terms),
+                stable_hash(normalized_cached_terms),
+            )
+            return {
+                "post_id": post_id,
+                "provider": "lm_studio",
+                "model": self.config.model,
+                "temperature": 0.0,
+                "used_cache": True,
+                "prompt_hash": stable_hash(prompt),
+                "system_prompt_hash": stable_hash(system_message),
+                "terms": normalized_cached_terms,
+                "terms_hash": stable_hash(normalized_cached_terms),
+            }
+
         try:
             response = self.llm.call_llm(
                 prompt=prompt,
@@ -135,20 +158,73 @@ class GenSearchTermsPipeline:
                 provider="lm_studio",
                 temperature=0.0,
             )
-            
-            # Parse JSON array from response
-            terms = self._parse_terms(response)
-            
-            # Cache results
-            if terms:
+            terms = self._normalize_terms(self._parse_terms(response))
+            if terms and persist_cache:
                 self._cache_terms(post_id, terms)
-            
-            return terms
-            
+            logger.info(
+                "generated search terms post_id=%s count=%s hash=%s use_cache=%s persist_cache=%s",
+                post_id,
+                len(terms),
+                stable_hash(terms),
+                use_cache,
+                persist_cache,
+            )
+            return {
+                "post_id": post_id,
+                "provider": "lm_studio",
+                "model": self.config.model,
+                "temperature": 0.0,
+                "used_cache": False,
+                "prompt_hash": stable_hash(prompt),
+                "system_prompt_hash": stable_hash(system_message),
+                "terms": terms,
+                "terms_hash": stable_hash(terms),
+            }
         except Exception as e:
-            # Fallback: return empty list on error
-            print(f"Error generating search terms: {e}")
-            return []
+            logger.exception("search term generation failed for post_id=%s", post_id)
+            return {
+                "post_id": post_id,
+                "provider": "lm_studio",
+                "model": self.config.model,
+                "temperature": 0.0,
+                "used_cache": False,
+                "prompt_hash": stable_hash(prompt),
+                "system_prompt_hash": stable_hash(system_message),
+                "terms": [],
+                "terms_hash": stable_hash([]),
+                "error": str(e),
+            }
+    
+    def generate(
+        self,
+        post_id: str,
+        post_title: Optional[str] = None,
+        post_text: Optional[str] = None,
+        post_url: Optional[str] = None,
+        use_cache: bool = True,
+        persist_cache: bool = True,
+    ) -> List[str]:
+        """
+        Generate search terms for a post.
+        
+        Args:
+            post_id: Post identifier
+            post_title: Post title
+            post_text: Post text content
+            post_url: Post URL
+        
+        Returns:
+            List of search term strings
+        """
+        report = self.preview_generation(
+            post_id=post_id,
+            post_title=post_title,
+            post_text=post_text,
+            post_url=post_url,
+            use_cache=use_cache,
+            persist_cache=persist_cache,
+        )
+        return list(report.get("terms", []))
     
     def _parse_terms(self, response: str) -> List[str]:
         """Parse search terms from LLM response."""

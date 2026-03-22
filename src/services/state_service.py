@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 
 from infrastructure.config import REPO_ROOT, STEPS, resolve_path
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_repo_path(relative_path: str) -> Path:
@@ -32,6 +35,7 @@ def get_paths_map() -> Dict[str, str]:
     paths["db.kv"] = str(resolve_path("./kv_store.db"))
     paths["db.research_terms"] = str(resolve_path("./datasets/research_terms_cache.db"))
     paths["log.workflow_cli"] = str(resolve_path("./logs/workflow_cli.log"))
+    paths["log.api"] = str(resolve_path("./logs/api.jsonl"))
     paths["log.prompts"] = str(resolve_path("./prompts.log"))
     paths["log.workflow_prompts_dir"] = str(resolve_path("./logs"))
     paths["log.workflow_prompts_glob"] = str(resolve_path("./logs/stego_prompts_*.log"))
@@ -89,8 +93,13 @@ def read_json_file(relative_path: str) -> Dict[str, Any]:
     with file_path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
 
+    rel = str(file_path.relative_to(REPO_ROOT.resolve())).replace("\\", "/")
+    logger.info(
+        "state_read_json",
+        extra={"event": "state", "action": "read_json", "path": rel},
+    )
     return {
-        "path": str(file_path.relative_to(REPO_ROOT.resolve())).replace("\\", "/"),
+        "path": rel,
         "data": payload,
     }
 
@@ -106,8 +115,13 @@ def write_json_file(relative_path: str, data: Dict[str, Any], overwrite: bool = 
     with file_path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
+    rel = str(file_path.relative_to(REPO_ROOT.resolve())).replace("\\", "/")
+    logger.info(
+        "state_write_json",
+        extra={"event": "state", "action": "write_json", "path": rel},
+    )
     return {
-        "path": str(file_path.relative_to(REPO_ROOT.resolve())).replace("\\", "/"),
+        "path": rel,
         "written": True,
     }
 
@@ -122,6 +136,15 @@ def delete_path(relative_path: str, recursive: bool = False) -> Dict[str, Any]:
         shutil.rmtree(target)
     else:
         target.unlink()
+    logger.info(
+        "state_delete",
+        extra={
+            "event": "state",
+            "action": "delete",
+            "path": relative_path,
+            "recursive": recursive,
+        },
+    )
     return {"deleted": True, "path": relative_path}
 
 
@@ -149,6 +172,10 @@ def clear_cache(target: str) -> Dict[str, Any]:
                 removed += 1
         cleared[name] = removed
 
+    logger.info(
+        "state_clear_cache",
+        extra={"event": "state", "action": "clear_cache", "target": target, "cleared": cleared},
+    )
     return {"target": target, "cleared_entries": cleared}
 
 

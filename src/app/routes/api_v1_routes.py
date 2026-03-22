@@ -29,13 +29,16 @@ from services.state_service import (
 )
 from services.workflow_run_tracker import end_run, iter_snapshot, register_run, track_workflow
 from workflows.runner import WorkflowRunner
+from workflows.utils.protocol_utils import stable_hash, text_preview
 
 bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
+logger = logging.getLogger(__name__)
 runner = WorkflowRunner()
 WORKFLOW_COMMANDS = (
     "data-load",
     "research",
     "gen-angles",
+    "validate-post",
     "stego",
     "decode",
     "gen-terms",
@@ -101,6 +104,46 @@ def _optional_body_str(body: dict[str, Any], key: str) -> tuple[str | None, tupl
         return None, fail(f"'{key}' must be a string when provided", status=400)
     normalized = value.strip()
     return normalized or None, None
+
+
+def _required_body_str(body: dict[str, Any], key: str) -> tuple[str | None, tuple[Any, int] | None]:
+    value, err = _optional_body_str(body, key)
+    if err:
+        return None, err
+    if not value:
+        return None, fail(f"'{key}' must be a non-empty string", status=400)
+    return value, None
+
+
+def _summarize_preview_post(post: dict[str, Any]) -> dict[str, Any]:
+    selftext = post.get("selftext")
+    search_results = post.get("search_results")
+    angles = post.get("angles")
+    return {
+        "id": post.get("id"),
+        "keys": sorted(post.keys()),
+        "hash": stable_hash(post),
+        "selftext_length": len(selftext) if isinstance(selftext, str) else 0,
+        "selftext_preview": text_preview(selftext) if isinstance(selftext, str) else "",
+        "search_results_count": len(search_results) if isinstance(search_results, list) else 0,
+        "angles_count": len(angles) if isinstance(angles, list) else 0,
+        "options_count": post.get("options_count"),
+    }
+
+
+def _preview_response(
+    preview: dict[str, Any],
+    include_post: bool,
+) -> dict[str, Any]:
+    post = preview.get("post")
+    if not isinstance(post, dict):
+        return preview
+    payload = {"report": preview.get("report")}
+    if include_post:
+        payload["post"] = post
+    else:
+        payload["post_summary"] = _summarize_preview_post(post)
+    return payload
 
 
 def _optional_payload_field(body: dict[str, Any], key: str = "payload") -> tuple[str | None, tuple[Any, int] | None]:
@@ -176,6 +219,10 @@ class _WorkflowLogHandler(logging.Handler):
 
 
 def _sync_workflow(command: str, run_fn: Callable[[], Any]) -> Any:
+    logger.info(
+        "workflow_sync_begin",
+        extra={"event": "workflow", "mode": "sync", "command": command},
+    )
     with track_workflow(command):
         return run_fn()
 
@@ -192,6 +239,10 @@ def _stream_workflow(
 
     def _worker() -> None:
         run_id = register_run(command, "stream")
+        logger.info(
+            "workflow_stream_begin",
+            extra={"event": "workflow", "mode": "stream", "command": command, "run_id": run_id},
+        )
         try:
             workflow_logger = logging.getLogger("workflows")
             original_level = workflow_logger.level
@@ -683,6 +734,61 @@ def wf_gen_terms() -> Any:
         return fail("Workflow execution failed", status=500, details=str(exc))
 
 
+@bp.route("/workflows/validate-post", methods=["POST"])
+def wf_validate_post() -> Any:
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    post_id, err = _required_body_str(body, "post_id")
+    if err:
+        return err
+    use_terms_cache, err = _body_bool(body, "use_terms_cache", default=False)
+    if err:
+        return err
+    persist_terms_cache, err = _body_bool(body, "persist_terms_cache", default=False)
+    if err:
+        return err
+    use_fetch_cache, err = _body_bool(body, "use_fetch_cache", default=False)
+    if err:
+        return err
+    allow_angles_fallback, err = _body_bool(body, "allow_angles_fallback", default=False)
+    if err:
+        return err
+    assert post_id is not None
+
+    if _wants_workflow_stream(body):
+        return _stream_workflow(
+            "validate-post",
+            lambda emit: runner.validate_post_pipeline(
+                post_id=post_id,
+                use_terms_cache=use_terms_cache,
+                persist_terms_cache=persist_terms_cache,
+                use_fetch_cache=use_fetch_cache,
+                allow_angles_fallback=allow_angles_fallback,
+                on_progress=lambda event, payload: emit(
+                    "progress",
+                    {"event": event, **payload},
+                ),
+            ),
+        )
+
+    try:
+        data = _sync_workflow(
+            "validate-post",
+            lambda: runner.validate_post_pipeline(
+                post_id=post_id,
+                use_terms_cache=use_terms_cache,
+                persist_terms_cache=persist_terms_cache,
+                use_fetch_cache=use_fetch_cache,
+                allow_angles_fallback=allow_angles_fallback,
+            ),
+        )
+        return ok(data)
+    except Exception as exc:
+        return fail("Workflow execution failed", status=500, details=str(exc))
+
+
 @bp.route("/workflows/full", methods=["POST"])
 def wf_full() -> Any:
     body = request.get_json(silent=True) or {}
@@ -876,6 +982,34 @@ def wf_run() -> Any:
                 post_title=body.get("post_title"),
                 post_text=body.get("post_text"),
                 post_url=body.get("post_url"),
+                on_progress=progress_cb,
+            )
+
+    elif command == "validate-post":
+        post_id, err = _required_body_str(body, "post_id")
+        if err:
+            return err
+        use_terms_cache, err = _body_bool(body, "use_terms_cache", default=False)
+        if err:
+            return err
+        persist_terms_cache, err = _body_bool(body, "persist_terms_cache", default=False)
+        if err:
+            return err
+        use_fetch_cache, err = _body_bool(body, "use_fetch_cache", default=False)
+        if err:
+            return err
+        allow_angles_fallback, err = _body_bool(body, "allow_angles_fallback", default=False)
+        if err:
+            return err
+        assert post_id is not None
+
+        def execute(progress_cb: Optional[Callable[[str, dict[str, Any]], None]]) -> Any:
+            return runner.validate_post_pipeline(
+                post_id=post_id,
+                use_terms_cache=use_terms_cache,
+                persist_terms_cache=persist_terms_cache,
+                use_fetch_cache=use_fetch_cache,
+                allow_angles_fallback=allow_angles_fallback,
                 on_progress=progress_cb,
             )
 
@@ -1075,6 +1209,178 @@ def tool_angles_analyze() -> tuple[Any, int]:
         return fail(str(exc), status=400)
     except Exception as exc:
         return fail("Angles analysis failed", status=500, details=str(exc))
+
+
+@bp.route("/tools/protocol/gen-terms", methods=["POST"])
+def tool_protocol_gen_terms() -> tuple[Any, int]:
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    post_id, err = _required_body_str(body, "post_id")
+    if err:
+        return err
+    use_cache, err = _body_bool(body, "use_cache", default=False)
+    if err:
+        return err
+    persist_cache, err = _body_bool(body, "persist_cache", default=False)
+    if err:
+        return err
+    file_name = f"{post_id}.json"
+    source_post = runner.backend.get_post_local(file_name, "filter-url-unresolved")
+    assert post_id is not None
+    report = runner.gen_terms.preview_generation(
+        post_id=post_id,
+        post_title=body.get("post_title") or source_post.get("title"),
+        post_text=body.get("post_text") or source_post.get("selftext") or source_post.get("text"),
+        post_url=body.get("post_url") or source_post.get("url"),
+        use_cache=use_cache,
+        persist_cache=persist_cache,
+    )
+    return ok(report)
+
+
+@bp.route("/tools/protocol/data-load-preview", methods=["POST"])
+def tool_protocol_data_load_preview() -> tuple[Any, int]:
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    post_id, err = _required_body_str(body, "post_id")
+    if err:
+        return err
+    use_cache, err = _body_bool(body, "use_cache", default=False)
+    if err:
+        return err
+    include_post, err = _body_bool(body, "include_post", default=False)
+    if err:
+        return err
+    assert post_id is not None
+    try:
+        preview = runner.preview_data_load_post(post_id=post_id, use_cache=use_cache)
+        return ok(_preview_response(preview, include_post=include_post))
+    except Exception as exc:
+        return fail("Data-load preview failed", status=500, details=str(exc))
+
+
+@bp.route("/tools/protocol/research-preview", methods=["POST"])
+def tool_protocol_research_preview() -> tuple[Any, int]:
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    post_id, err = _required_body_str(body, "post_id")
+    if err:
+        return err
+    use_terms_cache, err = _body_bool(body, "use_terms_cache", default=False)
+    if err:
+        return err
+    persist_terms_cache, err = _body_bool(body, "persist_terms_cache", default=False)
+    if err:
+        return err
+    use_fetch_cache, err = _body_bool(body, "use_fetch_cache", default=False)
+    if err:
+        return err
+    include_post, err = _body_bool(body, "include_post", default=False)
+    if err:
+        return err
+    assert post_id is not None
+    try:
+        data_load_preview = runner.preview_data_load_post(
+            post_id=post_id,
+            use_cache=use_fetch_cache,
+        )
+        if not data_load_preview["report"].get("fetch_success"):
+            return ok(
+                {
+                    "post_id": post_id,
+                    "data_load": _preview_response(data_load_preview, include_post=include_post),
+                    "research": None,
+                }
+            )
+        research_preview = runner.preview_research_post(
+            post_id=post_id,
+            source_post=data_load_preview["post"],
+            use_terms_cache=use_terms_cache,
+            persist_terms_cache=persist_terms_cache,
+            use_fetch_cache=use_fetch_cache,
+        )
+        return ok(
+            {
+                "post_id": post_id,
+                "data_load": _preview_response(data_load_preview, include_post=include_post),
+                "research": _preview_response(research_preview, include_post=include_post),
+            }
+        )
+    except Exception as exc:
+        return fail("Research preview failed", status=500, details=str(exc))
+
+
+@bp.route("/tools/protocol/angles-preview", methods=["POST"])
+def tool_protocol_angles_preview() -> tuple[Any, int]:
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    post_id, err = _required_body_str(body, "post_id")
+    if err:
+        return err
+    use_terms_cache, err = _body_bool(body, "use_terms_cache", default=False)
+    if err:
+        return err
+    persist_terms_cache, err = _body_bool(body, "persist_terms_cache", default=False)
+    if err:
+        return err
+    use_fetch_cache, err = _body_bool(body, "use_fetch_cache", default=False)
+    if err:
+        return err
+    allow_angles_fallback, err = _body_bool(body, "allow_angles_fallback", default=False)
+    if err:
+        return err
+    include_post, err = _body_bool(body, "include_post", default=False)
+    if err:
+        return err
+    assert post_id is not None
+    try:
+        data_load_preview = runner.preview_data_load_post(
+            post_id=post_id,
+            use_cache=use_fetch_cache,
+        )
+        if not data_load_preview["report"].get("fetch_success"):
+            return ok(
+                {
+                    "post_id": post_id,
+                    "data_load": _preview_response(data_load_preview, include_post=include_post),
+                    "research": None,
+                    "gen_angles": None,
+                }
+            )
+        research_preview = runner.preview_research_post(
+            post_id=post_id,
+            source_post=data_load_preview["post"],
+            use_terms_cache=use_terms_cache,
+            persist_terms_cache=persist_terms_cache,
+            use_fetch_cache=use_fetch_cache,
+        )
+        angles_preview = None
+        if not research_preview["report"].get("error"):
+            angles_preview = runner.preview_gen_angles_post(
+                post_id=post_id,
+                source_post=research_preview["post"],
+                allow_fallback=allow_angles_fallback,
+            )
+        return ok(
+            {
+                "post_id": post_id,
+                "data_load": _preview_response(data_load_preview, include_post=include_post),
+                "research": _preview_response(research_preview, include_post=include_post),
+                "gen_angles": _preview_response(angles_preview, include_post=include_post)
+                if angles_preview
+                else None,
+            }
+        )
+    except Exception as exc:
+        return fail("Angles preview failed", status=500, details=str(exc))
 
 
 @bp.route("/kv", methods=["GET"])

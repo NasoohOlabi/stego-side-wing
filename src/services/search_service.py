@@ -1,4 +1,5 @@
 """Search service for external search APIs."""
+import logging
 import os
 from typing import Any, Dict, List
 
@@ -7,6 +8,8 @@ import ollama
 import requests
 
 from infrastructure.config import get_env, get_env_required
+
+logger = logging.getLogger(__name__)
 
 
 def search_news_api(query: str) -> Dict[str, Any]:
@@ -34,7 +37,10 @@ def search_news_api(query: str) -> Dict[str, Any]:
         "pageSize": 5,
     }
 
-    print(f"Fetching news for: {search_params['q']}")
+    logger.info(
+        "search_news_api",
+        extra={"event": "search", "provider": "news_api", "query": query},
+    )
     try:
         result = fetch_everything(search_params)
 
@@ -78,7 +84,10 @@ def search_ollama(query: str) -> List[Dict[str, str]]:
         host="https://ollama.com", headers={"Authorization": "Bearer " + ollama_api_key}
     )
     
-    print(f"Fetching from Ollama: {query}")
+    logger.info(
+        "search_ollama",
+        extra={"event": "search", "provider": "ollama", "query": query},
+    )
     response = client.web_search(query)
     return [
         {"title": x.title or "", "url": x.url or "", "content": x.content or ""}
@@ -110,6 +119,16 @@ def search_bing(query: str, first: int = 1, count: int = 10) -> Dict[str, List[D
 
     params = {"query": query, "first": first, "count": count, "api_key": api_key}
 
+    logger.info(
+        "search_bing",
+        extra={
+            "event": "search",
+            "provider": "bing",
+            "query": query,
+            "first": first,
+            "count": count,
+        },
+    )
     try:
         resp = requests.get(
             "https://api.scrapingdog.com/bing/search", params=params, timeout=20
@@ -158,6 +177,17 @@ def search_google(query: str, first: int = 1, count: int = 10) -> Dict[str, List
 
     if not api_keys:
         raise ValueError("No Google API keys configured")
+
+    logger.info(
+        "search_google",
+        extra={
+            "event": "search",
+            "provider": "google",
+            "query": query,
+            "first": first,
+            "count": count,
+        },
+    )
 
     # Try each API key sequentially until one succeeds
     errors = []

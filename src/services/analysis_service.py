@@ -1,5 +1,6 @@
 """Analysis service for processing posts and URLs."""
 import json
+import logging
 import os
 from typing import Dict, Optional
 
@@ -10,6 +11,8 @@ from pydantic import BaseModel, Field
 # Import pipeline functions
 from pipelines.ai_analyze import process_file
 from pipelines.scraper import extract_structured_data
+
+logger = logging.getLogger(__name__)
 
 
 class ArticleData(BaseModel):
@@ -56,24 +59,46 @@ def process_post_file(filename: str, step: str) -> Dict:
     
     # Check if post already has analysis_timestamp
     if os.path.exists(dest_file_path):
-        print(f"✅ Post already analyzed")
-        print("⏭️  Skipping analysis to avoid duplicate work")
+        logger.info(
+            "process_post_file_skip",
+            extra={
+                "event": "analysis",
+                "action": "process_file",
+                "step": step,
+                "file_name": filename,
+                "reason": "already_analyzed",
+            },
+        )
         with open(dest_file_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
-    print(f"\n{'=' * 60}")
-    print(f"📁 Processing file: {file_path}")
-    print(f"{'=' * 60}")
+    logger.info(
+        "process_post_file_start",
+        extra={
+            "event": "analysis",
+            "action": "process_file",
+            "step": step,
+            "file_name": filename,
+            "source_path": file_path,
+        },
+    )
 
     result = run_async(process_file(post))
 
     # Save the updated post data back to the original file
-    print(f"💾 Saving results to file: {dest_file_path}")
     with open(dest_file_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
-    print(f"✅ Results successfully saved to: {dest_file_path}")
-    print("🎉 Analysis complete!")
+    logger.info(
+        "process_post_file_done",
+        extra={
+            "event": "analysis",
+            "action": "process_file",
+            "step": step,
+            "file_name": filename,
+            "dest_path": dest_file_path,
+        },
+    )
 
     return {
         "message": "File processed successfully",
@@ -121,10 +146,16 @@ def fetch_url_content_crawl4ai(url: str) -> Dict:
     # Check cache first
     cached_response = read_json_cache(filename)
     if cached_response:
-        print(f"📂 Cache HIT for {url}")
+        logger.info(
+            "url_fetch_cache_hit",
+            extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
+        )
         return cached_response
 
-    print(f"📂 Cache MISS for {url}")
+    logger.info(
+        "url_fetch_cache_miss",
+        extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
+    )
 
     # Use run_async to ensure all async operations run in the persistent event loop
     result = run_async(
@@ -141,7 +172,10 @@ def fetch_url_content_crawl4ai(url: str) -> Dict:
 
     # Save to cache
     write_json_cache(filename, api_response)
-    print(f"💾 Cached response for {url}")
+    logger.info(
+        "url_fetch_cached",
+        extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
+    )
 
     return api_response
 
@@ -172,6 +206,10 @@ def fetch_url_content(url: str) -> Dict:
             },
         }
 
+    logger.info(
+        "fetch_url_webanalyzer",
+        extra={"event": "analysis", "action": "fetch_url", "url": url},
+    )
     wa = WebAnalyzer()
     result = wa.process_url(url)
 

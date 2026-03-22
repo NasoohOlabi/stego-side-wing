@@ -18,7 +18,10 @@ def get_semantic_model():
             import torch
             from sentence_transformers import SentenceTransformer
 
-            logger.info("[SEMANTIC][MODEL] Loading sentence transformer model 'all-MiniLM-L6-v2'")
+            logger.info(
+                "semantic_model_load_start",
+                extra={"event": "semantic", "action": "model_load", "model": "all-MiniLM-L6-v2"},
+            )
 
             # Explicitly set device to avoid meta tensor issues
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -32,12 +35,18 @@ def get_semantic_model():
                 _ = next(_semantic_model.parameters()).device
             except RuntimeError as e:
                 if "meta" in str(e).lower():
-                    logger.warning("[SEMANTIC][MODEL] Meta device issue detected; reloading on CPU")
+                    logger.warning(
+                        "semantic_model_meta_reload",
+                        extra={"event": "semantic", "action": "model_reload", "device": "cpu"},
+                    )
                     _semantic_model = SentenceTransformer(
                         "all-MiniLM-L6-v2", device="cpu"
                     )
 
-            logger.info("[SEMANTIC][MODEL] Loaded successfully on device=%s", device)
+            logger.info(
+                "semantic_model_loaded",
+                extra={"event": "semantic", "action": "model_load", "device": device},
+            )
         except ImportError:
             raise ImportError(
                 "sentence-transformers library not installed. Install it with: pip install sentence-transformers"
@@ -86,6 +95,16 @@ def semantic_search(
 
     # Import util for cosine similarity
     from sentence_transformers import util
+
+    logger.info(
+        "semantic_search",
+        extra={
+            "event": "semantic",
+            "action": "search",
+            "objects_count": len(objects_list),
+            "n": n,
+        },
+    )
 
     # Prepare the data for matching
     doc_texts = []
@@ -173,6 +192,15 @@ def find_best_match(needle: object, haystack: object) -> Dict[str, Any]:
 
     # Import util for cosine similarity
     from sentence_transformers import util
+
+    logger.info(
+        "semantic_needle",
+        extra={
+            "event": "semantic",
+            "action": "needle",
+            "haystack_len": len(haystack_strings),
+        },
+    )
 
     # Generate embeddings (cached for repeated queries/doc sets)
     needle_embedding = _encode_single_cached(model, needle)

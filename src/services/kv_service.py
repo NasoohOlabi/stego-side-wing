@@ -1,8 +1,11 @@
 """Key-value store service."""
 import json
+import logging
 import os
 import sqlite3
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 DB_FILE = "kv_store.db"
 OLD_DB_FILE = "kv_store.json"
@@ -35,12 +38,21 @@ def migrate_json_to_sqlite() -> None:
     conn.close()
 
     if existing_count > 0:
-        print(
-            f"SQLite database already contains {existing_count} entries. Skipping migration."
+        logger.info(
+            "kv_migrate_skip",
+            extra={
+                "event": "kv",
+                "action": "migrate",
+                "reason": "db_nonempty",
+                "existing_count": existing_count,
+            },
         )
         return
 
-    print(f"Migrating data from {OLD_DB_FILE} to {DB_FILE}...")
+    logger.info(
+        "kv_migrate_start",
+        extra={"event": "kv", "action": "migrate", "from": OLD_DB_FILE, "to": DB_FILE},
+    )
 
     try:
         # Load data from old JSON file
@@ -48,7 +60,10 @@ def migrate_json_to_sqlite() -> None:
             old_data = json.load(f)
 
         if not old_data:
-            print("No data found in old JSON file.")
+            logger.info(
+                "kv_migrate_empty",
+                extra={"event": "kv", "action": "migrate", "reason": "empty_json"},
+            )
             return
 
         # Insert all key-value pairs into SQLite
@@ -68,8 +83,9 @@ def migrate_json_to_sqlite() -> None:
         conn.commit()
         conn.close()
 
-        print(
-            f"Successfully migrated {migrated_count} key-value pairs to SQLite."
+        logger.info(
+            "kv_migrate_done",
+            extra={"event": "kv", "action": "migrate", "migrated_count": migrated_count},
         )
 
         # Backup the old file by renaming it
@@ -77,10 +93,16 @@ def migrate_json_to_sqlite() -> None:
         if os.path.exists(backup_file):
             os.remove(backup_file)
         os.rename(OLD_DB_FILE, backup_file)
-        print(f"Old JSON file backed up to {backup_file}")
+        logger.info(
+            "kv_migrate_backup",
+            extra={"event": "kv", "action": "migrate", "backup": backup_file},
+        )
 
     except Exception as e:
-        print(f"Error during migration: {str(e)}")
+        logger.exception(
+            "kv_migrate_failed",
+            extra={"event": "kv", "action": "migrate", "error": str(e)},
+        )
         raise
 
 
@@ -107,6 +129,10 @@ def set_value(key: str, value: Any) -> Dict[str, Any]:
     conn.commit()
     conn.close()
 
+    logger.info(
+        "kv_set",
+        extra={"event": "kv", "action": "set", "key": key},
+    )
     return {
         "status": "success",
         "message": f'Key "{key}" saved.',
@@ -133,7 +159,15 @@ def get_value(key: str) -> Optional[Dict[str, Any]]:
     if row:
         # Deserialize the JSON value
         value = json.loads(row[0])
+        logger.info(
+            "kv_get",
+            extra={"event": "kv", "action": "get", "key": key, "found": True},
+        )
         return {"k": key, "v": value}
+    logger.info(
+        "kv_get",
+        extra={"event": "kv", "action": "get", "key": key, "found": False},
+    )
     return None
 
 
@@ -198,6 +232,10 @@ def delete_value(key: str) -> Dict[str, Any]:
     conn.commit()
     conn.close()
 
+    logger.info(
+        "kv_delete",
+        extra={"event": "kv", "action": "delete", "key": key, "deleted": deleted},
+    )
     return {
         "status": "success",
         "deleted": deleted,

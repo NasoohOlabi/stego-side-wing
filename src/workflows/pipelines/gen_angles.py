@@ -36,6 +36,10 @@ class GenAnglesPipeline:
         """Build dictionary of texts from post."""
         return build_post_text_dictionary(post)
 
+    def build_dictionary_for_post(self, post: Dict[str, Any]) -> List[str]:
+        """Public alias for workflow runner / tools that need the same inputs as gen_angles."""
+        return self._build_dictionary(post)
+
     def preview_post(
         self,
         post: Dict[str, Any],

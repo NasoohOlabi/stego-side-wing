@@ -7,17 +7,24 @@ import logging
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
+from uuid import uuid4
 
 # Allow running as: uv run python src/scripts/workflow_cli.py ...
 REPO_SRC = Path(__file__).resolve().parents[1]
 if str(REPO_SRC) not in sys.path:
     sys.path.insert(0, str(REPO_SRC))
 
+from infrastructure.config import REPO_ROOT  # noqa: E402
+from infrastructure.json_logging import (  # noqa: E402
+    bind_trace_id,
+    configure_api_logging,
+    reset_trace_id,
+)
+from loguru import logger  # noqa: E402
 from workflows.runner import WorkflowRunner  # noqa: E402
 
-
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+_cli_log = logger.bind(component="WorkflowCLI")
 
 
 def _read_json_file(path: str) -> Any:
@@ -45,7 +52,7 @@ def _load_optional_json_list(path: Optional[str]) -> Optional[List[Dict[str, Any
 
 
 def _print_result(result: Any) -> None:
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    sys.stdout.write(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
 
 
 def _print_stego_result(result: Dict[str, Any], verbose: bool = False) -> None:
@@ -80,18 +87,12 @@ def _resolve_log_path(log_file: str) -> Path:
 
 def _configure_logging(level: str, log_file: str, log_console: bool) -> Path:
     log_path = _resolve_log_path(log_file)
-    handlers: List[logging.Handler] = [
-        logging.FileHandler(log_path, encoding="utf-8"),
-    ]
-    if log_console:
-        handlers.append(logging.StreamHandler())
-
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-        datefmt="%H:%M:%S",
-        handlers=handlers,
-        force=True,
+    configure_api_logging(
+        level=level,
+        log_file=str(log_path),
+        log_stderr=log_console,
+        enable_file_log=True,
+        repo_root=REPO_ROOT,
     )
     for noisy_logger in (
         "httpx",
@@ -215,61 +216,65 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
-    _configure_logging(args.log_level, args.log_file, args.log_console)
-    runner = WorkflowRunner()
-
+    trace_token = bind_trace_id(str(uuid4()))
     try:
-        if args.command == "data-load":
-            result = runner.run_data_load(
-                count=args.count,
-                offset=args.offset,
-                batch_size=args.batch_size,
-            )
-        elif args.command == "research":
-            result = runner.run_research(count=args.count, offset=args.offset)
-        elif args.command == "gen-angles":
-            result = runner.run_gen_angles(count=args.count, offset=args.offset)
-        elif args.command == "stego":
-            result = runner.run_stego(
-                post_id=args.post_id,
-                payload=args.payload,
-                tag=args.tag,
-                list_offset=args.list_offset,
-            )
-        elif args.command == "decode":
-            angles = _load_angles(args.angles_file)
-            few_shots = _load_optional_json_list(args.few_shots_file)
-            result = {
-                "decoded_index": runner.run_decode(
-                    stego_text=args.stego_text,
-                    angles=angles,
-                    few_shots=few_shots,
-                )
-            }
-        elif args.command == "gen-terms":
-            result = runner.run_gen_search_terms(
-                post_id=args.post_id,
-                post_title=args.post_title,
-                post_text=args.post_text,
-                post_url=args.post_url,
-            )
-        elif args.command == "full":
-            result = runner.run_full_pipeline(
-                start_step=args.start_step,
-                count=args.count,
-            )
-        else:
-            parser.error(f"Unknown command: {args.command}")
-            return 2
-    except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+        _configure_logging(args.log_level, args.log_file, args.log_console)
+        runner = WorkflowRunner()
 
-    if args.command == "stego" and isinstance(result, dict):
-        _print_stego_result(result, verbose=args.verbose)
-    else:
-        _print_result(result)
-    return 0
+        try:
+            if args.command == "data-load":
+                result = runner.run_data_load(
+                    count=args.count,
+                    offset=args.offset,
+                    batch_size=args.batch_size,
+                )
+            elif args.command == "research":
+                result = runner.run_research(count=args.count, offset=args.offset)
+            elif args.command == "gen-angles":
+                result = runner.run_gen_angles(count=args.count, offset=args.offset)
+            elif args.command == "stego":
+                result = runner.run_stego(
+                    post_id=args.post_id,
+                    payload=args.payload,
+                    tag=args.tag,
+                    list_offset=args.list_offset,
+                )
+            elif args.command == "decode":
+                angles = _load_angles(args.angles_file)
+                few_shots = _load_optional_json_list(args.few_shots_file)
+                result = {
+                    "decoded_index": runner.run_decode(
+                        stego_text=args.stego_text,
+                        angles=angles,
+                        few_shots=few_shots,
+                    )
+                }
+            elif args.command == "gen-terms":
+                result = runner.run_gen_search_terms(
+                    post_id=args.post_id,
+                    post_title=args.post_title,
+                    post_text=args.post_text,
+                    post_url=args.post_url,
+                )
+            elif args.command == "full":
+                result = runner.run_full_pipeline(
+                    start_step=args.start_step,
+                    count=args.count,
+                )
+            else:
+                parser.error(f"Unknown command: {args.command}")
+                return 2
+        except Exception:
+            _cli_log.exception("workflow_cli_failed command={}", args.command)
+            return 1
+
+        if args.command == "stego" and isinstance(result, dict):
+            _print_stego_result(result, verbose=args.verbose)
+        else:
+            _print_result(result)
+        return 0
+    finally:
+        reset_trace_id(trace_token)
 
 
 if __name__ == "__main__":

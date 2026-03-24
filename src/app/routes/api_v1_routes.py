@@ -13,8 +13,11 @@ from flask import Blueprint, Response, current_app, request, stream_with_context
 from app.schemas.responses import fail, ok
 from infrastructure.config import REPO_ROOT, STEPS
 from infrastructure.json_logging import (
+    bind_trace_id,
     clear_api_log_file,
     get_api_log_file_stats,
+    get_trace_id,
+    reset_trace_id,
     structured_log_tag_catalog,
     structured_log_tag_ids,
 )
@@ -49,6 +52,7 @@ WORKFLOW_COMMANDS = (
     "validate-post",
     "stego",
     "decode",
+    "receiver",
     "gen-terms",
     "full",
 )
@@ -238,18 +242,29 @@ def _sync_workflow(command: str, run_fn: Callable[[], Any]) -> Any:
 def _stream_workflow(
     command: str,
     executor: Callable[[Callable[[str, dict[str, Any]], None]], Any],
+    *,
+    trace_id: Optional[str] = None,
 ) -> Response:
     events: "queue.Queue[tuple[str, dict[str, Any]]]" = queue.Queue()
     done = threading.Event()
+    run_id = register_run(command, "stream")
 
     def _emit(event: str, payload: dict[str, Any]) -> None:
         events.put((event, payload))
 
     def _worker() -> None:
-        run_id = register_run(command, "stream")
+        trace_token = None
+        if trace_id:
+            trace_token = bind_trace_id(trace_id)
         logger.info(
             "workflow_stream_begin",
-            extra={"event": "workflow", "mode": "stream", "command": command, "run_id": run_id},
+            extra={
+                "event": "workflow",
+                "mode": "stream",
+                "command": command,
+                "run_id": run_id,
+                "trace_id": trace_id,
+            },
         )
         try:
             workflow_logger = logging.getLogger("workflows")
@@ -264,7 +279,7 @@ def _stream_workflow(
                 level_changed = True
 
             try:
-                _emit("status", {"phase": "started", "command": command})
+                _emit("status", {"phase": "started", "command": command, "run_id": run_id})
                 result = executor(_emit)
                 _emit("result", {"command": command, "result": result})
             except Exception as exc:
@@ -281,6 +296,8 @@ def _stream_workflow(
                 if level_changed:
                     workflow_logger.setLevel(original_level)
         finally:
+            if trace_token is not None:
+                reset_trace_id(trace_token)
             end_run(run_id)
             done.set()
 
@@ -290,7 +307,10 @@ def _stream_workflow(
     @stream_with_context
     def _event_stream():
         started_at = time.time()
-        yield _sse("status", {"phase": "accepted", "command": command})
+        yield _sse(
+            "status",
+            {"phase": "accepted", "command": command, "run_id": run_id},
+        )
         while True:
             try:
                 event_name, payload = events.get(timeout=0.75)
@@ -530,6 +550,7 @@ def wf_data_load() -> Any:
                     {"event": event, **payload},
                 ),
             ),
+            trace_id=get_trace_id(),
         )
 
     try:
@@ -570,6 +591,7 @@ def wf_research() -> Any:
                     {"event": event, **payload},
                 ),
             ),
+            trace_id=get_trace_id(),
         )
 
     try:
@@ -609,6 +631,7 @@ def wf_gen_angles() -> Any:
                     {"event": event, **payload},
                 ),
             ),
+            trace_id=get_trace_id(),
         )
 
     try:
@@ -671,6 +694,7 @@ def wf_stego() -> Any:
                     {"event": event, **progress_payload},
                 ),
             ),
+            trace_id=get_trace_id(),
         )
 
     try:
@@ -720,6 +744,7 @@ def wf_decode() -> Any:
                     ),
                 )
             },
+            trace_id=get_trace_id(),
         )
 
     try:
@@ -734,6 +759,86 @@ def wf_decode() -> Any:
             },
         )
         return ok(payload_out)
+    except Exception as exc:
+        return fail("Workflow execution failed", status=500, details=str(exc))
+
+
+@bp.route("/workflows/receiver", methods=["POST"])
+def wf_receiver() -> Any:
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    post = body.get("post")
+    if not isinstance(post, dict):
+        return fail("'post' must be an object", status=400)
+    sender_user_id, err = _required_body_str(body, "sender_user_id")
+    if err:
+        return err
+    assert sender_user_id is not None
+    compressed_full, err = _optional_body_str(body, "compressed_bitstring")
+    if err:
+        return err
+    allow_fallback, err = _body_bool(body, "allow_fallback", default=False)
+    if err:
+        return err
+    use_fetch_cache, err = _body_bool(body, "use_fetch_cache", default=True)
+    if err:
+        return err
+    use_terms_cache, err = _body_bool(body, "use_terms_cache", default=True)
+    if err:
+        return err
+    persist_terms_cache, err = _body_bool(body, "persist_terms_cache", default=True)
+    if err:
+        return err
+    use_fetch_cache_research, err = _body_bool(body, "use_fetch_cache_research", default=True)
+    if err:
+        return err
+    max_pad = body.get("max_padding_bits", 256)
+    try:
+        max_padding_bits = int(max_pad)
+    except (TypeError, ValueError):
+        return fail("'max_padding_bits' must be an integer when provided", status=400)
+    if max_padding_bits < 0:
+        return fail("'max_padding_bits' must be non-negative", status=400)
+
+    if _wants_workflow_stream(body):
+        return _stream_workflow(
+            "receiver",
+            lambda emit: runner.run_receiver(
+                post,
+                sender_user_id,
+                use_fetch_cache=use_fetch_cache,
+                use_terms_cache=use_terms_cache,
+                persist_terms_cache=persist_terms_cache,
+                use_fetch_cache_research=use_fetch_cache_research,
+                allow_fallback=allow_fallback,
+                compressed_full=compressed_full,
+                max_padding_bits=max_padding_bits,
+                on_progress=lambda event, progress_payload: emit(
+                    "progress",
+                    {"event": event, **progress_payload},
+                ),
+            ),
+            trace_id=get_trace_id(),
+        )
+
+    try:
+        data = _sync_workflow(
+            "receiver",
+            lambda: runner.run_receiver(
+                post,
+                sender_user_id,
+                use_fetch_cache=use_fetch_cache,
+                use_terms_cache=use_terms_cache,
+                persist_terms_cache=persist_terms_cache,
+                use_fetch_cache_research=use_fetch_cache_research,
+                allow_fallback=allow_fallback,
+                compressed_full=compressed_full,
+                max_padding_bits=max_padding_bits,
+            ),
+        )
+        return ok(data)
     except Exception as exc:
         return fail("Workflow execution failed", status=500, details=str(exc))
 
@@ -761,6 +866,7 @@ def wf_gen_terms() -> Any:
                     {"event": event, **payload},
                 ),
             ),
+            trace_id=get_trace_id(),
         )
 
     try:
@@ -815,6 +921,7 @@ def wf_validate_post() -> Any:
                     {"event": event, **payload},
                 ),
             ),
+            trace_id=get_trace_id(),
         )
 
     try:
@@ -852,6 +959,7 @@ def wf_double_process_new_post() -> Any:
                     {"event": event, **payload},
                 ),
             ),
+            trace_id=get_trace_id(),
         )
 
     try:
@@ -895,6 +1003,7 @@ def wf_batch_angles_determinism() -> Any:
                     {"event": event, **payload},
                 ),
             ),
+            trace_id=get_trace_id(),
         )
 
     try:
@@ -936,6 +1045,7 @@ def wf_full() -> Any:
                     {"event": event, **payload},
                 ),
             ),
+            trace_id=get_trace_id(),
         )
 
     try:
@@ -1091,6 +1201,54 @@ def wf_run() -> Any:
                 )
             }
 
+    elif command == "receiver":
+        post_obj = body.get("post")
+        if not isinstance(post_obj, dict):
+            return fail("'post' must be an object", status=400)
+        sender_uid, err = _required_body_str(body, "sender_user_id")
+        if err:
+            return err
+        assert sender_uid is not None
+        compressed_b, err = _optional_body_str(body, "compressed_bitstring")
+        if err:
+            return err
+        allow_fb, err = _body_bool(body, "allow_fallback", default=False)
+        if err:
+            return err
+        ufc, err = _body_bool(body, "use_fetch_cache", default=True)
+        if err:
+            return err
+        utc, err = _body_bool(body, "use_terms_cache", default=True)
+        if err:
+            return err
+        ptc, err = _body_bool(body, "persist_terms_cache", default=True)
+        if err:
+            return err
+        ufcr, err = _body_bool(body, "use_fetch_cache_research", default=True)
+        if err:
+            return err
+        max_pad_b = body.get("max_padding_bits", 256)
+        try:
+            max_pad_i = int(max_pad_b)
+        except (TypeError, ValueError):
+            return fail("'max_padding_bits' must be an integer when provided", status=400)
+        if max_pad_i < 0:
+            return fail("'max_padding_bits' must be non-negative", status=400)
+
+        def execute(progress_cb: Optional[Callable[[str, dict[str, Any]], None]]) -> Any:
+            return runner.run_receiver(
+                post_obj,
+                sender_uid,
+                use_fetch_cache=ufc,
+                use_terms_cache=utc,
+                persist_terms_cache=ptc,
+                use_fetch_cache_research=ufcr,
+                allow_fallback=allow_fb,
+                compressed_full=compressed_b,
+                max_padding_bits=max_pad_i,
+                on_progress=progress_cb,
+            )
+
     elif command == "gen-terms":
         post_id = body.get("post_id")
         if not isinstance(post_id, str):
@@ -1194,6 +1352,7 @@ def wf_run() -> Any:
                     {"event": event, **payload},
                 )
             ),
+            trace_id=get_trace_id(),
         )
 
     try:

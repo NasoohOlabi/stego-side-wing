@@ -1,0 +1,27 @@
+---
+description: Sender–receiver core model and agent testing steps for every change
+alwaysApply: true
+---
+
+# Sender–receiver core and testing
+
+## Architecture (how to reason about the repo)
+
+- **Sender**: embed a payload into the workflow (`StegoPipeline`, `workflows.utils.stego_codec.augment_post` and related pure functions). Output is stego-bearing post/comment data and compression metadata.
+- **Receiver**: given a post and agreed `sender_user_id`, locate the sender’s stego comment, rebuild the same context the sender assumed (`ReceiverPipeline.rebuild_context`), then decode (`decode_payload`).
+- **Shared contract**: codec and dictionary/angle logic in `workflows/utils/stego_codec.py` must stay consistent for both sides. Pipelines add I/O, caches, and orchestration—not alternate encoding rules.
+
+Framing changes as **sender produces X → receiver must recover X** keeps behavior testable without live services when tests use mocks/fixtures.
+
+## Agent validation steps (use in order)
+
+1. **Targeted pytest**: Run `uv run pytest -q` on the tests that cover edited modules (e.g. `src/tests/test_stego_codec.py`, `test_receiver_pipeline.py`, `test_pipeline_*`, `test_api_v1_*`).
+2. **Round-trip / invariants**: For codec, embedding, or angle-selection changes, assert existing round-trip or recover tests still pass; add a minimal test if you introduce new branches or edge cases.
+3. **Receiver alignment**: If sender-side output format or comment/angle selection changes, update or add receiver tests (`ReceiverPipeline`, `locate_sender_stego_comment`, mocked `rebuild_context` / `decode_payload`).
+4. **API or CLI**: If `src/app/routes/api_v1_routes.py` or `src/scripts/workflow_cli.py` changes, run the matching API/workflow tests and smoke the endpoints described in `AGENTS.md` when the change is user-visible.
+5. **Gate before wrap-up**: For non-trivial edits, run full `uv run pytest -q` and `uv run pyright` (strict scope per `AGENTS.md`).
+
+## Anti-patterns
+
+- Shipping pipeline or codec edits with no pytest coverage of encode/decode or sender/receiver symmetry.
+- Testing only the API without exercising pure codec paths when those paths changed.

@@ -4,6 +4,10 @@ import json
 import os
 from typing import Any, Optional
 
+from loguru import logger
+
+_log = logger.bind(component="json_cache")
+
 
 def deterministic_hash_sha256(input_string: str) -> str:
     """
@@ -31,7 +35,11 @@ def read_json_cache(cache_file: str) -> Optional[Any]:
             with open(cache_file, "r", encoding="utf-8") as f:
                 return json.load(f)
     except Exception as e:
-        print(f"⚠️ Error reading cache for {cache_file}: {e}")
+        _log.warning(
+            "cache_read_failed",
+            path=cache_file,
+            error=str(e),
+        )
     return None
 
 
@@ -48,4 +56,8 @@ def write_json_cache(cache_file: str, data: Any) -> None:
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
     except Exception as e:
-        print(f"⚠️ Error saving cache for {cache_file}: {e}")
+        _log.warning(
+            "cache_write_failed",
+            path=cache_file,
+            error=str(e),
+        )

@@ -395,7 +395,7 @@ def test_run_batch_angles_determinism_two_uncached_runs_identical(monkeypatch):
             return {"id": "p1"}
 
     class _GA:
-        def _build_dictionary(self, post):
+        def build_dictionary_for_post(self, post):
             return ["block"]
 
     runner.backend = _BE()
@@ -425,7 +425,7 @@ def test_run_batch_angles_determinism_mismatch(monkeypatch):
             return {"id": "p1"}
 
     class _GA:
-        def _build_dictionary(self, post):
+        def build_dictionary_for_post(self, post):
             return ["block"]
 
     runner.backend = _BE()

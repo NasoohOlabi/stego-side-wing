@@ -1,47 +1,53 @@
 """Workflow runner for orchestrating pipeline execution."""
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+from loguru import logger
 
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.pipelines.data_load import DataLoadPipeline
 from workflows.pipelines.decode import DecodePipeline
 from workflows.pipelines.gen_angles import GenAnglesPipeline
 from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline
+from workflows.pipelines.receiver import ReceiverPipeline
 from workflows.pipelines.research import ResearchPipeline
 from workflows.pipelines.stego import StegoPipeline
 from workflows.utils.protocol_utils import stable_hash
 
-logger = logging.getLogger(__name__)
+_LOG = logger.bind(component="WorkflowRunner")
 
 
 def _normalized_angles_from_raw(raw: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     """Same filtering as GenAnglesPipeline.preview_post for comparable hashes."""
     angles: List[Dict[str, str]] = []
     for result in raw:
-        if isinstance(result, dict):
-            angle = {
-                "source_quote": str(result.get("source_quote", "")),
-                "tangent": str(result.get("tangent", "")),
-                "category": str(result.get("category", "")),
-            }
-            if angle["source_quote"] and angle["tangent"] and angle["category"]:
-                angles.append(angle)
+        angle = {
+            "source_quote": str(result.get("source_quote", "")),
+            "tangent": str(result.get("tangent", "")),
+            "category": str(result.get("category", "")),
+        }
+        if angle["source_quote"] and angle["tangent"] and angle["category"]:
+            angles.append(angle)
     return angles
 
 
 class WorkflowRunner:
-    """Main workflow runner for orchestrating pipelines."""
-    
-    def __init__(self):
+    """Owns pipeline instances, fetch-failure counters, and orchestration entry points.
+
+    Logs use module ``_LOG`` so instances created via ``__new__`` (tests) still emit
+    with component ``WorkflowRunner`` without running ``__init__``.
+    """
+
+    def __init__(self) -> None:
         self.backend = BackendAPIAdapter()
         self.data_load = DataLoadPipeline()
         self.research = ResearchPipeline()
         self.gen_angles = GenAnglesPipeline()
         self.stego = StegoPipeline()
         self.decode = DecodePipeline()
+        self.receiver = ReceiverPipeline()
         self.gen_terms = GenSearchTermsPipeline()
         # In-memory counters for data-load URL fetch failures by post id.
         # This resets when the API process restarts.
@@ -93,7 +99,7 @@ class WorkflowRunner:
 
     @staticmethod
     def _summarize_stage_payload(stage_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        summary = {"hash": stable_hash(payload)}
+        summary: Dict[str, Any] = {"hash": stable_hash(payload)}
         if stage_name == "data_load":
             selftext = payload.get("selftext", "")
             summary.update(
@@ -438,7 +444,58 @@ class WorkflowRunner:
             {"stage": "decode", "decoded_index": decoded_idx},
         )
         return decoded_idx
-    
+
+    def run_receiver(
+        self,
+        post: Dict[str, Any],
+        sender_user_id: str,
+        *,
+        use_fetch_cache: bool = True,
+        use_terms_cache: bool = True,
+        persist_terms_cache: bool = True,
+        use_fetch_cache_research: bool = True,
+        allow_fallback: bool = False,
+        compressed_full: Optional[str] = None,
+        max_padding_bits: int = 256,
+        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        """Rebuild context on the receiver and recover the stego payload."""
+        self._emit(
+            on_progress,
+            "stage_start",
+            {
+                "stage": "receiver",
+                "post_id": post.get("id"),
+                "sender_user_id": sender_user_id,
+            },
+        )
+        try:
+            result = self.receiver.run(
+                post,
+                sender_user_id,
+                use_fetch_cache=use_fetch_cache,
+                use_terms_cache=use_terms_cache,
+                persist_terms_cache=persist_terms_cache,
+                use_fetch_cache_research=use_fetch_cache_research,
+                allow_fallback=allow_fallback,
+                compressed_full=compressed_full,
+                max_padding_bits=max_padding_bits,
+                on_progress=on_progress,
+            )
+        except Exception:
+            self._emit(
+                on_progress,
+                "stage_done",
+                {"stage": "receiver", "succeeded": False},
+            )
+            raise
+        self._emit(
+            on_progress,
+            "stage_done",
+            {"stage": "receiver", "succeeded": True, "post_id": post.get("id")},
+        )
+        return result
+
     def run_gen_search_terms(
         self,
         post_id: str,
@@ -673,8 +730,8 @@ class WorkflowRunner:
             },
             "steps": steps_report,
         }
-        logger.info(
-            "validate_post post_id=%s valid=%s use_terms_cache=%s use_fetch_cache=%s",
+        _LOG.info(
+            "validate_post post_id={} valid={} use_terms_cache={} use_fetch_cache={}",
             post_id,
             valid,
             use_terms_cache,
@@ -836,8 +893,8 @@ class WorkflowRunner:
                         "failure_count": fail_count,
                     },
                 )
-                logger.info(
-                    "double_process_new_post pass 1 fetch failed post_id=%s attempt=%s; retrying",
+                _LOG.info(
+                    "double_process_new_post pass 1 fetch failed post_id={} attempt={}; retrying",
                     post_id,
                     fail_count,
                 )
@@ -878,8 +935,8 @@ class WorkflowRunner:
                         "failure_count": fail_count,
                     },
                 )
-                logger.info(
-                    "double_process_new_post pass 2 fetch failed post_id=%s attempt=%s; retrying",
+                _LOG.info(
+                    "double_process_new_post pass 2 fetch failed post_id={} attempt={}; retrying",
                     post_id,
                     fail_count,
                 )
@@ -899,8 +956,8 @@ class WorkflowRunner:
             },
             "stage_hash_match": comparison,
         }
-        logger.info(
-            "double_process_new_post post_id=%s data_load_match=%s research_match=%s gen_angles_match=%s",
+        _LOG.info(
+            "double_process_new_post post_id={} data_load_match={} research_match={} gen_angles_match={}",
             post_id,
             comparison["data_load"],
             comparison["research"],
@@ -949,7 +1006,7 @@ class WorkflowRunner:
         row_results: List[Dict[str, Any]] = []
 
         for post_id_raw in post_ids:
-            if not isinstance(post_id_raw, str) or not post_id_raw.strip():
+            if not post_id_raw.strip():
                 row_results.append(
                     {
                         "post_id": post_id_raw,
@@ -995,7 +1052,7 @@ class WorkflowRunner:
                 )
                 continue
 
-            dictionary = self.gen_angles._build_dictionary(post)
+            dictionary = self.gen_angles.build_dictionary_for_post(post)
             input_hash = stable_hash(dictionary)
 
             if not dictionary:
@@ -1062,8 +1119,8 @@ class WorkflowRunner:
                 "identical": identical,
             }
             row_results.append(row)
-            logger.info(
-                "batch_angles_determinism post_id=%s identical=%s run_1_count=%s run_2_count=%s",
+            _LOG.info(
+                "batch_angles_determinism post_id={} identical={} run_1_count={} run_2_count={}",
                 stem,
                 identical,
                 len(norm_a),

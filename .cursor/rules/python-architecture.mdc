@@ -1,0 +1,11 @@
+---
+description: Standards for Python Class and Function structure
+globs: **/*.py
+alwaysApply: true
+---
+# Python Core Standards
+
+- **Pure Functions**: Business logic must be in pure functions (input -> output, no global state).
+- **Class Behavior**: Use classes for dependency injection and state management only.
+- **Type Safety**: Mandatory Pydantic V2 models for all function arguments and return types.
+- **Validation**: Use `@validate_call` from Pydantic on critical logic functions.

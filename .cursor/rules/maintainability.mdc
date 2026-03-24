@@ -1,0 +1,11 @@
+---
+alwaysApply: true
+description: Rules for code maintainability and debugging ease
+globs: **/*.py
+---
+
+# Maintainability
+
+- **Function Size**: Maximum 25 lines. If longer, refactor logic into a private pure function.
+- **Naming**: Use descriptive names for "context tags" in logs so they are easily filterable via `jq`.
+- **Documentation**: Every class must have a docstring explaining its stateful responsibility.

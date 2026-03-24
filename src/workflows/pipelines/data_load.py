@@ -1,6 +1,6 @@
 """DataLoad pipeline: fetch URL content for unresolved posts."""
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.contracts import PostPayload
@@ -87,6 +87,57 @@ class DataLoadPipeline:
                         logger.exception("data_load save failed for post_id=%s", post_id)
         
         return processed_posts
+
+    def preview_post(
+        self,
+        post: Dict,
+        *,
+        use_cache: bool = True,
+    ) -> Dict[str, Any]:
+        """Fetch URL content for an in-memory post dict (receiver / object workflows)."""
+        post_id = post.get("id")
+        if not post_id:
+            raise ValueError("Post must have 'id' field")
+        url = post.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError(f"Post {post_id} does not contain a valid 'url'")
+
+        fetch_result = self.fetch_pipeline.fetch(url.strip(), use_cache=use_cache)
+        report = {
+            "post_id": str(post_id),
+            "step": None,
+            "url": url.strip(),
+            "use_cache": use_cache,
+            "fetch_success": fetch_result.success,
+            "content_type": fetch_result.content_type,
+            "error": fetch_result.error,
+        }
+        post_copy = dict(post)
+        if not fetch_result.success or not fetch_result.text:
+            logger.warning(
+                "data_load preview_post failed post_id=%s use_cache=%s error=%s",
+                post_id,
+                use_cache,
+                fetch_result.error,
+            )
+            return {"post": post_copy, "report": report}
+
+        post_copy["selftext"] = fetch_result.text
+        report.update(
+            {
+                "selftext_length": len(fetch_result.text),
+                "selftext_hash": stable_hash(fetch_result.text),
+                "selftext_preview": text_preview(fetch_result.text),
+            }
+        )
+        logger.info(
+            "data_load preview_post post_id=%s use_cache=%s selftext_hash=%s length=%s",
+            post_id,
+            use_cache,
+            report["selftext_hash"],
+            report["selftext_length"],
+        )
+        return {"post": post_copy, "report": report}
 
     def preview_post_id(
         self,

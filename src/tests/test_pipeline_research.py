@@ -39,7 +39,7 @@ def test_research_post_skips_when_already_researched():
 def test_research_post_builds_deduped_non_pdf_results():
     pipeline = ResearchPipeline.__new__(ResearchPipeline)
     pipeline.gen_terms = SimpleNamespace(
-        generate=lambda **kwargs: ["term1", "term2"]
+        preview_generation=lambda **kwargs: {"terms": ["term1", "term2"]}
     )
 
     def google_search(query, first, count):
@@ -84,7 +84,7 @@ def test_process_posts_saves_local_for_all_and_remote_for_new_only():
         save_post_local=lambda post, step: local_saves.append(post["id"]),
         save_post=lambda post, step: remote_saves.append(post["id"]),
     )
-    pipeline.research_post = lambda post, step: {**post, "processed": True}
+    pipeline.research_post = lambda post, step, **kwargs: {**post, "processed": True}
 
     result = pipeline.process_posts(step="filter-researched", count=2, offset=0)
 

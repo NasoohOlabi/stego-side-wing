@@ -274,22 +274,6 @@ def configure_api_logging(
     if not resolved:
         resolved = (os.environ.get("API_LOG_LEVEL") or "").strip() or "INFO"
     resolved_level = resolved.upper()
-    numeric = getattr(logging, resolved_level, logging.INFO)
-
-    root = logging.getLogger()
-    root.handlers.clear()
-    root.setLevel(numeric)
-
-    formatter = JsonFormatter()
-    context_filter = StructuredContextFilter()
-
-    handlers: list[logging.Handler] = []
-    if log_stderr:
-        stderr_handler = logging.StreamHandler(sys.stderr)
-        stderr_handler.setFormatter(formatter)
-        stderr_handler.setLevel(numeric)
-        stderr_handler.addFilter(context_filter)
-        handlers.append(stderr_handler)
 
     file_path: Path | None = None
     if not enable_file_log:
@@ -308,15 +292,16 @@ def configure_api_logging(
             file_path = root_dir / file_path
         file_path = file_path.resolve()
         _resolved_log_path = file_path
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(file_path, encoding="utf-8")
-        fh.setFormatter(formatter)
-        fh.setLevel(numeric)
-        fh.addFilter(context_filter)
-        handlers.append(fh)
+    else:
+        _resolved_log_path = None
 
-    for h in handlers:
-        root.addHandler(h)
+    from infrastructure.loguru_jsonl import configure_loguru_jsonl
+
+    configure_loguru_jsonl(
+        level=resolved_level,
+        log_stderr=log_stderr,
+        file_path=file_path,
+    )
 
     logging.captureWarnings(True)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -361,28 +346,9 @@ def clear_api_log_file() -> dict[str, Any]:
         return {"cleared": False, "path": None, "reason": "file_logging_disabled"}
 
     target = _resolved_log_path.resolve()
-    cleared = False
-    root = logging.getLogger()
-    for h in root.handlers:
-        if not isinstance(h, logging.FileHandler):
-            continue
-        try:
-            base = Path(h.baseFilename).resolve()
-        except Exception:
-            continue
-        if base != target:
-            continue
-        h.acquire()
-        try:
-            stream = getattr(h, "stream", None)
-            if stream is not None:
-                stream.seek(0)
-                stream.truncate(0)
-                h.flush()
-            cleared = True
-        finally:
-            h.release()
-        break
+    from infrastructure.loguru_jsonl import truncate_loguru_file
+
+    cleared = truncate_loguru_file()
 
     if not cleared and target.exists():
         try:

@@ -1,0 +1,18 @@
+---
+alwaysApply: true
+description: Rules for Structured JSONL Logging and Traceability
+globs: **/*.py
+---
+
+# Extreme Observability Standards
+
+- **No Prints**: Stictly forbidden. Use the project's `logger` utility.
+- **Format**: All logs must be structured JSONL (JSON Lines).
+- **Contextual Binding**:
+  - Every Class `__init__` must use `logger.bind(component="ClassName")`.
+  - Every API entry point or Task must use `logger.bind(trace_id=uuid4())`.
+- **Field Requirements**: Every log entry must contain: `timestamp`, `level`, `component`, `trace_id`, and `message`.
+- **Granularity**:
+  - `DEBUG`: State changes, loop iterations, internal class variables.
+  - `INFO`: Start/End of high-level processes.
+  - `ERROR`: Full stack traces using `logger.exception()`.

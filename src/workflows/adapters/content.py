@@ -143,7 +143,11 @@ class ContentAdapter:
             with open(cache_file, "r", encoding="utf-8") as f:
                 cached_response = json.load(f)
             result_data = cached_response.get("result") if isinstance(cached_response, dict) else cached_response
+            if result_data is None or (isinstance(result_data, list) and len(result_data) == 0):
+                return None
             normalized = self._normalize_result(url=url, result_data=result_data)
+            if not normalized.success or not normalized.text:
+                return None
             return normalized
         except Exception:
             return None

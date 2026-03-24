@@ -2,7 +2,63 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Dict, List
+
+
+def chunk_text_equal_overlap(
+    text: str,
+    num_chunks: int,
+    overlap_chars: int,
+) -> List[str]:
+    """
+    Split `text` into `num_chunks` windows of equal nominal width with a fixed
+    character overlap between consecutive windows. Every character of `text`
+    appears in at least one chunk; no content is trimmed or dropped.
+
+    Window width W is chosen so that (n-1)*(W - O) + W >= len(text), i.e.
+    n*W - (n-1)*O >= L, using W = ceil((L + (n-1)*O) / n), capped by L.
+
+    Args:
+        text: Full string to partition (empty -> []).
+        num_chunks: Number of overlapping parts (>= 1).
+        overlap_chars: Non-negative overlap between consecutive chunks.
+
+    Raises:
+        ValueError: If num_chunks < 1 or overlap_chars < 0.
+    """
+    if num_chunks < 1:
+        raise ValueError("num_chunks must be >= 1")
+    if overlap_chars < 0:
+        raise ValueError("overlap_chars must be non-negative")
+    if not text:
+        return []
+    if num_chunks == 1:
+        return [text]
+
+    L = len(text)
+    n = num_chunks
+    O = overlap_chars
+
+    numer = L + (n - 1) * O
+    W = max(1, math.ceil(numer / n))
+    W = min(W, L)
+    stride = W - O
+    if stride < 1:
+        stride = 1
+        W = min(L, stride + O)
+
+    chunks: List[str] = []
+    for i in range(n):
+        start = i * stride
+        if start >= L:
+            break
+        end = min(L, start + W)
+        chunks.append(text[start:end])
+        if end >= L:
+            break
+
+    return chunks if chunks else [text]
 
 
 def flatten_comments(comments: Any) -> List[Dict[str, Any]]:

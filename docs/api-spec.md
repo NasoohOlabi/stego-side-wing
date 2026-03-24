@@ -33,6 +33,18 @@ No auth is currently enforced in this service. Frontend should treat this API as
 - `GET /state/paths`
   - Returns known state paths (datasets, caches, db files, logs).
 
+- `GET /state/logs`
+  - Returns the configured API JSONL log file size and path.
+  - Response `data`: `file_logging_enabled` (bool), `path` (string or null), `bytes` (integer, on-disk size).
+
+- `DELETE /state/logs`
+  - Truncates the API JSONL log file to zero bytes (frees disk space; does not remove stderr logging).
+  - Returns `400` if file logging is disabled (e.g. `--no-log-file`).
+
+- `GET /logging/tags`
+  - Returns the canonical list of structured log tag ids and descriptions used in JSONL output.
+  - Response `data`: `{ "tags": [ { "id": string, "description": string }, ... ], "tag_ids": string[] }`.
+
 - `GET /state/fs/list?path=<repo-relative>&recursive=<bool>&limit=<int>`
   - Lists files/directories under a repo-relative path.
 
@@ -74,7 +86,7 @@ No auth is currently enforced in this service. Frontend should treat this API as
 
 - `POST /workflows/run`
   - Generic workflow runner.
-  - Body: `command` (`data-load|research|gen-angles|validate-post|stego|decode|gen-terms|full`) + same fields as the matching dedicated endpoint.
+  - Body: `command` (`data-load|research|gen-angles|double-process-new-post|validate-post|stego|decode|gen-terms|full`) + same fields as the matching dedicated endpoint.
   - For `command: "stego"`, it uses the same optional/fallback semantics as `POST /workflows/stego` (including optional `payload` as a string or JSON value coerced to string).
   - For `command: "full"`, optional `payload` (string or JSON) is accepted and reported on the run as `payload_provided` in progress events; omit to use defaults where applicable.
   - Streaming:
@@ -139,6 +151,27 @@ No auth is currently enforced in this service. Frontend should treat this API as
       - `protocol_report?`: detailed live protocol diagnostics for that stage
       - `error?`: stage failure reason; downstream stages are marked as skipped if an upstream stage fails
   - **Note:** This endpoint is now protocol-oriented. It does **not** overwrite saved artifacts during validation. LLM calls in this path use temperature 0 where applicable, but live web/search/provider drift can still cause `valid: false`.
+
+- `POST /workflows/double-process-new-post`
+  - **Purpose:** Pick one **new** post (same queue as data-load: JSON in `datasets/news_cleaned` with no matching `{id}.json` yet in `datasets/news_url_fetched`), then run the full three-stage pipeline **twice** on that same `post_id` to compare cached vs cacheless behavior.
+  - Body: `stream?` (bool; same SSE default as other workflow routes), `allow_angles_fallback?` (bool, default `false`) — passed through to gen-angles (same semantics as `validate-post` / `angles-preview`).
+  - **Pass 1 (`pass_1_cached`):** `use_fetch_cache=true`, `use_terms_cache=true`, `persist_terms_cache=true` — normal “warm” run.
+  - **Pass 2 (`pass_2_cacheless`):** `use_fetch_cache=false`, `use_terms_cache=false`, `persist_terms_cache=false` — forces fresh URL fetch and fresh term/search/fetch paths where those flags apply.
+  - **Persistence:** Unlike `validate-post`, this **writes** stage outputs to disk each time (same as running data-load → research → gen-angles manually). The second pass overwrites artifacts for that `post_id` in `filter-url-unresolved`, `filter-researched`, and `angles-step` destinations.
+  - Response `data` shape (summary):
+    - `mode`: `double_process_new_post`
+    - `post_id`: string (stem of selected file)
+    - `source_file`: e.g. `{post_id}.json` as listed by the queue
+    - `passes.pass_1_cached` / `passes.pass_2_cacheless`: each has `settings` (the four flags above) and `steps` with per-stage summaries (`data_load`, `research`, `gen_angles`) including stable `hash` and stage-specific fields (same summarizer as other workflow reports)
+    - `stage_hash_match`: `{ "data_load": bool, "research": bool, "gen_angles": bool }` — whether the full-post hash for each stage matched between the two passes (search/API non-determinism often makes `research` differ between passes even on the same day)
+  - Also available as `POST /workflows/run` with `"command": "double-process-new-post"` and the same body fields.
+
+- `POST /workflows/batch-angles-determinism`
+  - **Purpose:** For each `post_id`, load the post from `step` (default `angles-step`), build the same text dictionary as gen-angles, then run angle extraction **twice** with **angles disk cache disabled** (`use_cache=false` on `analyze_angles_from_texts`) and compare normalized angle lists (non-empty `source_quote` / `tangent` / `category` only, same as production preview).
+  - Body: `post_ids` (required non-empty string array), `step?` (default `angles-step`), `stream?` (bool; same SSE default as other workflow routes).
+  - Response `data`: `mode` (`batch_angles_determinism`), `posts_requested`, `posts_succeeded`, `all_identical` (true only if every row without `error` has `identical: true`), `results[]` per post (`run_1_hash` / `run_2_hash`, `identical`, `error?`, etc.).
+  - **Note:** This does **not** prove cross-machine parity; it only measures whether two fresh runs on **this** host+LLM return the same normalized list for the same inputs.
+  - Also available as `POST /workflows/run` with `"command": "batch-angles-determinism"` and the same body fields.
 
 - `POST /workflows/full`
   - Body: `start_step?` (default `filter-url-unresolved`), `count?`, `payload?` (optional string or JSON; same as stego `payload`)

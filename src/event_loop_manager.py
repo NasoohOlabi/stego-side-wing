@@ -11,6 +11,8 @@ import logging
 import threading
 from typing import Any, Coroutine, Optional, TypeVar
 
+from infrastructure.stdio_utf8 import configure_stdio_utf8
+
 _logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -39,6 +41,7 @@ class EventLoopManager:
 
             def run_loop():
                 """Run the event loop in this thread."""
+                configure_stdio_utf8()
                 self._loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self._loop)
                 self._loop.run_forever()

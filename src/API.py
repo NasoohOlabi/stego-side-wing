@@ -7,9 +7,11 @@ This module intentionally stays as `src/API.py` so existing commands keep workin
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 
 from app.app_factory import create_app
+from infrastructure.json_logging import log_process_start
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -52,8 +54,19 @@ def main() -> None:
         enable_file_log=not args.no_log_file,
     )
     dev_mode = True  # args.dev or _is_truthy(os.environ.get("API_DEBUG"))
+    log_process_start(
+        logging.getLogger("app"),
+        "api_server",
+        host=args.host,
+        port=args.port,
+        debug=dev_mode,
+        use_reloader=dev_mode,
+    )
     app.run(host=args.host, port=args.port, debug=dev_mode, use_reloader=dev_mode)
 
 
 if __name__ == "__main__":
+    # Windows: UTF-8 for stdout/stderr so crawl4ai and other libs can print symbols safely.
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     main()

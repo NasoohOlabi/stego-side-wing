@@ -56,7 +56,7 @@ def test_generate_angles_falls_back_to_llm():
     )
     pipeline._generate_angles_llm = lambda texts: [{"source_quote": "q", "tangent": "t", "category": "c"}]
 
-    angles = pipeline.generate_angles({"selftext": "content"})
+    angles = pipeline.generate_angles({"selftext": "content"}, allow_fallback=True)
     assert angles == [{"source_quote": "q", "tangent": "t", "category": "c"}]
 
 
@@ -68,7 +68,11 @@ def test_process_posts_reads_processes_and_saves():
         get_post_local=lambda file_name, step: {"id": "p1"},
         save_post_local=lambda post, step: saved.append((post, step)),
     )
-    pipeline.process_post = lambda post, step: {**post, "angles": [{"x": 1}], "options_count": 1}
+    pipeline.process_post = lambda post, step, allow_fallback=False: {
+        **post,
+        "angles": [{"x": 1}],
+        "options_count": 1,
+    }
 
     result = pipeline.process_posts(step="angles-step", count=1, offset=0)
     assert result[0]["options_count"] == 1

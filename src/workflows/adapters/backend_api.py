@@ -54,10 +54,10 @@ class LocalBackendClient:
 
         return semantic_search(query_text=text, objects_list=objects, n=n)
 
-    def analyze_angles(self, texts: List[str]) -> Dict[str, Any]:
+    def analyze_angles(self, texts: List[str], *, use_cache: bool = True) -> Dict[str, Any]:
         from services.angles_service import analyze_angles
 
-        return {"results": analyze_angles(texts)}
+        return {"results": analyze_angles(texts, use_cache=use_cache)}
 
     def get_post_local(self, post_filename: str, step: str) -> Dict[str, Any]:
         src_dir, _ = self.config.get_step_dirs(step)
@@ -168,8 +168,8 @@ class BackendAPIAdapter:
         except RequestException:
             return self._needle_finder_batch_local(needles=needles, haystack=haystack)
 
-    def analyze_angles(self, texts: List[str]) -> Dict[str, Any]:
-        return self._local_client().analyze_angles(texts)
+    def analyze_angles(self, texts: List[str], *, use_cache: bool = True) -> Dict[str, Any]:
+        return self._local_client().analyze_angles(texts, use_cache=use_cache)
 
     def get_post_local(self, post_filename: str, step: str) -> Dict[str, Any]:
         return self._local_client().get_post_local(post_filename=post_filename, step=step)

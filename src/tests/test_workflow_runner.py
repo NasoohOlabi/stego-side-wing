@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+import pipelines.angles.angle_runner as angle_runner_mod
 from workflows.runner import WorkflowRunner
 
 
@@ -203,6 +204,247 @@ def test_run_stego_run_all_max_posts_one_caps_batch():
     assert result["max_posts"] == 1
     assert result["stopped_reason"] == "max_posts_reached"
     assert runner.stego.calls == 1
+
+
+def test_run_double_process_new_post_runs_cached_then_cacheless():
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    calls = []
+
+    class _DummyBackend:
+        def posts_list(self, step, count=1, offset=0, tag=None):
+            calls.append(("posts_list", step, count, offset, tag))
+            return {"fileNames": ["n1.json"]}
+
+    class _DummyDataLoad:
+        def process_post_id(self, post_id, step="filter-url-unresolved", use_cache=True):
+            calls.append(("data_load", post_id, step, use_cache))
+            return {"id": post_id, "selftext": f"body-{use_cache}"}
+
+    class _DummyResearch:
+        def process_post_id(
+            self,
+            post_id,
+            step="filter-researched",
+            force=False,
+            use_terms_cache=True,
+            persist_terms_cache=True,
+            use_fetch_cache=True,
+        ):
+            calls.append(
+                (
+                    "research",
+                    post_id,
+                    step,
+                    force,
+                    use_terms_cache,
+                    persist_terms_cache,
+                    use_fetch_cache,
+                )
+            )
+            return {"id": post_id, "search_results": [f"{use_terms_cache}-{use_fetch_cache}"]}
+
+    class _DummyAngles:
+        def process_post_id(self, post_id, step="angles-step", allow_fallback=False):
+            calls.append(("gen_angles", post_id, step, allow_fallback))
+            return {
+                "id": post_id,
+                "angles": [{"source_quote": "q", "tangent": "t", "category": "c"}],
+                "options_count": 1,
+            }
+
+    runner.backend = _DummyBackend()
+    runner.data_load = _DummyDataLoad()
+    runner.research = _DummyResearch()
+    runner.gen_angles = _DummyAngles()
+
+    result = runner.run_double_process_new_post(allow_angles_fallback=False)
+
+    assert result["post_id"] == "n1"
+    assert result["source_file"] == "n1.json"
+    assert result["passes"]["pass_1_cached"]["settings"] == {
+        "use_terms_cache": True,
+        "persist_terms_cache": True,
+        "use_fetch_cache": True,
+        "allow_angles_fallback": False,
+    }
+    assert result["passes"]["pass_2_cacheless"]["settings"] == {
+        "use_terms_cache": False,
+        "persist_terms_cache": False,
+        "use_fetch_cache": False,
+        "allow_angles_fallback": False,
+    }
+    assert calls == [
+        ("posts_list", "filter-url-unresolved", 1, 0, None),
+        ("data_load", "n1", "filter-url-unresolved", True),
+        ("research", "n1", "filter-researched", True, True, True, True),
+        ("gen_angles", "n1", "angles-step", False),
+        ("data_load", "n1", "filter-url-unresolved", False),
+        ("research", "n1", "filter-researched", True, False, False, False),
+        ("gen_angles", "n1", "angles-step", False),
+    ]
+
+
+def test_run_double_process_new_post_raises_when_queue_empty():
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+
+    class _DummyBackend:
+        def posts_list(self, step, count=1, offset=0, tag=None):
+            return {"fileNames": []}
+
+    runner.backend = _DummyBackend()
+
+    with pytest.raises(ValueError):
+        runner.run_double_process_new_post()
+
+
+def test_run_double_process_new_post_first_fetch_failure_retries_until_success(monkeypatch):
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    monkeypatch.setattr("workflows.runner.time.sleep", lambda _s: None)
+
+    class _DummyBackend:
+        def posts_list(self, step, count=1, offset=0, tag=None):
+            return {"fileNames": ["n1.json"]}
+
+    runner.backend = _DummyBackend()
+    runner._fetch_fail_counts = {}
+    attempts = {"n": 0}
+
+    def _fail_then_ok(**kwargs):
+        attempts["n"] += 1
+        if attempts["n"] < 2:
+            raise RuntimeError("Failed to fetch URL content for post n1: Empty extraction list")
+        return {
+            "settings": {
+                "use_terms_cache": kwargs["use_terms_cache"],
+                "persist_terms_cache": kwargs["persist_terms_cache"],
+                "use_fetch_cache": kwargs["use_fetch_cache"],
+                "allow_angles_fallback": kwargs["allow_angles_fallback"],
+            },
+            "steps": {
+                "data_load": {"hash": "a"},
+                "research": {"hash": "b"},
+                "gen_angles": {"hash": "c"},
+            },
+        }
+
+    runner._run_three_stage_post = _fail_then_ok
+
+    result = runner.run_double_process_new_post()
+    assert result["post_id"] == "n1"
+    assert attempts["n"] == 3
+    assert runner._fetch_fail_counts == {}
+
+
+def test_run_double_process_new_post_retries_same_post_until_fetch_succeeds(monkeypatch):
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    monkeypatch.setattr("workflows.runner.time.sleep", lambda _s: None)
+    calls = []
+
+    class _DummyBackend:
+        def posts_list(self, step, count=1, offset=0, tag=None):
+            return {"fileNames": ["bad.json"]}
+
+    def _run_three_stage_post(**kwargs):
+        post_id = kwargs["post_id"]
+        use_fetch_cache = kwargs["use_fetch_cache"]
+        calls.append((post_id, use_fetch_cache))
+        if post_id == "bad" and sum(1 for p, c in calls if p == "bad" and c is True) < 2:
+            raise RuntimeError(
+                "Failed to fetch URL content for post bad: Empty extraction list"
+            )
+        return {
+            "settings": {
+                "use_terms_cache": kwargs["use_terms_cache"],
+                "persist_terms_cache": kwargs["persist_terms_cache"],
+                "use_fetch_cache": kwargs["use_fetch_cache"],
+                "allow_angles_fallback": kwargs["allow_angles_fallback"],
+            },
+            "steps": {
+                "data_load": {"hash": "a"},
+                "research": {"hash": "b"},
+                "gen_angles": {"hash": "c"},
+            },
+        }
+
+    runner.backend = _DummyBackend()
+    runner._fetch_fail_counts = {}
+    runner._run_three_stage_post = _run_three_stage_post
+
+    result = runner.run_double_process_new_post()
+
+    assert result["post_id"] == "bad"
+    assert result["source_file"] == "bad.json"
+    assert runner._fetch_fail_counts == {}
+    assert calls == [("bad", True), ("bad", True), ("bad", False)]
+
+
+def test_run_batch_angles_determinism_empty_post_ids_raises():
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    with pytest.raises(ValueError, match="post_ids"):
+        runner.run_batch_angles_determinism([])
+
+
+def test_run_batch_angles_determinism_two_uncached_runs_identical(monkeypatch):
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    angle = {"source_quote": "q", "tangent": "t", "category": "c"}
+
+    class _BE:
+        def get_post_local(self, file_name, step):
+            assert file_name == "p1.json"
+            assert step == "angles-step"
+            return {"id": "p1"}
+
+    class _GA:
+        def _build_dictionary(self, post):
+            return ["block"]
+
+    runner.backend = _BE()
+    runner.gen_angles = _GA()
+    calls = {"n": 0}
+
+    def _fake_analyze(texts, *, use_cache=True):
+        calls["n"] += 1
+        assert use_cache is False
+        assert texts == ["block"]
+        return [dict(angle)]
+
+    monkeypatch.setattr(angle_runner_mod, "analyze_angles_from_texts", _fake_analyze)
+
+    out = runner.run_batch_angles_determinism(["p1"])
+    assert out["all_identical"] is True
+    assert out["posts_succeeded"] == 1
+    assert out["results"][0]["identical"] is True
+    assert calls["n"] == 2
+
+
+def test_run_batch_angles_determinism_mismatch(monkeypatch):
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+
+    class _BE:
+        def get_post_local(self, file_name, step):
+            return {"id": "p1"}
+
+    class _GA:
+        def _build_dictionary(self, post):
+            return ["block"]
+
+    runner.backend = _BE()
+    runner.gen_angles = _GA()
+    seq = iter(
+        [
+            [{"source_quote": "a", "tangent": "b", "category": "c"}],
+            [{"source_quote": "x", "tangent": "y", "category": "z"}],
+        ]
+    )
+
+    def _fake_analyze(texts, *, use_cache=True):
+        return next(seq)
+
+    monkeypatch.setattr(angle_runner_mod, "analyze_angles_from_texts", _fake_analyze)
+
+    out = runner.run_batch_angles_determinism(["p1"])
+    assert out["all_identical"] is False
+    assert out["results"][0]["identical"] is False
 
 
 class _DummyConfig:

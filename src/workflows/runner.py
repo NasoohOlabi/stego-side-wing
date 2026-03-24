@@ -1,6 +1,7 @@
 """Workflow runner for orchestrating pipeline execution."""
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -15,6 +16,22 @@ from workflows.utils.protocol_utils import stable_hash
 
 logger = logging.getLogger(__name__)
 
+
+def _normalized_angles_from_raw(raw: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Same filtering as GenAnglesPipeline.preview_post for comparable hashes."""
+    angles: List[Dict[str, str]] = []
+    for result in raw:
+        if isinstance(result, dict):
+            angle = {
+                "source_quote": str(result.get("source_quote", "")),
+                "tangent": str(result.get("tangent", "")),
+                "category": str(result.get("category", "")),
+            }
+            if angle["source_quote"] and angle["tangent"] and angle["category"]:
+                angles.append(angle)
+    return angles
+
+
 class WorkflowRunner:
     """Main workflow runner for orchestrating pipelines."""
     
@@ -26,6 +43,9 @@ class WorkflowRunner:
         self.stego = StegoPipeline()
         self.decode = DecodePipeline()
         self.gen_terms = GenSearchTermsPipeline()
+        # In-memory counters for data-load URL fetch failures by post id.
+        # This resets when the API process restarts.
+        self._fetch_fail_counts: Dict[str, int] = {}
 
     @staticmethod
     def _emit(
@@ -670,7 +690,420 @@ class WorkflowRunner:
             },
         )
         return result
-    
+
+    def _select_next_new_post(self, offset: int = 0) -> tuple[str, str]:
+        """
+        Pick one new post from filter-url-unresolved source queue.
+
+        Returns:
+            Tuple of (post_id, file_name)
+        """
+        listing = self.backend.posts_list(step="filter-url-unresolved", count=1, offset=offset)
+        file_names = listing.get("fileNames", [])
+        if not file_names:
+            raise ValueError(
+                "No new posts available in datasets/news_cleaned that are not in datasets/news_url_fetched."
+            )
+        file_name = str(file_names[0])
+        post_id = Path(file_name).stem
+        if not post_id:
+            raise ValueError(f"Invalid post filename returned by posts_list: {file_name!r}")
+        return post_id, file_name
+
+    @staticmethod
+    def _is_data_load_fetch_failure(exc: Exception) -> bool:
+        message = str(exc)
+        return "Failed to fetch URL content for post" in message
+
+    def _record_fetch_failure(self, post_id: str) -> int:
+        if not hasattr(self, "_fetch_fail_counts"):
+            self._fetch_fail_counts = {}
+        next_count = int(self._fetch_fail_counts.get(post_id, 0)) + 1
+        self._fetch_fail_counts[post_id] = next_count
+        return next_count
+
+    def _clear_fetch_failure(self, post_id: str) -> None:
+        if not hasattr(self, "_fetch_fail_counts"):
+            self._fetch_fail_counts = {}
+        self._fetch_fail_counts.pop(post_id, None)
+
+    def _run_three_stage_post(
+        self,
+        post_id: str,
+        *,
+        use_terms_cache: bool,
+        persist_terms_cache: bool,
+        use_fetch_cache: bool,
+        allow_angles_fallback: bool,
+    ) -> Dict[str, Any]:
+        """Run data_load -> research -> gen_angles for one post ID."""
+        data_post = self.data_load.process_post_id(
+            post_id=post_id,
+            step="filter-url-unresolved",
+            use_cache=use_fetch_cache,
+        )
+        research_post = self.research.process_post_id(
+            post_id=post_id,
+            step="filter-researched",
+            force=True,
+            use_terms_cache=use_terms_cache,
+            persist_terms_cache=persist_terms_cache,
+            use_fetch_cache=use_fetch_cache,
+        )
+        angles_post = self.gen_angles.process_post_id(
+            post_id=post_id,
+            step="angles-step",
+            allow_fallback=allow_angles_fallback,
+        )
+        return {
+            "settings": {
+                "use_terms_cache": use_terms_cache,
+                "persist_terms_cache": persist_terms_cache,
+                "use_fetch_cache": use_fetch_cache,
+                "allow_angles_fallback": allow_angles_fallback,
+            },
+            "steps": {
+                "data_load": self._summarize_stage_payload("data_load", data_post),
+                "research": self._summarize_stage_payload("research", research_post),
+                "gen_angles": self._summarize_stage_payload("gen_angles", angles_post),
+            },
+        }
+
+    def run_double_process_new_post(
+        self,
+        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        allow_angles_fallback: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Process one new post twice through data_load -> research -> gen_angles.
+
+        Pass 1 uses caches enabled.
+        Pass 2 replays the same post with caches disabled.
+        """
+        self._emit(
+            on_progress,
+            "workflow_start",
+            {
+                "workflow": "double-process-new-post",
+                "allow_angles_fallback": allow_angles_fallback,
+            },
+        )
+        post_id, file_name = self._select_next_new_post()
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {
+                "stage": "double-process-new-post",
+                "event": "selected_post",
+                "post_id": post_id,
+                "file_name": file_name,
+                "offset": 0,
+            },
+        )
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {
+                "stage": "double-process-new-post",
+                "event": "pass_1_cached_start",
+                "post_id": post_id,
+            },
+        )
+        while True:
+            try:
+                first_pass = self._run_three_stage_post(
+                    post_id=post_id,
+                    use_terms_cache=True,
+                    persist_terms_cache=True,
+                    use_fetch_cache=True,
+                    allow_angles_fallback=allow_angles_fallback,
+                )
+                self._clear_fetch_failure(post_id)
+                break
+            except Exception as exc:
+                if not self._is_data_load_fetch_failure(exc):
+                    raise
+                fail_count = self._record_fetch_failure(post_id)
+                self._emit(
+                    on_progress,
+                    "stage_progress",
+                    {
+                        "stage": "double-process-new-post",
+                        "event": "fetch_failed",
+                        "pass": 1,
+                        "post_id": post_id,
+                        "file_name": file_name,
+                        "failure_count": fail_count,
+                    },
+                )
+                logger.info(
+                    "double_process_new_post pass 1 fetch failed post_id=%s attempt=%s; retrying",
+                    post_id,
+                    fail_count,
+                )
+                time.sleep(1.0)
+
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {
+                "stage": "double-process-new-post",
+                "event": "pass_2_cacheless_start",
+                "post_id": post_id,
+            },
+        )
+        while True:
+            try:
+                second_pass = self._run_three_stage_post(
+                    post_id=post_id,
+                    use_terms_cache=False,
+                    persist_terms_cache=False,
+                    use_fetch_cache=False,
+                    allow_angles_fallback=allow_angles_fallback,
+                )
+                break
+            except Exception as exc:
+                if not self._is_data_load_fetch_failure(exc):
+                    raise
+                fail_count = self._record_fetch_failure(post_id)
+                self._emit(
+                    on_progress,
+                    "stage_progress",
+                    {
+                        "stage": "double-process-new-post",
+                        "event": "fetch_failed",
+                        "pass": 2,
+                        "post_id": post_id,
+                        "file_name": file_name,
+                        "failure_count": fail_count,
+                    },
+                )
+                logger.info(
+                    "double_process_new_post pass 2 fetch failed post_id=%s attempt=%s; retrying",
+                    post_id,
+                    fail_count,
+                )
+                time.sleep(1.0)
+
+        comparison = {
+            stage: first_pass["steps"][stage]["hash"] == second_pass["steps"][stage]["hash"]
+            for stage in ("data_load", "research", "gen_angles")
+        }
+        result = {
+            "mode": "double_process_new_post",
+            "post_id": post_id,
+            "source_file": file_name,
+            "passes": {
+                "pass_1_cached": first_pass,
+                "pass_2_cacheless": second_pass,
+            },
+            "stage_hash_match": comparison,
+        }
+        logger.info(
+            "double_process_new_post post_id=%s data_load_match=%s research_match=%s gen_angles_match=%s",
+            post_id,
+            comparison["data_load"],
+            comparison["research"],
+            comparison["gen_angles"],
+        )
+        self._emit(
+            on_progress,
+            "workflow_done",
+            {
+                "workflow": "double-process-new-post",
+                "post_id": post_id,
+                "stage_hash_match": comparison,
+            },
+        )
+        return result
+
+    def run_batch_angles_determinism(
+        self,
+        post_ids: List[str],
+        *,
+        step: str = "angles-step",
+        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Empirically test whether two fresh angle runs (no angles disk cache) match.
+
+        Loads each post from ``step``, builds the same text dictionary as gen_angles,
+        runs ``analyze_angles_from_texts(..., use_cache=False)`` twice, and compares
+        normalized angle lists (same rules as production preview_post).
+        """
+        from pipelines.angles.angle_runner import analyze_angles_from_texts
+
+        if not post_ids:
+            raise ValueError("post_ids must contain at least one post id")
+
+        self._emit(
+            on_progress,
+            "workflow_start",
+            {
+                "workflow": "batch-angles-determinism",
+                "step": step,
+                "post_count": len(post_ids),
+            },
+        )
+
+        row_results: List[Dict[str, Any]] = []
+
+        for post_id_raw in post_ids:
+            if not isinstance(post_id_raw, str) or not post_id_raw.strip():
+                row_results.append(
+                    {
+                        "post_id": post_id_raw,
+                        "error": "invalid post_id",
+                        "identical": None,
+                    }
+                )
+                continue
+
+            stem = Path(post_id_raw.strip()).stem
+            file_name = f"{stem}.json"
+            self._emit(
+                on_progress,
+                "stage_progress",
+                {
+                    "stage": "batch-angles-determinism",
+                    "event": "post_start",
+                    "post_id": stem,
+                    "source_file": file_name,
+                },
+            )
+
+            try:
+                post = self.backend.get_post_local(file_name, step)
+            except Exception as exc:
+                row_results.append(
+                    {
+                        "post_id": stem,
+                        "source_file": file_name,
+                        "error": str(exc),
+                        "identical": None,
+                    }
+                )
+                self._emit(
+                    on_progress,
+                    "stage_progress",
+                    {
+                        "stage": "batch-angles-determinism",
+                        "event": "post_error",
+                        "post_id": stem,
+                        "error": str(exc),
+                    },
+                )
+                continue
+
+            dictionary = self.gen_angles._build_dictionary(post)
+            input_hash = stable_hash(dictionary)
+
+            if not dictionary:
+                row = {
+                    "post_id": stem,
+                    "source_file": file_name,
+                    "input_text_blocks": 0,
+                    "input_hash": input_hash,
+                    "error": "no text blocks for angles input",
+                    "identical": None,
+                }
+                row_results.append(row)
+                self._emit(
+                    on_progress,
+                    "stage_progress",
+                    {
+                        "stage": "batch-angles-determinism",
+                        "event": "post_done",
+                        **row,
+                    },
+                )
+                continue
+
+            try:
+                raw_a = analyze_angles_from_texts(dictionary, use_cache=False)
+                raw_b = analyze_angles_from_texts(dictionary, use_cache=False)
+            except Exception as exc:
+                row = {
+                    "post_id": stem,
+                    "source_file": file_name,
+                    "input_text_blocks": len(dictionary),
+                    "input_hash": input_hash,
+                    "error": str(exc),
+                    "identical": None,
+                }
+                row_results.append(row)
+                self._emit(
+                    on_progress,
+                    "stage_progress",
+                    {
+                        "stage": "batch-angles-determinism",
+                        "event": "post_error",
+                        "post_id": stem,
+                        "error": str(exc),
+                    },
+                )
+                continue
+
+            norm_a = _normalized_angles_from_raw(raw_a)
+            norm_b = _normalized_angles_from_raw(raw_b)
+            h1 = stable_hash(norm_a)
+            h2 = stable_hash(norm_b)
+            identical = norm_a == norm_b
+
+            row = {
+                "post_id": stem,
+                "source_file": file_name,
+                "input_text_blocks": len(dictionary),
+                "input_hash": input_hash,
+                "run_1_count": len(norm_a),
+                "run_2_count": len(norm_b),
+                "run_1_hash": h1,
+                "run_2_hash": h2,
+                "identical": identical,
+            }
+            row_results.append(row)
+            logger.info(
+                "batch_angles_determinism post_id=%s identical=%s run_1_count=%s run_2_count=%s",
+                stem,
+                identical,
+                len(norm_a),
+                len(norm_b),
+            )
+            self._emit(
+                on_progress,
+                "stage_progress",
+                {
+                    "stage": "batch-angles-determinism",
+                    "event": "post_done",
+                    "post_id": stem,
+                    "identical": identical,
+                    "run_1_hash": h1,
+                    "run_2_hash": h2,
+                },
+            )
+
+        tested_ok = [r for r in row_results if r.get("error") is None]
+        all_identical = bool(tested_ok) and all(r.get("identical") is True for r in tested_ok)
+
+        out = {
+            "mode": "batch_angles_determinism",
+            "step": step,
+            "posts_requested": len(post_ids),
+            "posts_succeeded": len(tested_ok),
+            "all_identical": all_identical,
+            "results": row_results,
+        }
+        self._emit(
+            on_progress,
+            "workflow_done",
+            {
+                "workflow": "batch-angles-determinism",
+                "all_identical": all_identical,
+                "posts_succeeded": len(tested_ok),
+            },
+        )
+        return out
+
     def run_full_pipeline(
         self,
         start_step: str = "filter-url-unresolved",

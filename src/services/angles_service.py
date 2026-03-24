@@ -6,13 +6,14 @@ from pipelines.angles.angle_runner import analyze_angles_from_texts
 logger = logging.getLogger(__name__)
 
 
-def analyze_angles(texts: object) -> list[dict[str, str]]:
+def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, str]]:
     """
     Analyze angles from text chunks.
     
     Args:
         texts: List of text strings to analyze
-        
+        use_cache: When False, skip angles disk cache read/write (forces fresh LLM work).
+
     Returns:
         List of angle dicts with source_quote, tangent, category
         
@@ -36,7 +37,7 @@ def analyze_angles(texts: object) -> list[dict[str, str]]:
                 "text_blocks": len(cast_texts),
             },
         )
-        results = analyze_angles_from_texts(cast_texts)
+        results = analyze_angles_from_texts(cast_texts, use_cache=use_cache)
         return results
     except ValueError as e:
         raise ValueError(str(e))

@@ -10,7 +10,15 @@ from flask_cors import CORS
 
 from infrastructure.config import REPO_ROOT
 from infrastructure.event_loop import start_event_loop, stop_event_loop
-from infrastructure.json_logging import configure_api_logging
+from infrastructure.json_logging import (
+    TAG_HTTP,
+    TAG_LIFECYCLE,
+    TAG_PROCESS,
+    bind_trace_id,
+    configure_api_logging,
+    reset_trace_id,
+)
+from infrastructure.stdio_utf8 import configure_stdio_utf8
 
 # Suppress LiteLLM debug info to reduce verbose logging
 try:
@@ -33,6 +41,7 @@ def create_app(
     Returns:
         Configured Flask app instance
     """
+    configure_stdio_utf8()
     configure_api_logging(
         level=log_level if log_level is not None else "",
         log_file=log_file,
@@ -45,8 +54,10 @@ def create_app(
 
     @app.before_request
     def _api_assign_request_id() -> None:
-        g._api_request_id = str(uuid.uuid4())
+        rid = str(uuid.uuid4())
+        g._api_request_id = rid
         g._api_request_t0 = time.perf_counter()
+        g._trace_ctx_token = bind_trace_id(rid)
 
     @app.after_request
     def _api_log_access(response):  # type: ignore[no-untyped-def]
@@ -58,6 +69,7 @@ def create_app(
             "http_access",
             extra={
                 "event": "http_access",
+                "tags": [TAG_HTTP, TAG_LIFECYCLE],
                 "request_id": getattr(g, "_api_request_id", None),
                 "method": request.method,
                 "path": request.path,
@@ -67,6 +79,9 @@ def create_app(
                 "endpoint": request.endpoint,
             },
         )
+        tok = getattr(g, "_trace_ctx_token", None)
+        if tok is not None:
+            reset_trace_id(tok)
         return response
     
     # Start the persistent event loop at module level
@@ -118,7 +133,12 @@ def create_app(
 
     log.info(
         "app_ready",
-        extra={"event": "app_startup", "component": "flask", "repo_root": str(REPO_ROOT)},
+        extra={
+            "event": "app_startup",
+            "tags": [TAG_PROCESS, TAG_LIFECYCLE],
+            "component": "flask",
+            "repo_root": str(REPO_ROOT),
+        },
     )
 
     return app

@@ -2,7 +2,7 @@
 import json
 import logging
 import os
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from infrastructure.config import STEPS
 from infrastructure.event_loop import run_async
@@ -107,6 +107,15 @@ def process_post_file(filename: str, step: str) -> Dict:
     }
 
 
+def _crawl4ai_extract_ok(result: Any) -> bool:
+    """False for failed extractions that should not be served from cache or persisted."""
+    if result is None:
+        return False
+    if isinstance(result, list) and len(result) == 0:
+        return False
+    return True
+
+
 def fetch_url_content_crawl4ai(url: str) -> Dict:
     """
     Fetch URL content using crawl4ai with caching.
@@ -143,14 +152,20 @@ def fetch_url_content_crawl4ai(url: str) -> Dict:
     cache_key = deterministic_hash_sha256(normalized_url)
     filename = f"./datasets/url_cache/{cache_key}.json"
 
-    # Check cache first
+    # Check cache first (ignore entries from failed runs — e.g. null/empty extraction)
     cached_response = read_json_cache(filename)
-    if cached_response:
+    if cached_response and _crawl4ai_extract_ok(cached_response.get("result")):
         logger.info(
             "url_fetch_cache_hit",
             extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
         )
         return cached_response
+
+    if cached_response:
+        logger.info(
+            "url_fetch_cache_stale_skip",
+            extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
+        )
 
     logger.info(
         "url_fetch_cache_miss",
@@ -170,12 +185,17 @@ def fetch_url_content_crawl4ai(url: str) -> Dict:
     # Prepare API response
     api_response = {"message": "Processed", "result": result}
 
-    # Save to cache
-    write_json_cache(filename, api_response)
-    logger.info(
-        "url_fetch_cached",
-        extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
-    )
+    if _crawl4ai_extract_ok(result):
+        write_json_cache(filename, api_response)
+        logger.info(
+            "url_fetch_cached",
+            extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
+        )
+    else:
+        logger.warning(
+            "url_fetch_no_cache_bad_result",
+            extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
+        )
 
     return api_response
 

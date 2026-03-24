@@ -53,13 +53,13 @@ class Crawl4AITracker:
             active = self._active
             peak = self._peak
             total = self._total
-        print(f"🚀 CRAWL4AI START | Active: {active} | Peak: {peak} | Total: {total} | URL: {url[:80]}")
+        print(f"CRAWL4AI START | Active: {active} | Peak: {peak} | Total: {total} | URL: {url[:80]}")
         return time.time()
     
     def end(self, url: str, start_time: float, success: bool) -> None:
         """Record the end of a crawl4ai request."""
         duration = time.time() - start_time
-        status = "✅" if success else "❌"
+        status = "OK" if success else "FAIL"
         with self._lock:
             self._active -= 1
             active = self._active
@@ -68,6 +68,21 @@ class Crawl4AITracker:
 
 # Global tracker instance
 _tracker = Crawl4AITracker()
+
+
+def _page_text_fallback(crawl_result: Any) -> str:
+    """Use crawl markdown/HTML when LLM extraction yields nothing usable."""
+    md = getattr(crawl_result, "_markdown", None)
+    if md is not None:
+        for attr in ("fit_markdown", "raw_markdown", "markdown_with_citations"):
+            text = getattr(md, attr, None)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    for attr in ("cleaned_html", "fit_html", "html"):
+        text = getattr(crawl_result, attr, None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return ""
 
 
 async def extract_structured_data(
@@ -99,7 +114,7 @@ async def extract_structured_data(
         schema=schema.model_json_schema(),
         instruction=instruction,
         input_format="fit_markdown",  # Best for local LLMs (reduces noise)
-        verbose=True,
+        verbose=False,
     )
 
     # 3. Configure Crawler Run (Magic Mode + Anti-Overlay)
@@ -116,7 +131,8 @@ async def extract_structured_data(
     print(f"[2/4] Visiting URL: {url}")
 
     try:
-        async with AsyncWebCrawler(verbose=True) as crawler:
+        # verbose=False: crawl4ai logs use Unicode symbols that break on Windows cp1252 consoles.
+        async with AsyncWebCrawler(verbose=False) as crawler:
             # Run the crawl
             result: Any = await crawler.arun(url=url, config=run_config)
 
@@ -129,8 +145,29 @@ async def extract_structured_data(
 
             # 4. Parse and Return Data
             try:
+                extracted = result.extracted_content
+                if not (isinstance(extracted, str) and extracted.strip()):
+                    fb = _page_text_fallback(result)
+                    if fb:
+                        print(
+                            "[WARNING] No LLM extracted_content; using page markdown/HTML fallback."
+                        )
+                        _tracker.end(url, start_time, success=True)
+                        return {"raw_content": fb}
+                    _tracker.end(url, start_time, success=False)
+                    return None
                 # result.extracted_content is usually a JSON string from the LLM
-                data = json.loads(result.extracted_content)
+                data = json.loads(extracted)
+                if data is None or (isinstance(data, list) and len(data) == 0):
+                    fb = _page_text_fallback(result)
+                    if fb:
+                        print(
+                            "[WARNING] LLM JSON empty; using page markdown/HTML fallback."
+                        )
+                        _tracker.end(url, start_time, success=True)
+                        return {"raw_content": fb}
+                    _tracker.end(url, start_time, success=False)
+                    return None
                 print("[4/4] Success!")
                 _tracker.end(url, start_time, success=True)
                 return data
@@ -138,10 +175,23 @@ async def extract_structured_data(
                 print(
                     "[WARNING] LLM returned raw text, not valid JSON. Returning raw content."
                 )
-                _tracker.end(url, start_time, success=True)
-                return {"raw_content": result.extracted_content}
+                raw = result.extracted_content
+                if isinstance(raw, str) and raw.strip():
+                    _tracker.end(url, start_time, success=True)
+                    return {"raw_content": raw}
+                fb = _page_text_fallback(result)
+                if fb:
+                    _tracker.end(url, start_time, success=True)
+                    return {"raw_content": fb}
+                _tracker.end(url, start_time, success=False)
+                return None
             except Exception as e:
                 print(f"[ERROR] processing content: {e}")
+                fb = _page_text_fallback(result)
+                if fb:
+                    print("[WARNING] Using page markdown/HTML fallback after parse error.")
+                    _tracker.end(url, start_time, success=True)
+                    return {"raw_content": fb}
                 _tracker.end(url, start_time, success=False)
                 return None
     except Exception as e:

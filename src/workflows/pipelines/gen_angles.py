@@ -134,7 +134,7 @@ class GenAnglesPipeline:
     def _generate_angles_llm(self, texts: List[str]) -> List[Dict[str, Any]]:
         """Generate angles using LLM directly."""
         # Combine texts
-        combined_text = "\n\n---\n\n".join(texts[:10])  # Limit to first 10 texts
+        combined_text = "\n\n---\n\n".join(texts)
         
         prompt = f"""I have a block of texts from any domain — it could be educational, technical, journalistic, creative, or conversational. I want you to extract phrases or quotes that could spark commentary, opinions, or deeper exploration. For each quote, generate a structured JSON object with:
 - `"source_quote"`: A short phrase or sentence from the text that could inspire discussion.

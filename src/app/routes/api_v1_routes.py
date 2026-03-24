@@ -12,6 +12,12 @@ from flask import Blueprint, Response, current_app, request, stream_with_context
 
 from app.schemas.responses import fail, ok
 from infrastructure.config import REPO_ROOT, STEPS
+from infrastructure.json_logging import (
+    clear_api_log_file,
+    get_api_log_file_stats,
+    structured_log_tag_catalog,
+    structured_log_tag_ids,
+)
 from services.analysis_service import fetch_url_content, fetch_url_content_crawl4ai, process_post_file
 from services.angles_service import analyze_angles
 from services.kv_service import delete_value, get_value, init_db, list_values, migrate_json_to_sqlite, set_value
@@ -38,6 +44,8 @@ WORKFLOW_COMMANDS = (
     "data-load",
     "research",
     "gen-angles",
+    "double-process-new-post",
+    "batch-angles-determinism",
     "validate-post",
     "stego",
     "decode",
@@ -320,6 +328,42 @@ def state_steps() -> tuple[Any, int]:
 @bp.route("/state/paths", methods=["GET"])
 def state_paths() -> tuple[Any, int]:
     return ok({"paths": get_paths_map()})
+
+
+@bp.route("/logging/tags", methods=["GET"])
+def logging_tags() -> tuple[Any, int]:
+    """Structured JSONL log tag ids and descriptions (for filtering / UI)."""
+    return ok(
+        {
+            "tags": structured_log_tag_catalog(),
+            "tag_ids": structured_log_tag_ids(),
+        }
+    )
+
+
+@bp.route("/state/logs", methods=["GET"])
+def state_logs_info() -> tuple[Any, int]:
+    """Current API JSONL log file path and size on disk (bytes)."""
+    return ok(get_api_log_file_stats())
+
+
+@bp.route("/state/logs", methods=["DELETE"])
+def state_logs_clear() -> tuple[Any, int]:
+    """Truncate the API JSONL log file (same file as ``GET /state/logs``)."""
+    stats = get_api_log_file_stats()
+    if not stats.get("file_logging_enabled"):
+        return fail(
+            "API file log is disabled (no file target; use default logging or enable file log)",
+            status=400,
+        )
+    result = clear_api_log_file()
+    if not result.get("cleared"):
+        return fail(
+            result.get("reason", "Could not truncate log file"),
+            status=500,
+            details=result,
+        )
+    return ok(result, message="API log file truncated")
 
 
 @bp.route("/state/fs/list", methods=["GET"])
@@ -789,6 +833,82 @@ def wf_validate_post() -> Any:
         return fail("Workflow execution failed", status=500, details=str(exc))
 
 
+@bp.route("/workflows/double-process-new-post", methods=["POST"])
+def wf_double_process_new_post() -> Any:
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return fail("Invalid JSON body", status=400)
+    allow_angles_fallback, err = _body_bool(body, "allow_angles_fallback", default=False)
+    if err:
+        return err
+
+    if _wants_workflow_stream(body):
+        return _stream_workflow(
+            "double-process-new-post",
+            lambda emit: runner.run_double_process_new_post(
+                allow_angles_fallback=allow_angles_fallback,
+                on_progress=lambda event, payload: emit(
+                    "progress",
+                    {"event": event, **payload},
+                ),
+            ),
+        )
+
+    try:
+        data = _sync_workflow(
+            "double-process-new-post",
+            lambda: runner.run_double_process_new_post(
+                allow_angles_fallback=allow_angles_fallback,
+            ),
+        )
+        return ok(data)
+    except Exception as exc:
+        return fail("Workflow execution failed", status=500, details=str(exc))
+
+
+@bp.route("/workflows/batch-angles-determinism", methods=["POST"])
+def wf_batch_angles_determinism() -> Any:
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return fail("Invalid JSON body", status=400)
+    raw_ids = body.get("post_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return fail("'post_ids' must be a non-empty list of strings", status=400)
+    post_ids: list[str] = []
+    for x in raw_ids:
+        if not isinstance(x, str) or not x.strip():
+            return fail("'post_ids' entries must be non-empty strings", status=400)
+        post_ids.append(x.strip())
+    step = body.get("step", "angles-step")
+    if not isinstance(step, str) or not step.strip():
+        return fail("'step' must be a non-empty string", status=400)
+    step = step.strip()
+
+    if _wants_workflow_stream(body):
+        return _stream_workflow(
+            "batch-angles-determinism",
+            lambda emit: runner.run_batch_angles_determinism(
+                post_ids,
+                step=step,
+                on_progress=lambda event, payload: emit(
+                    "progress",
+                    {"event": event, **payload},
+                ),
+            ),
+        )
+
+    try:
+        data = _sync_workflow(
+            "batch-angles-determinism",
+            lambda: runner.run_batch_angles_determinism(post_ids, step=step),
+        )
+        return ok(data)
+    except ValueError as exc:
+        return fail(str(exc), status=400)
+    except Exception as exc:
+        return fail("Workflow execution failed", status=500, details=str(exc))
+
+
 @bp.route("/workflows/full", methods=["POST"])
 def wf_full() -> Any:
     body = request.get_json(silent=True) or {}
@@ -1010,6 +1130,38 @@ def wf_run() -> Any:
                 persist_terms_cache=persist_terms_cache,
                 use_fetch_cache=use_fetch_cache,
                 allow_angles_fallback=allow_angles_fallback,
+                on_progress=progress_cb,
+            )
+
+    elif command == "double-process-new-post":
+        allow_angles_fallback, err = _body_bool(body, "allow_angles_fallback", default=False)
+        if err:
+            return err
+
+        def execute(progress_cb: Optional[Callable[[str, dict[str, Any]], None]]) -> Any:
+            return runner.run_double_process_new_post(
+                allow_angles_fallback=allow_angles_fallback,
+                on_progress=progress_cb,
+            )
+
+    elif command == "batch-angles-determinism":
+        raw_ids = body.get("post_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return fail("'post_ids' must be a non-empty list of strings", status=400)
+        post_ids_cmd: list[str] = []
+        for x in raw_ids:
+            if not isinstance(x, str) or not x.strip():
+                return fail("'post_ids' entries must be non-empty strings", status=400)
+            post_ids_cmd.append(x.strip())
+        step_val = body.get("step", "angles-step")
+        if not isinstance(step_val, str) or not step_val.strip():
+            return fail("'step' must be a non-empty string", status=400)
+        step_val = step_val.strip()
+
+        def execute(progress_cb: Optional[Callable[[str, dict[str, Any]], None]]) -> Any:
+            return runner.run_batch_angles_determinism(
+                post_ids_cmd,
+                step=step_val,
                 on_progress=progress_cb,
             )
 

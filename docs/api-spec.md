@@ -18,6 +18,32 @@ Default local port: `5001`
 
 No auth is currently enforced in this service. Frontend should treat this API as trusted/internal.
 
+## Concepts
+
+### Observability
+
+- **File logs:** `GET /state/logs` and `DELETE /state/logs` expose the API JSONL log file path, on-disk size, and truncation. Truncation frees disk space and does not remove stderr logging; `DELETE` returns `400` when file logging is disabled (e.g. `--no-log-file`).
+- **Structured tags:** `GET /logging/tags` returns the canonical list of structured log tag ids and descriptions used in JSONL output so clients and operators can align filters, dashboards, or docs with actual log fields.
+- **Live runs:** `GET /workflows/runs` lists workflow runs currently executing in this API process (`id`, `command`, `mode`, timing).
+- **Streaming (SSE):** Workflow routes that support streaming default to `text/event-stream` with events `status`, `progress`, `log`, `heartbeat`, `result`, `error`, `done`. Disable with `?stream=0` or body `{ "stream": false }` for a normal JSON envelope—useful for scripts or when a single response is enough.
+
+### Testing and protocol QA
+
+These endpoints support **reproducibility**, **cache vs cacheless** comparison, and **LLM determinism** checks. They are documented in detail under **Workflows** and **Tools**; this section only maps intent:
+
+- **`POST /workflows/validate-post`** — Replays data-load → research → gen-angles **in memory**, compares each stage’s live output to **saved** artifacts (strict JSON equality). Does **not** overwrite artifacts.
+- **`POST /workflows/double-process-new-post`** — Picks one new post from the data-load queue, runs the three-stage pipeline **twice** (warm caches vs no caches), **writes** artifacts each time, and reports per-stage hash match between passes.
+- **`POST /workflows/batch-angles-determinism`** — For each `post_id`, runs angle extraction **twice** with angles disk cache disabled and compares normalized angle lists; measures same-host repeatability, not cross-machine parity.
+- **Protocol previews** (`POST /tools/protocol/data-load-preview`, `research-preview`, `angles-preview`, `gen-terms`) — Live protocol steps with controlled persistence for inspecting behavior before full pipeline runs.
+
+### Text and payload fields
+
+Common **string-oriented** request fields across v1 (see each endpoint for full schemas):
+
+- **Embedding / decoding:** optional `payload` on stego and full workflows (string or JSON value **coerced to string**); `stego_text` plus `angles` on decode.
+- **Post text overrides:** `post_title`, `post_text`, `post_url` on `gen-terms` and protocol tools where listed.
+- **Tools:** `text` on `POST /tools/semantic/search`; `needle` and `haystack` (string array) on `POST /tools/semantic/needle`; `texts` (string array) on `POST /tools/angles/analyze`.
+
 ## Endpoints
 
 ### Health

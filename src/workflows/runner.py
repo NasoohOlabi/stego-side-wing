@@ -784,6 +784,159 @@ class WorkflowRunner:
             self._fetch_fail_counts = {}
         self._fetch_fail_counts.pop(post_id, None)
 
+    @staticmethod
+    def _slim_substage_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
+        keys = (
+            "hash",
+            "selftext_length",
+            "search_results_count",
+            "angles_count",
+            "options_count",
+        )
+        return {k: summary[k] for k in keys if k in summary}
+
+    def _double_process_substage_begin(
+        self,
+        on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+        *,
+        post_id: str,
+        pass_num: int,
+        cache_mode: str,
+        pipeline_substage: str,
+    ) -> None:
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {
+                "stage": "double-process-new-post",
+                "event": "substage_begin",
+                "post_id": post_id,
+                "pass": pass_num,
+                "cache_mode": cache_mode,
+                "pipeline_substage": pipeline_substage,
+            },
+        )
+        _LOG.bind(
+            post_id=post_id,
+            pass_num=pass_num,
+            cache_mode=cache_mode,
+            pipeline_substage=pipeline_substage,
+        ).info("workflow_progress_double_process_substage_begin")
+
+    def _double_process_substage_end(
+        self,
+        on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+        *,
+        post_id: str,
+        pass_num: int,
+        cache_mode: str,
+        pipeline_substage: str,
+        elapsed_ms: int,
+        summary: Dict[str, Any],
+    ) -> None:
+        slim = self._slim_substage_summary(summary)
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {
+                "stage": "double-process-new-post",
+                "event": "substage_end",
+                "post_id": post_id,
+                "pass": pass_num,
+                "cache_mode": cache_mode,
+                "pipeline_substage": pipeline_substage,
+                "elapsed_ms": elapsed_ms,
+                "summary": slim,
+            },
+        )
+        _LOG.bind(
+            post_id=post_id,
+            pass_num=pass_num,
+            cache_mode=cache_mode,
+            pipeline_substage=pipeline_substage,
+            elapsed_ms=elapsed_ms,
+            step_hash=summary.get("hash"),
+        ).info("workflow_progress_double_process_substage_end")
+
+    def _double_process_substage_failed(
+        self,
+        on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+        *,
+        post_id: str,
+        pass_num: int,
+        cache_mode: str,
+        pipeline_substage: str,
+        elapsed_ms: int,
+        exc: BaseException,
+    ) -> None:
+        err_text = str(exc)
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {
+                "stage": "double-process-new-post",
+                "event": "substage_failed",
+                "post_id": post_id,
+                "pass": pass_num,
+                "cache_mode": cache_mode,
+                "pipeline_substage": pipeline_substage,
+                "elapsed_ms": elapsed_ms,
+                "error": err_text[:2000],
+            },
+        )
+        _LOG.bind(
+            post_id=post_id,
+            pass_num=pass_num,
+            cache_mode=cache_mode,
+            pipeline_substage=pipeline_substage,
+            elapsed_ms=elapsed_ms,
+        ).opt(exception=exc).error("workflow_progress_double_process_substage_failed")
+
+    def _run_timed_dp_substage(
+        self,
+        on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+        *,
+        post_id: str,
+        pass_num: int,
+        cache_mode: str,
+        pipeline_substage: str,
+        run_fn: Callable[[], Dict[str, Any]],
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        self._double_process_substage_begin(
+            on_progress,
+            post_id=post_id,
+            pass_num=pass_num,
+            cache_mode=cache_mode,
+            pipeline_substage=pipeline_substage,
+        )
+        t0 = time.perf_counter()
+        try:
+            raw = run_fn()
+        except BaseException as exc:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            self._double_process_substage_failed(
+                on_progress,
+                post_id=post_id,
+                pass_num=pass_num,
+                cache_mode=cache_mode,
+                pipeline_substage=pipeline_substage,
+                elapsed_ms=elapsed_ms,
+                exc=exc,
+            )
+            raise
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        summary = self._summarize_stage_payload(pipeline_substage, raw)
+        self._double_process_substage_end(
+            on_progress,
+            post_id=post_id,
+            pass_num=pass_num,
+            cache_mode=cache_mode,
+            pipeline_substage=pipeline_substage,
+            elapsed_ms=elapsed_ms,
+            summary=summary,
+        )
+        return raw, summary
+
     def _run_three_stage_post(
         self,
         post_id: str,
@@ -792,25 +945,49 @@ class WorkflowRunner:
         persist_terms_cache: bool,
         use_fetch_cache: bool,
         allow_angles_fallback: bool,
+        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        pass_num: int = 1,
+        cache_mode: str = "unknown",
     ) -> Dict[str, Any]:
         """Run data_load -> research -> gen_angles for one post ID."""
-        data_post = self.data_load.process_post_id(
+        _, data_summary = self._run_timed_dp_substage(
+            on_progress,
             post_id=post_id,
-            step="filter-url-unresolved",
-            use_cache=use_fetch_cache,
+            pass_num=pass_num,
+            cache_mode=cache_mode,
+            pipeline_substage="data_load",
+            run_fn=lambda: self.data_load.process_post_id(
+                post_id=post_id,
+                step="filter-url-unresolved",
+                use_cache=use_fetch_cache,
+            ),
         )
-        research_post = self.research.process_post_id(
+        _, research_summary = self._run_timed_dp_substage(
+            on_progress,
             post_id=post_id,
-            step="filter-researched",
-            force=True,
-            use_terms_cache=use_terms_cache,
-            persist_terms_cache=persist_terms_cache,
-            use_fetch_cache=use_fetch_cache,
+            pass_num=pass_num,
+            cache_mode=cache_mode,
+            pipeline_substage="research",
+            run_fn=lambda: self.research.process_post_id(
+                post_id=post_id,
+                step="filter-researched",
+                force=True,
+                use_terms_cache=use_terms_cache,
+                persist_terms_cache=persist_terms_cache,
+                use_fetch_cache=use_fetch_cache,
+            ),
         )
-        angles_post = self.gen_angles.process_post_id(
+        _, angles_summary = self._run_timed_dp_substage(
+            on_progress,
             post_id=post_id,
-            step="angles-step",
-            allow_fallback=allow_angles_fallback,
+            pass_num=pass_num,
+            cache_mode=cache_mode,
+            pipeline_substage="gen_angles",
+            run_fn=lambda: self.gen_angles.process_post_id(
+                post_id=post_id,
+                step="angles-step",
+                allow_fallback=allow_angles_fallback,
+            ),
         )
         return {
             "settings": {
@@ -820,9 +997,9 @@ class WorkflowRunner:
                 "allow_angles_fallback": allow_angles_fallback,
             },
             "steps": {
-                "data_load": self._summarize_stage_payload("data_load", data_post),
-                "research": self._summarize_stage_payload("research", research_post),
-                "gen_angles": self._summarize_stage_payload("gen_angles", angles_post),
+                "data_load": data_summary,
+                "research": research_summary,
+                "gen_angles": angles_summary,
             },
         }
 
@@ -866,6 +1043,7 @@ class WorkflowRunner:
                 "post_id": post_id,
             },
         )
+        t_pass1 = time.perf_counter()
         while True:
             try:
                 first_pass = self._run_three_stage_post(
@@ -874,6 +1052,9 @@ class WorkflowRunner:
                     persist_terms_cache=True,
                     use_fetch_cache=True,
                     allow_angles_fallback=allow_angles_fallback,
+                    on_progress=on_progress,
+                    pass_num=1,
+                    cache_mode="cached",
                 )
                 self._clear_fetch_failure(post_id)
                 break
@@ -900,6 +1081,22 @@ class WorkflowRunner:
                 )
                 time.sleep(1.0)
 
+        pass1_total_ms = int((time.perf_counter() - t_pass1) * 1000)
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {
+                "stage": "double-process-new-post",
+                "event": "pass_1_finished",
+                "post_id": post_id,
+                "pass": 1,
+                "cache_mode": "cached",
+                "elapsed_ms": pass1_total_ms,
+            },
+        )
+        _LOG.bind(post_id=post_id, pass_num=1, elapsed_ms=pass1_total_ms).info(
+            "workflow_progress_double_process_pass_finished"
+        )
         self._emit(
             on_progress,
             "stage_progress",
@@ -909,6 +1106,7 @@ class WorkflowRunner:
                 "post_id": post_id,
             },
         )
+        t_pass2 = time.perf_counter()
         while True:
             try:
                 second_pass = self._run_three_stage_post(
@@ -917,6 +1115,9 @@ class WorkflowRunner:
                     persist_terms_cache=False,
                     use_fetch_cache=False,
                     allow_angles_fallback=allow_angles_fallback,
+                    on_progress=on_progress,
+                    pass_num=2,
+                    cache_mode="cacheless",
                 )
                 break
             except Exception as exc:
@@ -942,6 +1143,22 @@ class WorkflowRunner:
                 )
                 time.sleep(1.0)
 
+        pass2_total_ms = int((time.perf_counter() - t_pass2) * 1000)
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {
+                "stage": "double-process-new-post",
+                "event": "pass_2_finished",
+                "post_id": post_id,
+                "pass": 2,
+                "cache_mode": "cacheless",
+                "elapsed_ms": pass2_total_ms,
+            },
+        )
+        _LOG.bind(post_id=post_id, pass_num=2, elapsed_ms=pass2_total_ms).info(
+            "workflow_progress_double_process_pass_finished"
+        )
         comparison = {
             stage: first_pass["steps"][stage]["hash"] == second_pass["steps"][stage]["hash"]
             for stage in ("data_load", "research", "gen_angles")

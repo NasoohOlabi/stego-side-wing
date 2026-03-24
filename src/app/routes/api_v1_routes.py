@@ -206,6 +206,88 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
+def _heartbeat_activity_label(
+    progress: dict[str, Any] | None,
+    worker_status: dict[str, Any] | None,
+) -> str:
+    """One-line description of current workflow work for SSE heartbeats."""
+    if progress:
+        ev = progress.get("event")
+        if ev == "substage_begin":
+            return (
+                f"pass {progress.get('pass')} {progress.get('cache_mode')} · "
+                f"{progress.get('pipeline_substage')} · running"
+            )
+        if ev == "substage_end":
+            return (
+                f"pass {progress.get('pass')} · {progress.get('pipeline_substage')} "
+                f"done in {progress.get('elapsed_ms')}ms"
+            )
+        if ev == "substage_failed":
+            err = (progress.get("error") or "")[:200]
+            return (
+                f"pass {progress.get('pass')} · {progress.get('pipeline_substage')} "
+                f"failed: {err}"
+            )
+        if ev in ("pass_1_finished", "pass_2_finished"):
+            return (
+                f"pass {progress.get('pass')} {progress.get('cache_mode')} "
+                f"finished in {progress.get('elapsed_ms')}ms"
+            )
+        if ev == "workflow_start":
+            wf = progress.get("workflow", "workflow")
+            return f"{wf} started"
+        if ev == "workflow_done":
+            return "workflow completing"
+        if ev == "selected_post":
+            return f"selected post {progress.get('post_id')}"
+        if ev == "pass_1_cached_start":
+            return "pass 1 (cached) · running data_load → research → gen_angles"
+        if ev == "pass_2_cacheless_start":
+            return "pass 2 (cacheless) · running data_load → research → gen_angles"
+        if ev == "fetch_failed":
+            return (
+                f"URL fetch failed (pass {progress.get('pass')}, "
+                f"attempt {progress.get('failure_count')}) · retrying"
+            )
+        if isinstance(ev, str):
+            return ev
+        return "progress"
+    if worker_status and worker_status.get("phase") == "started":
+        return "runner started · waiting for pipeline progress"
+    return "connecting · starting workflow thread"
+
+
+def _workflow_heartbeat_payload(
+    *,
+    command: str,
+    run_id: str,
+    elapsed_ms: int,
+    stream_state: dict[str, Any],
+    state_lock: threading.Lock,
+) -> dict[str, Any]:
+    with state_lock:
+        lp = stream_state.get("last_progress")
+        ls = stream_state.get("last_status")
+        err = stream_state.get("last_error")
+        lg = stream_state.get("last_log")
+    body: dict[str, Any] = {
+        "command": command,
+        "run_id": run_id,
+        "elapsed_ms": elapsed_ms,
+        "activity": _heartbeat_activity_label(lp, ls),
+    }
+    if lp is not None:
+        body["progress"] = lp
+    if ls is not None:
+        body["worker_status"] = ls
+    if err is not None:
+        body["error"] = err
+    if lg is not None:
+        body["recent_log"] = lg
+    return body
+
+
 class _WorkflowLogHandler(logging.Handler):
     def __init__(self, events: "queue.Queue[tuple[str, dict[str, Any]]]"):
         super().__init__()
@@ -248,14 +330,29 @@ def _stream_workflow(
     events: "queue.Queue[tuple[str, dict[str, Any]]]" = queue.Queue()
     done = threading.Event()
     run_id = register_run(command, "stream")
+    stream_state_lock = threading.Lock()
+    stream_state: dict[str, Any] = {}
 
     def _emit(event: str, payload: dict[str, Any]) -> None:
         events.put((event, payload))
+        if event == "progress":
+            with stream_state_lock:
+                stream_state["last_progress"] = payload
+        elif event == "status":
+            with stream_state_lock:
+                stream_state["last_status"] = payload
+        elif event == "error":
+            with stream_state_lock:
+                stream_state["last_error"] = payload
+        elif event == "log":
+            with stream_state_lock:
+                stream_state["last_log"] = payload
 
     def _worker() -> None:
         trace_token = None
         if trace_id:
             trace_token = bind_trace_id(trace_id)
+        stream_started = time.perf_counter()
         logger.info(
             "workflow_stream_begin",
             extra={
@@ -281,8 +378,34 @@ def _stream_workflow(
             try:
                 _emit("status", {"phase": "started", "command": command, "run_id": run_id})
                 result = executor(_emit)
+                elapsed_ms = int((time.perf_counter() - stream_started) * 1000)
+                logger.info(
+                    "workflow_stream_complete",
+                    extra={
+                        "event": "workflow",
+                        "mode": "stream",
+                        "command": command,
+                        "run_id": run_id,
+                        "trace_id": trace_id,
+                        "elapsed_ms": elapsed_ms,
+                        "outcome": "ok",
+                    },
+                )
                 _emit("result", {"command": command, "result": result})
             except Exception as exc:
+                elapsed_ms = int((time.perf_counter() - stream_started) * 1000)
+                logger.exception(
+                    "workflow_stream_failed",
+                    extra={
+                        "event": "workflow",
+                        "mode": "stream",
+                        "command": command,
+                        "run_id": run_id,
+                        "trace_id": trace_id,
+                        "elapsed_ms": elapsed_ms,
+                        "outcome": "error",
+                    },
+                )
                 _emit(
                     "error",
                     {
@@ -319,7 +442,16 @@ def _stream_workflow(
                 if done.is_set() and events.empty():
                     break
                 elapsed_ms = int((time.time() - started_at) * 1000)
-                yield _sse("heartbeat", {"command": command, "elapsed_ms": elapsed_ms})
+                yield _sse(
+                    "heartbeat",
+                    _workflow_heartbeat_payload(
+                        command=command,
+                        run_id=run_id,
+                        elapsed_ms=elapsed_ms,
+                        stream_state=stream_state,
+                        state_lock=stream_state_lock,
+                    ),
+                )
         yield _sse("done", {"command": command})
 
     response = Response(_event_stream(), mimetype="text/event-stream")

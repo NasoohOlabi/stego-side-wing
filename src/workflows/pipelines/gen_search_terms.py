@@ -2,6 +2,7 @@
 import json
 import logging
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -151,6 +152,16 @@ class GenSearchTermsPipeline:
             }
 
         try:
+            logger.info(
+                "gen_search_terms_llm_begin",
+                extra={
+                    "event": "gen_search_terms",
+                    "post_id": post_id,
+                    "provider": "lm_studio",
+                    "model": self.config.model,
+                },
+            )
+            t_llm = time.perf_counter()
             response = self.llm.call_llm(
                 prompt=prompt,
                 system_message=system_message,
@@ -158,16 +169,18 @@ class GenSearchTermsPipeline:
                 provider="lm_studio",
                 temperature=0.0,
             )
+            llm_ms = int((time.perf_counter() - t_llm) * 1000)
             terms = self._normalize_terms(self._parse_terms(response))
             if terms and persist_cache:
                 self._cache_terms(post_id, terms)
             logger.info(
-                "generated search terms post_id=%s count=%s hash=%s use_cache=%s persist_cache=%s",
+                "generated search terms post_id=%s count=%s hash=%s use_cache=%s persist_cache=%s llm_elapsed_ms=%s",
                 post_id,
                 len(terms),
                 stable_hash(terms),
                 use_cache,
                 persist_cache,
+                llm_ms,
             )
             return {
                 "post_id": post_id,

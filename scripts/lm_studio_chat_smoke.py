@@ -26,7 +26,6 @@ from infrastructure.config import get_env, get_lm_studio_url  # noqa: E402
 
 # Keep in sync with src/pipelines/angles/angle_runner.py defaults
 DEFAULT_MODEL = "openai/gpt-oss-20b"
-REQUEST_TIMEOUT = 120
 
 
 def main() -> int:
@@ -39,8 +38,9 @@ def main() -> int:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=REQUEST_TIMEOUT,
-        help=f"HTTP timeout seconds (default: {REQUEST_TIMEOUT})",
+        default=None,
+        metavar="SEC",
+        help="HTTP timeout seconds (default: no limit; slow remote LLMs)",
     )
     args = parser.parse_args()
 
@@ -63,7 +63,8 @@ def main() -> int:
     }
 
     print(f"POST {endpoint}", file=sys.stderr)
-    print(f"model={args.model!r} timeout={args.timeout}s", file=sys.stderr)
+    to = args.timeout
+    print(f"model={args.model!r} timeout={'no limit' if to is None else f'{to}s'}", file=sys.stderr)
 
     try:
         r = requests.post(

@@ -1,14 +1,31 @@
 """Research pipeline: generate search terms, search, and fetch content."""
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import logging
+import os
+import time
 from typing import Any, Dict, List
 
 from workflows.adapters.backend_api import BackendAPIAdapter
+from workflows.contracts import FetchUrlResult
 from workflows.pipelines.fetch_url_content import FetchUrlContentPipeline
 from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline
 from workflows.utils.protocol_utils import stable_hash, text_preview
 
 logger = logging.getLogger(__name__)
+
+# Per-URL fetch in research; avoids indefinite hang if crawl/browser stalls.
+_RESEARCH_FETCH_TIMEOUT_SEC = float(os.environ.get("RESEARCH_FETCH_TIMEOUT_SEC", "180"))
+# Retries after a timed-out attempt (e.g. 1 => two attempts total per URL).
+_RESEARCH_FETCH_RETRIES = max(0, int(os.environ.get("RESEARCH_FETCH_RETRIES", "1")))
+
+
+def _term_preview(term: str, max_len: int = 160) -> str:
+    t = term.replace("\n", " ").strip()
+    return t if len(t) <= max_len else t[: max_len - 3] + "..."
+
+
+def _fetch_attempts_total() -> int:
+    return 1 + _RESEARCH_FETCH_RETRIES
 
 
 class ResearchPipeline:
@@ -18,6 +35,74 @@ class ResearchPipeline:
         self.backend = BackendAPIAdapter()
         self.gen_terms = GenSearchTermsPipeline()
         self.fetch_content = FetchUrlContentPipeline()
+
+    def _fetch_url_with_timeout_retries(
+        self,
+        post_id: str,
+        url: str,
+        use_fetch_cache: bool,
+    ) -> FetchUrlResult:
+        """Run fetch in an isolated worker with per-attempt timeout; retry on timeout."""
+        attempts = _fetch_attempts_total()
+        ts = _RESEARCH_FETCH_TIMEOUT_SEC
+        for attempt in range(1, attempts + 1):
+            if attempt > 1:
+                logger.info(
+                    "research_fetch_retry",
+                    extra={
+                        "event": "research",
+                        "post_id": post_id,
+                        "url": url,
+                        "attempt": attempt,
+                        "attempts_total": attempts,
+                        "timeout_sec": ts,
+                    },
+                )
+            ex = ThreadPoolExecutor(max_workers=1)
+            fut = ex.submit(self.fetch_content.fetch, url, use_fetch_cache)
+            try:
+                out = fut.result(timeout=ts)
+            except FutureTimeoutError:
+                ex.shutdown(wait=False)
+                logger.warning(
+                    "research_fetch_timed_out",
+                    extra={
+                        "event": "research",
+                        "post_id": post_id,
+                        "url": url,
+                        "attempt": attempt,
+                        "attempts_total": attempts,
+                        "timeout_sec": ts,
+                        "will_retry": attempt < attempts,
+                    },
+                )
+                if attempt >= attempts:
+                    err = f"Timed out after {attempts} attempt(s) ({ts}s each)"
+                    logger.error(
+                        "research_fetch_timed_out_exhausted",
+                        extra={
+                            "event": "research",
+                            "post_id": post_id,
+                            "url": url,
+                            "attempts_total": attempts,
+                            "timeout_sec": ts,
+                        },
+                    )
+                    return FetchUrlResult(url=url, success=False, error=err)
+                continue
+            except Exception as e:
+                ex.shutdown(wait=False)
+                logger.exception(
+                    "research_fetch_failed post_id=%s url=%s attempt=%s",
+                    post_id,
+                    url,
+                    attempt,
+                )
+                return FetchUrlResult(url=url, success=False, error=str(e))
+            else:
+                ex.shutdown(wait=True)
+                return out
+        raise RuntimeError("research fetch retry loop fell through")
 
     @staticmethod
     def _search_summary(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,8 +182,28 @@ class ResearchPipeline:
         all_search_results: List[Dict[str, Any]] = []
         search_events: List[Dict[str, Any]] = []
         seen_links: set[str] = set()
+        n_terms = len(search_terms)
+        logger.info(
+            "research_google_phase_begin",
+            extra={
+                "event": "research",
+                "post_id": post_id,
+                "search_term_count": n_terms,
+            },
+        )
 
-        for term in search_terms:
+        for idx, term in enumerate(search_terms, start=1):
+            t_search = time.perf_counter()
+            logger.info(
+                "research_google_query_begin",
+                extra={
+                    "event": "research",
+                    "post_id": post_id,
+                    "term_index": idx,
+                    "term_total": n_terms,
+                    "term_preview": _term_preview(term),
+                },
+            )
             try:
                 search_response = self.backend.google_search(query=term, first=1, count=10)
                 raw_results = search_response.get("results", [])
@@ -107,6 +212,17 @@ class ResearchPipeline:
                 raise RuntimeError(
                     f"Google search failed for post {post_id} and term '{term}': {e}"
                 ) from e
+            logger.info(
+                "research_google_query_done",
+                extra={
+                    "event": "research",
+                    "post_id": post_id,
+                    "term_index": idx,
+                    "term_total": n_terms,
+                    "elapsed_ms": int((time.perf_counter() - t_search) * 1000),
+                    "raw_hits": len(raw_results),
+                },
+            )
 
             selected_for_term: List[Dict[str, Any]] = []
             skipped_for_term: List[Dict[str, Any]] = []
@@ -140,21 +256,60 @@ class ResearchPipeline:
         fetched_texts: List[str] = []
         fetched_pages: List[Dict[str, Any]] = []
         batch_size = 3
+        total_urls = len(all_search_results)
+        n_batches = (total_urls + batch_size - 1) // batch_size if total_urls else 0
+        logger.info(
+            "research_url_fetch_phase_begin",
+            extra={
+                "event": "research",
+                "post_id": post_id,
+                "unique_result_links": len(all_search_results),
+                "urls_to_fetch": total_urls,
+                "batch_size": batch_size,
+                "batch_count": n_batches,
+                "fetch_timeout_sec": _RESEARCH_FETCH_TIMEOUT_SEC,
+                "fetch_retries": _RESEARCH_FETCH_RETRIES,
+                "fetch_attempts_total": _fetch_attempts_total(),
+            },
+        )
 
+        batch_num = 0
         for i in range(0, len(all_search_results), batch_size):
             batch = all_search_results[i : i + batch_size]
-            urls = [result.get("link") for result in batch if result.get("link")]
+            urls: List[str] = [
+                str(link) for link in (r.get("link") for r in batch) if link
+            ]
             if not urls:
                 continue
+            batch_num += 1
+            t_batch = time.perf_counter()
+            logger.info(
+                "research_fetch_batch_begin",
+                extra={
+                    "event": "research",
+                    "post_id": post_id,
+                    "batch_index": batch_num,
+                    "batch_url_count": len(urls),
+                    "urls": urls[:5],
+                },
+            )
             with ThreadPoolExecutor(max_workers=batch_size) as pool:
                 future_items = [
-                    (url, pool.submit(self.fetch_content.fetch, url, use_fetch_cache))
+                    (
+                        url,
+                        pool.submit(
+                            self._fetch_url_with_timeout_retries,
+                            post_id,
+                            url,
+                            use_fetch_cache,
+                        ),
+                    )
                     for url in urls
                 ]
                 for url, future in future_items:
                     try:
                         fetch_result = future.result()
-                        page_report = {
+                        page_report: Dict[str, Any] = {
                             "url": url,
                             "success": fetch_result.success,
                             "content_type": fetch_result.content_type,
@@ -181,6 +336,15 @@ class ResearchPipeline:
                                 "use_cache": use_fetch_cache,
                             }
                         )
+            logger.info(
+                "research_fetch_batch_done",
+                extra={
+                    "event": "research",
+                    "post_id": post_id,
+                    "batch_index": batch_num,
+                    "elapsed_ms": int((time.perf_counter() - t_batch) * 1000),
+                },
+            )
 
         post_copy = dict(post)
         post_copy["search_results"] = fetched_texts
@@ -291,7 +455,7 @@ class ResearchPipeline:
         for file_name in file_names:
             try:
                 posts.append(self.backend.get_post_local(file_name, step))
-            except Exception as e:
+            except Exception:
                 logger.exception("research load failed for file=%s", file_name)
         return self.process_post_objects(posts=posts, step=step)
 

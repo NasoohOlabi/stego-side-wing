@@ -217,6 +217,17 @@ def search_google(query: str, first: int = 1, count: int = 10) -> Dict[str, List
                         "data": data,
                     }
                 )
+                logger.warning(
+                    "search_google_key_failed",
+                    extra={
+                        "event": "search",
+                        "provider": "google",
+                        "query": query,
+                        "key_index": idx,
+                        "reason": "api_error_json",
+                        "detail": error_message[:500],
+                    },
+                )
                 continue
 
             # Check if "items" key exists
@@ -241,6 +252,17 @@ def search_google(query: str, first: int = 1, count: int = 10) -> Dict[str, List
                     "error": str(e),
                     "data": None,
                 }
+            )
+            logger.warning(
+                "search_google_key_failed",
+                extra={
+                    "event": "search",
+                    "provider": "google",
+                    "query": query,
+                    "key_index": idx,
+                    "reason": "request_exception",
+                    "detail": str(e)[:500],
+                },
             )
             continue
 

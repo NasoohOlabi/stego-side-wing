@@ -2,15 +2,28 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
 import requests
+from requests.exceptions import (
+    ChunkedEncodingError,
+    ConnectionError as RequestsConnectionError,
+    HTTPError,
+    ReadTimeout,
+    RequestException,
+    Timeout,
+)
 
 from infrastructure.cache import deterministic_hash_sha256
 from infrastructure.config import get_env, get_lm_studio_url
+from infrastructure.json_logging import TAG_WORKFLOW
 from workflows.utils.text_utils import chunk_text_equal_overlap
+
+_LOG = logging.getLogger(__name__)
 
 ANGLES_DIR = Path(__file__).resolve().parent
 REPO_ROOT = ANGLES_DIR.parent.parent
@@ -28,14 +41,11 @@ LM_STUDIO_API_TOKEN = get_env("LM_STUDIO_API_TOKEN", "lm-studio") or "lm-studio"
 CHAT_ENDPOINT = f"{LM_STUDIO_URL.rstrip('/')}/chat/completions"
 
 MODEL_NAME = "openai/gpt-oss-20b"
-REQUEST_TIMEOUT = 120
 MAX_RESPONSE_TOKENS = 8192
 TEMPERATURE = 0
 
 PROMPTS_LOG_PATH = REPO_ROOT / "prompts.log"
 
-# We guard against sending more than this many characters per prompt batch.
-MAX_CHARS_PER_PROMPT = 150_000
 # We slice long strings into pieces smaller than this to avoid overflowing context.
 MAX_CHARS_PER_TEXT = 30_000
 SEPARATOR = "\n\n---\n\n"
@@ -43,6 +53,170 @@ SEPARATOR = "\n\n---\n\n"
 # On HTTP errors that look like context limits, re-send as N overlapping chunks (no trimming).
 CONTEXT_RETRY_NUM_CHUNKS = max(1, int(get_env("ANGLES_CONTEXT_RETRY_CHUNKS", "3") or "3"))
 CONTEXT_RETRY_OVERLAP_CHARS = max(0, int(get_env("ANGLES_CONTEXT_RETRY_OVERLAP_CHARS", "5000") or "5000"))
+
+_TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+_CONNECTIVITY_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ReadTimeout,
+    Timeout,
+    RequestsConnectionError,
+    ChunkedEncodingError,
+)
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw = (get_env(name) or "").strip()
+    if not raw:
+        return default
+    return max(1, int(raw))
+
+
+def _env_non_negative_int(name: str, default: int) -> int:
+    raw = (get_env(name) or "").strip()
+    if not raw:
+        return default
+    return max(0, int(raw))
+
+
+def _effective_max_chars_per_prompt() -> int:
+    """Batch segments until combined size stays under this (default lowered for flaky tunnels)."""
+    raw = (get_env("ANGLES_MAX_CHARS_PER_PROMPT") or "").strip()
+    if raw:
+        return max(4096, int(raw))
+    return 80_000
+
+
+def _llm_max_attempts() -> int:
+    return _env_positive_int("ANGLES_LLM_MAX_ATTEMPTS", 6)
+
+
+def _llm_retry_backoff_sec(attempt_index: int) -> float:
+    """attempt_index 0 = first retry wait."""
+    base = float((get_env("ANGLES_LLM_RETRY_BACKOFF_BASE_SEC") or "").strip() or "1.5")
+    cap = float((get_env("ANGLES_LLM_RETRY_BACKOFF_CAP_SEC") or "").strip() or "60.0")
+    delay = base * (2**attempt_index)
+    return min(cap, delay)
+
+
+def _max_transport_split_depth() -> int:
+    return _env_non_negative_int("ANGLES_TRANSPORT_SPLIT_MAX_DEPTH", 24)
+
+
+def _min_chars_to_split_segment() -> int:
+    return max(500, _env_non_negative_int("ANGLES_MIN_SEGMENT_SPLIT_CHARS", 4000))
+
+
+def _llm_http_timeout() -> float | None:
+    """Seconds for requests.post; None = no limit (slow remote LLMs). Optional ANGLES_LLM_REQUEST_TIMEOUT."""
+    raw = (get_env("ANGLES_LLM_REQUEST_TIMEOUT") or "").strip()
+    if not raw:
+        return None
+    return float(raw)
+
+
+def _chat_payload(messages: List[Dict[str, str]]) -> dict[str, Any]:
+    return {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_RESPONSE_TOKENS,
+    }
+
+
+def _chat_headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {LM_STUDIO_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+
+def _assistant_content_from_json(data: dict[str, Any]) -> str:
+    choices = data.get("choices")
+    if not choices:
+        raise ValueError("LM Studio returned no choices")
+    return str(choices[0]["message"]["content"])
+
+
+def _log_llm_retry(attempt: int, *, reason: str, wait_sec: float) -> None:
+    _LOG.info(
+        "angles_llm_retry",
+        extra={
+            "event": "angles.llm_retry",
+            "tags": [TAG_WORKFLOW],
+            "component": "angle_runner",
+            "attempt": attempt,
+            "reason": reason,
+            "wait_sec": round(wait_sec, 3),
+        },
+    )
+
+
+def _retry_after_delay(attempt_idx: int, *, reason: str) -> None:
+    wait = _llm_retry_backoff_sec(attempt_idx)
+    _log_llm_retry(attempt_idx + 1, reason=reason, wait_sec=wait)
+    time.sleep(wait)
+
+
+def _http_error_should_retry(exc: HTTPError) -> bool:
+    if exc.response is None:
+        return True
+    return exc.response.status_code in _TRANSIENT_HTTP_STATUSES
+
+
+def _http_retry_reason(exc: HTTPError) -> str:
+    if exc.response is None:
+        return "http_error_no_response"
+    return f"http_{exc.response.status_code}"
+
+
+def _assistant_from_chat_response(response: requests.Response) -> str | None:
+    if response.status_code in _TRANSIENT_HTTP_STATUSES:
+        return None
+    response.raise_for_status()
+    return _assistant_content_from_json(response.json())
+
+
+def _retry_or_raise_http(attempt: int, exc: HTTPError) -> None:
+    if not _http_error_should_retry(exc):
+        raise exc
+    _retry_after_delay(attempt, reason=_http_retry_reason(exc))
+
+
+def _run_post_retry_loop(
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    timeout: float | None,
+) -> str:
+    attempts = _llm_max_attempts()
+    last_err: BaseException | None = None
+    for attempt in range(attempts):
+        try:
+            response = requests.post(
+                CHAT_ENDPOINT,
+                json=payload,
+                headers=headers,
+                timeout=timeout,
+            )
+            text = _assistant_from_chat_response(response)
+            if text is not None:
+                return text
+            _retry_after_delay(attempt, reason=f"http_{response.status_code}")
+        except HTTPError as exc:
+            last_err = exc
+            _retry_or_raise_http(attempt, exc)
+        except _CONNECTIVITY_EXCEPTIONS as exc:
+            last_err = exc
+            _retry_after_delay(attempt, reason=type(exc).__name__)
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("angles LLM request failed with no exception recorded")
+
+
+def _post_chat_response_or_retry(messages: List[Dict[str, str]]) -> str:
+    return _run_post_retry_loop(
+        _chat_payload(messages),
+        _chat_headers(),
+        _llm_http_timeout(),
+    )
 
 
 def _chunk_text_at_boundaries(text: str, max_chars: int) -> List[str]:
@@ -204,32 +378,7 @@ def _schema_errors(data: Any) -> List[str]:
 
 
 def _call_llm_with_messages(messages: List[Dict[str, str]]) -> str:
-    payload = {
-        "model": MODEL_NAME,
-        "messages": messages,
-        "temperature": TEMPERATURE,
-        "max_tokens": MAX_RESPONSE_TOKENS,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {LM_STUDIO_API_TOKEN}",
-        "Content-Type": "application/json",
-    }
-
-    response = requests.post(
-        CHAT_ENDPOINT,
-        json=payload,
-        headers=headers,
-        timeout=REQUEST_TIMEOUT,
-    )
-    response.raise_for_status()
-    data = response.json()
-
-    choices = data.get("choices")
-    if not choices:
-        raise ValueError("LM Studio returned no choices")
-
-    return choices[0]["message"]["content"]
+    return _post_chat_response_or_retry(messages)
 
 
 def _call_llm(prompt_text: str) -> str:
@@ -241,32 +390,95 @@ def _call_llm(prompt_text: str) -> str:
     )
 
 
+def _transport_sub_batches(batch: List[str]) -> List[List[str]]:
+    if len(batch) > 1:
+        mid = max(1, len(batch) // 2)
+        return [batch[:mid], batch[mid:]]
+    text = batch[0]
+    min_len = _min_chars_to_split_segment()
+    if len(text) <= min_len:
+        raise ValueError(
+            f"segment too small to split further (len={len(text)} max={min_len})"
+        )
+    target = max(min_len, (len(text) + 1) // 2)
+    parts = _chunk_text_at_boundaries(text, target)
+    if len(parts) < 2:
+        raise ValueError("chunking produced a single segment")
+    return [[p] for p in parts]
+
+
+def _run_context_window_split(
+    batch: List[str], batch_index: int
+) -> List[Dict[str, str]]:
+    combined = SEPARATOR.join(batch)
+    parts = chunk_text_equal_overlap(
+        combined,
+        CONTEXT_RETRY_NUM_CHUNKS,
+        CONTEXT_RETRY_OVERLAP_CHARS,
+    )
+    merged: List[Dict[str, str]] = []
+    for j, part in enumerate(parts, start=1):
+        merged.extend(
+            _run_angle_llm_on_batch([part], j, len(parts), _depth=0)
+        )
+    return merged
+
+
+def _merge_transport_splits(
+    sub_batches: List[List[str]],
+    batch_index: int,
+    batch_total: int,
+    depth: int,
+) -> List[Dict[str, str]]:
+    _LOG.info(
+        "angles_transport_split",
+        extra={
+            "event": "angles.transport_split",
+            "tags": [TAG_WORKFLOW],
+            "component": "angle_runner",
+            "depth": depth,
+            "sub_batches": len(sub_batches),
+        },
+    )
+    merged: List[Dict[str, str]] = []
+    for sub in sub_batches:
+        merged.extend(
+            _run_angle_llm_on_batch(
+                sub,
+                batch_index,
+                batch_total,
+                _depth=depth + 1,
+            )
+        )
+    return merged
+
+
 def _run_angle_llm_on_batch(
     batch: List[str],
     batch_index: int,
     batch_total: int,
+    *,
+    _depth: int = 0,
 ) -> List[Dict[str, str]]:
     user_prompt = _build_user_prompt(batch)
     _log_prompt(user_prompt, batch_index, batch_total, label="angles")
     try:
         answer = _call_llm(user_prompt)
         return _parse_or_repair(answer)
-    except requests.HTTPError as e:
+    except HTTPError as e:
         if e.response is None or not _is_context_window_error(e.response):
             raise
-        combined = SEPARATOR.join(batch)
-        parts = chunk_text_equal_overlap(
-            combined,
-            CONTEXT_RETRY_NUM_CHUNKS,
-            CONTEXT_RETRY_OVERLAP_CHARS,
+        return _run_context_window_split(batch, batch_index)
+    except RequestException as exc:
+        if _depth >= _max_transport_split_depth():
+            raise
+        try:
+            sub_batches = _transport_sub_batches(batch)
+        except ValueError:
+            raise exc
+        return _merge_transport_splits(
+            sub_batches, batch_index, batch_total, _depth
         )
-        merged: List[Dict[str, str]] = []
-        for j, part in enumerate(parts, start=1):
-            up = _build_user_prompt([part])
-            _log_prompt(up, j, len(parts), label=f"angles_ctx_split_{batch_index}")
-            answer = _call_llm(up)
-            merged.extend(_parse_or_repair(answer))
-        return merged
 
 
 def _repair_json(raw_text: str, error_message: str, attempt: int) -> str:
@@ -345,7 +557,7 @@ def analyze_angles_from_texts(texts: List[str], *, use_cache: bool = True) -> Li
         if not segments:
             continue
 
-        batches = _make_batches(segments, MAX_CHARS_PER_PROMPT)
+        batches = _make_batches(segments, _effective_max_chars_per_prompt())
         text_responses: List[Dict[str, str]] = []
 
         for idx, batch in enumerate(batches, start=1):

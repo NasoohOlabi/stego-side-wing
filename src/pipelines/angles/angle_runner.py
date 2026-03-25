@@ -21,6 +21,7 @@ from requests.exceptions import (
 from infrastructure.cache import deterministic_hash_sha256
 from infrastructure.config import get_env, get_lm_studio_url
 from infrastructure.json_logging import TAG_WORKFLOW
+from workflows.cache_context import get_angles_cache_dir
 from workflows.utils.text_utils import chunk_text_equal_overlap
 
 _LOG = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ REPO_ROOT = ANGLES_DIR.parent.parent
 SYSTEM_PROMPT_PATH = ANGLES_DIR / "systemPrompt.txt"
 USER_PROMPT_PATH = ANGLES_DIR / "userPrompt.txt"
 
-ANGLES_CACHE_DIR = REPO_ROOT / "datasets" / "angles_cache"
+ANGLES_CACHE_DIR = REPO_ROOT / "datasets" / "angles_cache"  # default; live paths use get_angles_cache_dir()
 
 SYSTEM_PROMPT = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 USER_PROMPT_TEMPLATE = USER_PROMPT_PATH.read_text(encoding="utf-8")
@@ -532,15 +533,15 @@ def _parse_or_repair(raw_text: str) -> List[Dict[str, str]]:
 def analyze_angles_from_texts(texts: List[str], *, use_cache: bool = True) -> List[Dict[str, str]]:
     all_responses: List[Dict[str, str]] = []
 
-    # Ensure cache directory exists
-    ANGLES_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_root = get_angles_cache_dir()
+    cache_root.mkdir(parents=True, exist_ok=True)
 
     for text in texts:
         if not text:
             continue
 
         cache_key = deterministic_hash_sha256(text)
-        cache_file = ANGLES_CACHE_DIR / f"{cache_key}.json"
+        cache_file = cache_root / f"{cache_key}.json"
 
         if use_cache and cache_file.exists():
             _emit_status(f"[angles] cache hit {cache_key[:10]}...")

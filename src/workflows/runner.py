@@ -1,12 +1,15 @@
 """Workflow runner for orchestrating pipeline execution."""
 import json
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from uuid import uuid4
 
 from loguru import logger
 
 from workflows.adapters.backend_api import BackendAPIAdapter
+from workflows.config import WorkflowConfig, isolated_workflow_config
 from workflows.pipelines.data_load import DataLoadPipeline
 from workflows.pipelines.decode import DecodePipeline
 from workflows.pipelines.gen_angles import GenAnglesPipeline
@@ -17,6 +20,134 @@ from workflows.pipelines.stego import StegoPipeline
 from workflows.utils.protocol_utils import stable_hash
 
 _LOG = logger.bind(component="WorkflowRunner")
+
+
+def _isolated_workflow_config_for_side(base: Path, side: str) -> WorkflowConfig:
+    root = (base / side).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return WorkflowConfig(
+        url_cache_dir=root / "url_cache",
+        research_terms_db_path=root / "research_terms_cache.db",
+        angles_cache_dir=root / "angles_cache",
+    )
+
+
+def _is_receiver_data_load_failure(exc: Exception) -> bool:
+    """True when receiver rebuild failed because URL/HTML fetch did not yield usable body."""
+    return "Receiver data-load failed" in str(exc)
+
+
+def _receiver_post_from_stego(stego_result: Dict[str, Any], sender_user_id: str) -> Dict[str, Any]:
+    """Attach successful stego output as a single comment from ``sender_user_id``."""
+    if not stego_result.get("succeeded"):
+        raise ValueError("stego did not succeed; cannot build receiver post")
+    post = dict(stego_result.get("post") or {})
+    stego_text = stego_result.get("stego_text")
+    if not isinstance(stego_text, str) or not stego_text.strip():
+        raise ValueError("stego_text missing or empty")
+    pid = str(post.get("id") or "unknown")
+    post["comments"] = [
+        {
+            "id": f"sim-stego-{pid}",
+            "author": sender_user_id.strip(),
+            "body": stego_text.strip(),
+            "replies": [],
+        }
+    ]
+    return post
+
+
+def _live_sim_attempt_root(base: Path, attempt_idx: int, multi_post: bool) -> Path:
+    root = (base / f"attempt_{attempt_idx:03d}") if multi_post else base
+    if multi_post:
+        root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _live_sim_simulation_meta(
+    base: Path, attempt_idx: int, sender_cfg: WorkflowConfig, receiver_cfg: WorkflowConfig
+) -> Dict[str, Any]:
+    return {
+        "root": str(base),
+        "attempt_index": attempt_idx,
+        "sender_side": str(sender_cfg.url_cache_dir.parent),
+        "receiver_side": str(receiver_cfg.url_cache_dir.parent),
+    }
+
+
+def _run_stego_receiver_live_sim_once(
+    *,
+    uid: str,
+    post_id: Optional[str],
+    stego_list_offset: int,
+    payload: Optional[str],
+    tag: Optional[str],
+    base: Path,
+    attempt_idx: int,
+    multi_post: bool,
+    allow_fallback: bool,
+    compressed_full: Optional[str],
+    max_padding_bits: int,
+    on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+) -> Dict[str, Any]:
+    """Single stego + receiver pair; may raise :exc:`RuntimeError` from receiver."""
+    attempt_root = _live_sim_attempt_root(base, attempt_idx, multi_post)
+    sender_cfg = _isolated_workflow_config_for_side(attempt_root, "sender")
+    receiver_cfg = _isolated_workflow_config_for_side(attempt_root, "receiver")
+    sim_meta = _live_sim_simulation_meta(base, attempt_idx, sender_cfg, receiver_cfg)
+
+    with isolated_workflow_config(sender_cfg):
+        sender_runner = WorkflowRunner()
+        stego_out = sender_runner.run_stego(
+            post_id=post_id,
+            payload=payload,
+            tag=tag,
+            list_offset=stego_list_offset,
+            on_progress=on_progress,
+        )
+
+    if not stego_out.get("succeeded"):
+        return {
+            "succeeded": False,
+            "stage": "stego",
+            "stego": stego_out,
+            "receiver": None,
+            "simulation": sim_meta,
+        }
+
+    try:
+        recv_post = _receiver_post_from_stego(stego_out, uid)
+    except ValueError as exc:
+        return {
+            "succeeded": False,
+            "stage": "build_receiver_post",
+            "error": str(exc),
+            "stego": stego_out,
+            "receiver": None,
+            "simulation": sim_meta,
+        }
+
+    with isolated_workflow_config(receiver_cfg):
+        rr = WorkflowRunner()
+        recv_out = rr.run_receiver(
+            recv_post,
+            uid,
+            use_fetch_cache=True,
+            use_terms_cache=True,
+            persist_terms_cache=True,
+            use_fetch_cache_research=True,
+            allow_fallback=allow_fallback,
+            compressed_full=compressed_full,
+            max_padding_bits=max_padding_bits,
+            on_progress=on_progress,
+        )
+
+    return {
+        "succeeded": True,
+        "stego": stego_out,
+        "receiver": recv_out,
+        "simulation": sim_meta,
+    }
 
 
 def _normalized_angles_from_raw(raw: List[Dict[str, Any]]) -> List[Dict[str, str]]:
@@ -495,6 +626,97 @@ class WorkflowRunner:
             {"stage": "receiver", "succeeded": True, "post_id": post.get("id")},
         )
         return result
+
+    def run_stego_receiver_live_sim(
+        self,
+        sender_user_id: str,
+        *,
+        post_id: Optional[str] = None,
+        payload: Optional[str] = None,
+        tag: Optional[str] = None,
+        list_offset: int = 1,
+        simulation_root: Optional[Path] = None,
+        max_post_attempts: int = 25,
+        allow_fallback: bool = False,
+        compressed_full: Optional[str] = None,
+        max_padding_bits: int = 256,
+        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        """Run stego then receiver with disjoint on-disk caches (cold receiver).
+
+        When ``post_id`` is omitted, advances ``list_offset`` on receiver data-load
+        HTML failures (and on stego failure) up to ``max_post_attempts`` tries.
+        """
+        uid = sender_user_id.strip()
+        if not uid:
+            raise ValueError("'sender_user_id' must be non-empty")
+
+        base = simulation_root or Path(tempfile.mkdtemp(prefix=f"live_sim_{uuid4().hex}_"))
+        base = base.resolve()
+        multi = post_id is None
+        attempts = max(1, max_post_attempts) if multi else 1
+        skipped: List[Dict[str, Any]] = []
+
+        for attempt_idx in range(attempts):
+            stego_off = list_offset + attempt_idx
+            try:
+                one = _run_stego_receiver_live_sim_once(
+                    uid=uid,
+                    post_id=post_id,
+                    stego_list_offset=stego_off if multi else list_offset,
+                    payload=payload,
+                    tag=tag,
+                    base=base,
+                    attempt_idx=attempt_idx,
+                    multi_post=multi,
+                    allow_fallback=allow_fallback,
+                    compressed_full=compressed_full,
+                    max_padding_bits=max_padding_bits,
+                    on_progress=on_progress,
+                )
+            except RuntimeError as exc:
+                if multi and _is_receiver_data_load_failure(exc):
+                    _LOG.info(
+                        "live_sim_skip_receiver_data_load attempt={} offset={} err={}",
+                        attempt_idx,
+                        stego_off,
+                        str(exc)[:200],
+                    )
+                    skipped.append(
+                        {
+                            "stage": "receiver_data_load",
+                            "list_offset": stego_off,
+                            "error": str(exc),
+                        }
+                    )
+                    continue
+                raise
+
+            one["skipped_posts"] = list(skipped)
+            if one.get("succeeded"):
+                return one
+
+            if multi:
+                skipped.append(
+                    {
+                        "stage": "stego",
+                        "list_offset": stego_off,
+                        "stego": one.get("stego"),
+                    }
+                )
+                continue
+
+            return one
+
+        return {
+            "succeeded": False,
+            "stage": "exhausted_attempts",
+            "error": "No post succeeded within max_post_attempts",
+            "stego": None,
+            "receiver": None,
+            "simulation": {"root": str(base)},
+            "skipped_posts": skipped,
+        }
 
     def run_gen_search_terms(
         self,

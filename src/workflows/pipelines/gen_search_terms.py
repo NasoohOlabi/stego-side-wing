@@ -24,7 +24,7 @@ class GenSearchTermsPipeline:
     
     def _init_cache_db(self):
         """Initialize SQLite cache database (replacing n8n datatable)."""
-        cache_db = self.config.posts_directory.parent / "research_terms_cache.db"
+        cache_db = self.config.research_terms_db_path
         conn = sqlite3.connect(cache_db)
         conn.execute(
             """

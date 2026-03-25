@@ -28,6 +28,20 @@ def _fetch_attempts_total() -> int:
     return 1 + _RESEARCH_FETCH_RETRIES
 
 
+def _is_likely_google_quota_error(exc: BaseException) -> bool:
+    s = str(exc).lower()
+    needles = (
+        "quota",
+        "rate limit",
+        "429",
+        "resource exhausted",
+        "user rate limit",
+        "limit exceeded",
+        "keys failed",
+    )
+    return any(n in s for n in needles)
+
+
 class ResearchPipeline:
     """Pipeline for researching posts."""
     
@@ -112,6 +126,33 @@ class ResearchPipeline:
             "snippet": result.get("snippet", ""),
             "snippet_hash": stable_hash(result.get("snippet", "")),
         }
+
+    def _web_search_google_or_bing(
+        self, query: str, first: int, count: int, post_id: str
+    ) -> Dict[str, Any]:
+        """Google CSE first; on quota-style failures try Bing (ScrapingDog) if configured."""
+        from services.search_service import search_bing
+
+        try:
+            return self.backend.google_search(query=query, first=first, count=count)
+        except Exception as e:
+            if not _is_likely_google_quota_error(e):
+                raise
+            logger.warning(
+                "research_google_bing_fallback",
+                extra={
+                    "event": "research",
+                    "post_id": post_id,
+                    "term_preview": _term_preview(query),
+                },
+            )
+            try:
+                return search_bing(query=query, first=first, count=count)
+            except Exception as e2:
+                raise RuntimeError(
+                    f"Google search failed for post {post_id} and term {query!r}; "
+                    f"Bing fallback failed: {e2}"
+                ) from e2
 
     def preview_post(
         self,
@@ -205,12 +246,14 @@ class ResearchPipeline:
                 },
             )
             try:
-                search_response = self.backend.google_search(query=term, first=1, count=10)
+                search_response = self._web_search_google_or_bing(
+                    query=term, first=1, count=10, post_id=str(post_id)
+                )
                 raw_results = search_response.get("results", [])
             except Exception as e:
-                logger.exception("google search failed post_id=%s term=%s", post_id, term)
+                logger.exception("web search failed post_id=%s term=%s", post_id, term)
                 raise RuntimeError(
-                    f"Google search failed for post {post_id} and term '{term}': {e}"
+                    f"Web search failed for post {post_id} and term '{term}': {e}"
                 ) from e
             logger.info(
                 "research_google_query_done",

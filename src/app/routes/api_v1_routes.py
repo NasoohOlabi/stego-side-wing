@@ -6,6 +6,7 @@ import logging
 import queue
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from flask import Blueprint, Response, current_app, request, stream_with_context
@@ -53,6 +54,7 @@ WORKFLOW_COMMANDS = (
     "stego",
     "decode",
     "receiver",
+    "stego-receiver-live",
     "gen-terms",
     "full",
 )
@@ -965,6 +967,77 @@ def wf_receiver() -> Any:
                 use_terms_cache=use_terms_cache,
                 persist_terms_cache=persist_terms_cache,
                 use_fetch_cache_research=use_fetch_cache_research,
+                allow_fallback=allow_fallback,
+                compressed_full=compressed_full,
+                max_padding_bits=max_padding_bits,
+            ),
+        )
+        return ok(data)
+    except Exception as exc:
+        return fail("Workflow execution failed", status=500, details=str(exc))
+
+
+@bp.route("/workflows/stego-receiver-live", methods=["POST"])
+def wf_stego_receiver_live() -> Any:
+    """Run stego then receiver with disjoint sender/receiver disk caches (live-like)."""
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    sender_user_id, err = _required_body_str(body, "sender_user_id")
+    if err:
+        return err
+    assert sender_user_id is not None
+    post_id, err = _optional_body_str(body, "post_id")
+    if err:
+        return err
+    payload, err = _optional_payload_field(body, "payload")
+    if err:
+        return err
+    tag, err = _optional_body_str(body, "tag")
+    if err:
+        return err
+    list_offset = body.get("list_offset", 1)
+    try:
+        parsed_list_offset = int(list_offset)
+    except (TypeError, ValueError):
+        return fail("'list_offset' must be an integer", status=400)
+    sim_root_raw, err = _optional_body_str(body, "simulation_root")
+    if err:
+        return err
+    simulation_root = Path(sim_root_raw).resolve() if sim_root_raw else None
+    compressed_full, err = _optional_body_str(body, "compressed_bitstring")
+    if err:
+        return err
+    allow_fallback, err = _body_bool(body, "allow_fallback", default=False)
+    if err:
+        return err
+    max_pad = body.get("max_padding_bits", 256)
+    try:
+        max_padding_bits = int(max_pad)
+    except (TypeError, ValueError):
+        return fail("'max_padding_bits' must be an integer when provided", status=400)
+    if max_padding_bits < 0:
+        return fail("'max_padding_bits' must be non-negative", status=400)
+    max_post_attempts = body.get("max_post_attempts", 25)
+    try:
+        parsed_max_post_attempts = int(max_post_attempts)
+    except (TypeError, ValueError):
+        return fail("'max_post_attempts' must be an integer when provided", status=400)
+    if parsed_max_post_attempts < 1:
+        return fail("'max_post_attempts' must be at least 1", status=400)
+
+    try:
+        data = _sync_workflow(
+            "stego-receiver-live",
+            lambda: runner.run_stego_receiver_live_sim(
+                sender_user_id,
+                post_id=post_id,
+                payload=payload,
+                tag=tag,
+                list_offset=parsed_list_offset,
+                simulation_root=simulation_root,
+                max_post_attempts=parsed_max_post_attempts,
                 allow_fallback=allow_fallback,
                 compressed_full=compressed_full,
                 max_padding_bits=max_padding_bits,

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from pipelines.angles.angle_runner import analyze_angles_from_texts
+from pipelines.angles.angle_runner import analyze_angles_from_texts, angles_model_name
 
 
 def test_analyze_angles_retries_read_timeout_then_ok(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,3 +58,11 @@ def test_analyze_angles_connection_error_splits_and_completes(
     rows = analyze_angles_from_texts([chunk, chunk], use_cache=False)
     assert len(rows) >= 1
     assert rows[0]["category"] == "c"
+
+
+def test_angles_model_name_env_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANGLES_MODEL", raising=False)
+    monkeypatch.setenv("MODEL", "mistral-test")
+    assert angles_model_name() == "mistral-test"
+    monkeypatch.setenv("ANGLES_MODEL", "override-model")
+    assert angles_model_name() == "override-model"

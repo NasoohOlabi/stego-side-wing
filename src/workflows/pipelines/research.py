@@ -28,7 +28,7 @@ def _fetch_attempts_total() -> int:
     return 1 + _RESEARCH_FETCH_RETRIES
 
 
-def _is_likely_google_quota_error(exc: BaseException) -> bool:
+def is_likely_google_quota_error(exc: BaseException) -> bool:
     s = str(exc).lower()
     needles = (
         "quota",
@@ -136,7 +136,7 @@ class ResearchPipeline:
         try:
             return self.backend.google_search(query=query, first=first, count=count)
         except Exception as e:
-            if not _is_likely_google_quota_error(e):
+            if not is_likely_google_quota_error(e):
                 raise
             logger.warning(
                 "research_google_bing_fallback",

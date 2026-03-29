@@ -78,6 +78,7 @@ def get_lm_studio_url(default: Optional[str] = None) -> str:
 
 # Common configuration constants
 POSTS_DIRECTORY = "datasets/news_cleaned"
+METRICS_DIR = REPO_ROOT / "metrics"
 
 STEPS = {
     "filter-url-unresolved": {

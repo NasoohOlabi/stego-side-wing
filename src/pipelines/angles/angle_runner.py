@@ -41,7 +41,19 @@ LM_STUDIO_URL = get_lm_studio_url()
 LM_STUDIO_API_TOKEN = get_env("LM_STUDIO_API_TOKEN", "lm-studio") or "lm-studio"
 CHAT_ENDPOINT = f"{LM_STUDIO_URL.rstrip('/')}/chat/completions"
 
-MODEL_NAME = "openai/gpt-oss-20b"
+
+def angles_model_name() -> str:
+    """LLM id for angles chat/completions; ANGLES_MODEL overrides MODEL."""
+    explicit = (get_env("ANGLES_MODEL") or "").strip()
+    if explicit:
+        return explicit
+    fallback = (get_env("MODEL") or "").strip()
+    if fallback:
+        return fallback
+    return "openai/gpt-oss-20b"
+
+
+MODEL_NAME = angles_model_name()
 MAX_RESPONSE_TOKENS = 8192
 TEMPERATURE = 0
 
@@ -116,18 +128,49 @@ def _llm_http_timeout() -> float | None:
 
 def _chat_payload(messages: List[Dict[str, str]]) -> dict[str, Any]:
     return {
-        "model": MODEL_NAME,
+        "model": angles_model_name(),
         "messages": messages,
         "temperature": TEMPERATURE,
         "max_tokens": MAX_RESPONSE_TOKENS,
     }
 
 
+def _chat_endpoint_for_log() -> str:
+    """Host + path only (no secrets); for structured logs."""
+    return CHAT_ENDPOINT.split("?", 1)[0]
+
+
 def _chat_headers() -> dict[str, str]:
-    return {
+    h: dict[str, str] = {
         "Authorization": f"Bearer {LM_STUDIO_API_TOKEN}",
         "Content-Type": "application/json",
     }
+    if "ngrok" in CHAT_ENDPOINT.lower():
+        h["ngrok-skip-browser-warning"] = "true"
+    return h
+
+
+def _safe_response_body_snippet(response: requests.Response, limit: int = 400) -> str:
+    try:
+        text = response.text or ""
+        return text[:limit] + ("..." if len(text) > limit else "")
+    except Exception:
+        return ""
+
+
+def _log_angles_llm_http_error(response: requests.Response) -> None:
+    _LOG.error(
+        "angles_llm_http_error",
+        extra={
+            "event": "angles.llm_http_error",
+            "tags": [TAG_WORKFLOW],
+            "component": "angle_runner",
+            "http_status": response.status_code,
+            "chat_endpoint": _chat_endpoint_for_log(),
+            "model": angles_model_name(),
+            "body_snippet": _safe_response_body_snippet(response),
+        },
+    )
 
 
 def _assistant_content_from_json(data: dict[str, Any]) -> str:
@@ -172,6 +215,8 @@ def _http_retry_reason(exc: HTTPError) -> str:
 def _assistant_from_chat_response(response: requests.Response) -> str | None:
     if response.status_code in _TRANSIENT_HTTP_STATUSES:
         return None
+    if response.status_code >= 400:
+        _log_angles_llm_http_error(response)
     response.raise_for_status()
     return _assistant_content_from_json(response.json())
 
@@ -180,6 +225,21 @@ def _retry_or_raise_http(attempt: int, exc: HTTPError) -> None:
     if not _http_error_should_retry(exc):
         raise exc
     _retry_after_delay(attempt, reason=_http_retry_reason(exc))
+
+
+def _log_angles_llm_attempt_start(attempt_one_based: int, attempts_max: int) -> None:
+    _LOG.info(
+        "angles_llm_request",
+        extra={
+            "event": "angles.llm_request",
+            "tags": [TAG_WORKFLOW],
+            "component": "angle_runner",
+            "attempt": attempt_one_based,
+            "attempts_max": attempts_max,
+            "model": angles_model_name(),
+            "chat_endpoint": _chat_endpoint_for_log(),
+        },
+    )
 
 
 def _run_post_retry_loop(
@@ -191,6 +251,7 @@ def _run_post_retry_loop(
     last_err: BaseException | None = None
     for attempt in range(attempts):
         try:
+            _log_angles_llm_attempt_start(attempt + 1, attempts)
             response = requests.post(
                 CHAT_ENDPOINT,
                 json=payload,

@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from infrastructure.config import STEPS
 from infrastructure.event_loop import run_async
+from integrations.jina_reader import try_jina_reader_result
 from pydantic import BaseModel, Field
 
 # Import pipeline functions
@@ -116,13 +117,40 @@ def _crawl4ai_extract_ok(result: Any) -> bool:
     return True
 
 
+def _fetch_url_after_cache_miss(url: str, normalized_url: str) -> Any:
+    """Try Jina Reader first; on failure, crawl4ai with LLM extraction."""
+    jina_result = try_jina_reader_result(normalized_url)
+    if jina_result is not None and _crawl4ai_extract_ok(jina_result):
+        logger.info(
+            "url_fetch_jina_ok",
+            extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
+        )
+        return jina_result
+
+    logger.info(
+        "url_fetch_jina_miss_fallback_crawl4ai",
+        extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
+    )
+    return run_async(
+        extract_structured_data(
+            url=url,
+            schema=ArticleData,
+            model_name="mistral-nemo-instruct-2407-abliterated",
+            instruction=(
+                "Analyze the main article on this page. Ignore nav links and ads. "
+                "extract all the main points, tangents and unique ideas from the article."
+            ),
+        )
+    )
+
+
 def fetch_url_content_crawl4ai(url: str) -> Dict:
     """
-    Fetch URL content using crawl4ai with caching.
-    
+    Fetch URL content with caching: Jina Reader first, then crawl4ai + LLM.
+
     Args:
         url: URL to fetch
-        
+
     Returns:
         Dict with fetched content or cached result
     """
@@ -172,15 +200,7 @@ def fetch_url_content_crawl4ai(url: str) -> Dict:
         extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
     )
 
-    # Use run_async to ensure all async operations run in the persistent event loop
-    result = run_async(
-        extract_structured_data(
-            url=url,
-            schema=ArticleData,
-            model_name="mistral-nemo-instruct-2407-abliterated",
-            instruction="Analyze the main article on this page. Ignore nav links and ads. extract all the main points, tangents and unique ideas from the article.",
-        )
-    )
+    result = _fetch_url_after_cache_miss(url, normalized_url)
 
     # Prepare API response
     api_response = {"message": "Processed", "result": result}

@@ -40,3 +40,28 @@ def test_stego_receiver_live_ok(client, monkeypatch):
     body = r.get_json()
     assert body["ok"] is True
     assert body["data"]["receiver"]["payload"] == "recovered"
+
+
+def test_stego_receiver_live_stream_emits_result(client, monkeypatch):
+    from app.routes import api_v1_routes
+
+    monkeypatch.setattr(
+        api_v1_routes.runner,
+        "run_stego_receiver_live_sim",
+        lambda sender_user_id, **kwargs: {
+            "succeeded": True,
+            "stego": {"succeeded": True},
+            "receiver": {"payload": "recovered"},
+            "simulation": {"root": "/tmp"},
+        },
+    )
+
+    r = client.post(
+        "/api/v1/workflows/stego-receiver-live",
+        json={"sender_user_id": "alice", "stream": True},
+    )
+    assert r.status_code == 200
+    assert "text/event-stream" in (r.headers.get("Content-Type") or "")
+    raw = r.data.decode("utf-8", errors="replace")
+    assert "event: result" in raw
+    assert "recovered" in raw

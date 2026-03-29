@@ -12,7 +12,7 @@ from workflows.utils.text_utils import (
     flatten_comments,
     parse_json_array_response,
 )
-from pipelines.angles.angle_runner import MODEL_NAME as ANGLES_MODEL_NAME
+from pipelines.angles.angle_runner import angles_model_name
 from pipelines.angles.angle_runner import SYSTEM_PROMPT as ANGLES_SYSTEM_PROMPT
 from pipelines.angles.angle_runner import TEMPERATURE as ANGLES_TEMPERATURE
 from pipelines.angles.angle_runner import USER_PROMPT_TEMPLATE as ANGLES_USER_PROMPT_TEMPLATE
@@ -62,7 +62,7 @@ class GenAnglesPipeline:
                 for idx, text in enumerate(dictionary)
             ],
             "provider": "lm_studio",
-            "model": ANGLES_MODEL_NAME,
+            "model": angles_model_name(),
             "temperature": ANGLES_TEMPERATURE,
             "system_prompt_hash": stable_hash(ANGLES_SYSTEM_PROMPT),
             "user_prompt_template_hash": stable_hash(ANGLES_USER_PROMPT_TEMPLATE),

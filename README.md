@@ -32,6 +32,8 @@ uv run python src/API.py --dev --host 127.0.0.1 --port 5001
 
 You can also enable dev mode with `API_DEBUG=1`.
 
+HTTP contract for `/api/v1/*` (workflows, tools, metrics, state): **[docs/api-spec.md](docs/api-spec.md)**.
+
 ## Run workflow CLI
 
 ```bash
@@ -39,6 +41,13 @@ uv run python src/scripts/workflow_cli.py -h
 ```
 
 `main.py` is a wrapper that forwards to this CLI.
+
+## Metrics (perplexity, KL/JSD)
+
+- **Reports directory:** `<repo>/metrics` — timestamped JSON files from perplexity and divergence runs.
+- **CLI (repo root):** `uv run python scripts/avg_perplexity.py` and `uv run python scripts/avg_kld.py` (`-h` for options). Defaults write under `metrics/`.
+- **API:** `POST /api/v1/tools/metrics/perplexity`, `POST /api/v1/tools/metrics/divergence`, `GET /api/v1/tools/metrics/history` — see **[docs/api-spec.md](docs/api-spec.md)** (Tools → metrics). `GET /api/v1/state/paths` includes `metrics.dir`.
+- **Note:** Perplexity evaluation needs `torch` and `transformers` installed in the venv (optional extras; divergence does not).
 
 ## Run tests
 

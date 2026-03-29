@@ -35,6 +35,9 @@ These endpoints support **reproducibility**, **cache vs cacheless** comparison, 
 - **`POST /workflows/double-process-new-post`** — Picks one new post from the data-load queue, runs the three-stage pipeline **twice** (warm caches vs no caches), **writes** artifacts each time, and reports per-stage hash match between passes.
 - **`POST /workflows/batch-angles-determinism`** — For each `post_id`, runs angle extraction **twice** with angles disk cache disabled and compares normalized angle lists; measures same-host repeatability, not cross-machine parity.
 - **Protocol previews** (`POST /tools/protocol/data-load-preview`, `research-preview`, `angles-preview`, `gen-terms`) — Live protocol steps with controlled persistence for inspecting behavior before full pipeline runs.
+- **`POST /workflows/gen-angles`** — Batch angle generation over the `angles-step` queue (`count` / `offset`); persists via `GenAnglesPipeline.process_posts`.
+- **`POST /workflows/receiver`** — Decode path: rebuilds context (**data-load → research → gen-angles**) then decodes the sender’s stego comment for a supplied post JSON.
+- **`POST /workflows/stego-receiver-live`** — Runs **stego** then **receiver** with isolated sender/receiver disk caches; receiver rebuild still runs **gen-angles** as part of context rebuild.
 
 ### Text and payload fields
 
@@ -43,6 +46,13 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
 - **Embedding / decoding:** optional `payload` on stego and full workflows (string or JSON value **coerced to string**); `stego_text` plus `angles` on decode.
 - **Post text overrides:** `post_title`, `post_text`, `post_url` on `gen-terms` and protocol tools where listed.
 - **Tools:** `text` on `POST /tools/semantic/search`; `needle` and `haystack` (string array) on `POST /tools/semantic/needle`; `texts` (string array) on `POST /tools/angles/analyze`.
+
+### Stego metrics (perplexity, KL/JSD)
+
+- **Purpose:** Score stego-bearing texts produced by the pipeline (typically under `output-results`, i.e. `final-step` in [`STEPS`](../src/infrastructure/config.py)) for language-model perplexity and for distributional distance (word unigrams) vs comment baselines.
+- **On disk:** Each run writes a timestamped JSON file under **`metrics/`** at the repository root by default (`perplexity_metrics_<UTC>.json`, `divergence_metrics_<UTC>.json`). The same logic is shared with the CLI scripts [`scripts/avg_perplexity.py`](../scripts/avg_perplexity.py) and [`scripts/avg_kld.py`](../scripts/avg_kld.py) (they add `src/` to `sys.path` and default `--metrics-dir` to that folder).
+- **API vs CLI:** POST endpoints run the same code paths as the scripts; `GET /tools/metrics/history` lists recent report files without loading full JSON bodies.
+- **Dependencies:** Perplexity scoring needs **`torch`** and **`transformers`** (not pinned in the core `pyproject.toml` dependency list); install them in the same venv if you use `POST /tools/metrics/perplexity` or the perplexity script. Divergence metrics use only the standard library plus repo code.
 
 ## Endpoints
 
@@ -57,7 +67,8 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
   - Returns configured pipeline `STEPS` mapping.
 
 - `GET /state/paths`
-  - Returns known state paths (datasets, caches, db files, logs).
+  - Returns known state paths (datasets, caches, db files, logs, **metrics output**).
+  - Includes `metrics.dir`: absolute path to the default metrics report directory (`<repo>/metrics`).
 
 - `GET /state/logs`
   - Returns the configured API JSONL log file size and path.
@@ -112,7 +123,8 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
 
 - `POST /workflows/run`
   - Generic workflow runner.
-  - Body: `command` (`data-load|research|gen-angles|double-process-new-post|validate-post|stego|decode|gen-terms|full`) + same fields as the matching dedicated endpoint.
+  - Body: `command` (string) + the same fields as the matching dedicated `POST /workflows/<name>` route.
+  - **Canonical command list:** `GET /workflows/pipelines` returns `commands` and `endpoints`; keep clients aligned with that list (includes e.g. `receiver`, `stego-receiver-live`, `batch-angles-determinism`).
   - For `command: "stego"`, it uses the same optional/fallback semantics as `POST /workflows/stego` (including optional `payload` as a string or JSON value coerced to string).
   - For `command: "full"`, optional `payload` (string or JSON) is accepted and reported on the run as `payload_provided` in progress events; omit to use defaults where applicable.
   - Streaming:
@@ -128,7 +140,9 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
   - Streaming defaults to SSE; disable via `?stream=0` or `{ "stream": false }`.
 
 - `POST /workflows/gen-angles`
-  - Body: `count?`, `offset?`
+  - Runs batch angle generation for the **`angles-step`** queue: `WorkflowRunner.run_gen_angles` → `GenAnglesPipeline.process_posts` with the given window.
+  - Body: `count?` (default `1`), `offset?` (default `0`)
+  - Response `data`: list of per-post pipeline results (same shape as other batch workflow returns).
   - Streaming defaults to SSE; disable via `?stream=0` or `{ "stream": false }`.
 
 - `POST /workflows/stego`
@@ -149,6 +163,32 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
 
 - `POST /workflows/decode`
   - Body: `stego_text` (string), `angles` (array), `few_shots?` (array)
+  - Streaming defaults to SSE; disable via `?stream=0` or `{ "stream": false }`.
+
+- `POST /workflows/receiver`
+  - Decodes a payload from a **full post JSON** and agreed `sender_user_id` (locates the sender’s stego comment, rebuilds receiver-side context, then decodes).
+  - Body:
+    - `post` (object, required) — post document including `comments` / `angles` as produced for the protocol.
+    - `sender_user_id` (string, required)
+    - `compressed_bitstring?` — optional compressed bitstring override for decode
+    - `allow_fallback?` (bool, default `false`) — passed to gen-angles preview when rebuilding context
+    - `use_fetch_cache?` (bool, default `true`), `use_terms_cache?` (bool, default `true`), `persist_terms_cache?` (bool, default `true`), `use_fetch_cache_research?` (bool, default `true`)
+    - `max_padding_bits?` (int, default `256`, non-negative)
+  - **Note:** Receiver rebuild runs **data-load → research → gen-angles** (`ReceiverPipeline.rebuild_context`) before decode.
+  - Streaming defaults to SSE; disable via `?stream=0` or `{ "stream": false }`.
+
+- `POST /workflows/stego-receiver-live`
+  - **Purpose:** End-to-end **stego** then **receiver** with **disjoint on-disk URL/terms caches** for sender vs receiver (cold-receiver simulation). Uses isolated `WorkflowRunner` instances per side under a temp or user-provided root.
+  - Body:
+    - `sender_user_id` (string, required)
+    - `post_id?` — if omitted, the workflow advances `list_offset` across attempts (see `max_post_attempts`)
+    - `payload?` (string or JSON coerced to string, optional), `tag?`, `list_offset?` (int, default `1`) — same semantics as `POST /workflows/stego` for the sender leg
+    - `simulation_root?` (string, optional) — repo-relative or absolute directory for simulation attempt folders; default is a process temp directory
+    - `compressed_bitstring?` — optional override passed through to receiver decode
+    - `allow_fallback?` (bool, default `false`)
+    - `max_padding_bits?` (int, default `256`, non-negative)
+    - `max_post_attempts?` (int, default `25`, ≥ `1`) — when `post_id` is omitted, number of list-offset tries (skips some fetch/quota failures per runner logic)
+  - Response `data` (success path): `succeeded`, `stego`, `receiver`, `simulation` (paths and attempt metadata), plus `skipped_posts` when multi-post selection is used.
   - Streaming defaults to SSE; disable via `?stream=0` or `{ "stream": false }`.
 
 - `POST /workflows/gen-terms`
@@ -241,6 +281,53 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
 - `POST /tools/angles/analyze`
   - Body: `texts` (string array)
 
+- `POST /tools/metrics/perplexity`
+  - Computes sliding-window **GPT-style perplexity** (causal LM negative log-likelihood) over stego text in each `*.json` under `output_dir`, writes a report JSON under `metrics_dir`, and returns the full report plus the absolute `report_path`.
+  - **Input extraction:** Accepts either a JSON **object** with `stego_text` or `stegoText`, or a JSON **array** whose first element is an object with `stegoText` (same flexibility as [`scripts/avg_perplexity.py`](../scripts/avg_perplexity.py)).
+  - **Body (JSON):**
+    - `output_dir?` — repo-relative directory of pipeline output files (default `output-results`). Must exist and be a directory.
+    - `metrics_dir?` — repo-relative directory for report files (default `<repo>/metrics`). Created if missing.
+    - `model_name?` — Hugging Face causal LM id (default `gpt2`).
+    - `stride?` — sliding window stride in tokens (default `512`, must be ≥ `1`).
+    - `device?` — `auto` | `cpu` | `cuda` (default `auto`).
+  - **Success `data`:** `{ "report": <object>, "report_path": <string> }` — `report` includes `created_at_utc`, `config`, `dataset_summary`, `perplexity_summary`, `per_file_perplexity`.
+  - **Errors:** `400` (invalid args, no usable texts, no valid scores), `404` (`output_dir` missing), `501` (missing `torch` / `transformers`), `500` (other failures).
+  - **Example:**
+    ```bash
+    curl -sS -X POST 'http://127.0.0.1:5001/api/v1/tools/metrics/perplexity' \
+      -H 'Content-Type: application/json' \
+      -d '{"output_dir":"output-results","model_name":"gpt2","device":"cpu"}'
+    ```
+
+- `POST /tools/metrics/divergence`
+  - Computes smoothed word-unigram **KL(stego ∥ baseline)** and **JSD** vs (1) comment text on the **matched post** JSON in `dataset_dir` and (2) a **global** distribution over all comment bodies in `dataset_dir`. Writes `divergence_metrics_<UTC>.json` under `metrics_dir`.
+  - **Input extraction:** Each output file must be a JSON **array** with a first object containing string `stegoText`. Post id for matching is `filename` stem split on `_version_` (first segment), consistent with [`scripts/avg_kld.py`](../scripts/avg_kld.py).
+  - **Body (JSON):**
+    - `output_dir?` (default `output-results`)
+    - `dataset_dir?` — repo-relative post JSON directory (default `datasets/news_cleaned`)
+    - `metrics_dir?` (default `<repo>/metrics`)
+    - `alpha?` — Dirichlet-style smoothing (default `1e-6`, must be > `0`)
+  - **Success `data`:** `{ "report": <object>, "report_path": <string> }` — `report` includes `dataset_summary`, `primary_baseline_matched_post`, `secondary_baseline_global_corpus`.
+  - **Errors:** `400` (invalid args, no usable stego samples), `404` (missing `output_dir` or `dataset_dir`), `500` (other failures).
+  - **Example:**
+    ```bash
+    curl -sS -X POST 'http://127.0.0.1:5001/api/v1/tools/metrics/divergence' \
+      -H 'Content-Type: application/json' \
+      -d '{"output_dir":"output-results","dataset_dir":"datasets/news_cleaned"}'
+    ```
+
+- `GET /tools/metrics/history`
+  - Lists saved metrics report files **newest first** (by filesystem mtime). Does not parse report JSON; use `GET /state/fs/read-json?path=<path>` if you need the full document.
+  - **Query parameters:**
+    - `type` — `all` (default), `perplexity`, or `divergence` (filters by filename pattern).
+    - `limit` — max rows (default `50`, capped at `200`).
+    - `metrics_dir` — optional repo-relative override (default `<repo>/metrics`). If the directory does not exist, `history` is `[]`.
+  - **Success `data`:** `{ "metrics_dir", "type", "limit", "count", "history" }` where each `history[]` item is `{ "kind", "filename", "path", "size_bytes", "updated_at_utc" }` (`path` is repo-relative with forward slashes).
+  - **Example:**
+    ```bash
+    curl -sS 'http://127.0.0.1:5001/api/v1/tools/metrics/history?type=all&limit=20'
+    ```
+
 ### KV Store
 
 - `GET /kv?limit=<int>&offset=<int>`
@@ -272,3 +359,4 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
 - Workflow endpoints now support SSE progress events by default, so clients can render live progress while long tasks execute.
 - Errors from third-party providers are surfaced via `error` + optional `details`.
 - Current API is internal/admin-capable and has no authorization layer.
+- **Metrics UI:** Use `GET /tools/metrics/history` for a file list, then `GET /state/fs/read-json?path=…` with the returned `path` to load a report. Perplexity runs can be slow and may require GPU memory; consider `device=cpu` or a smaller `model_name` for lighter hosts.

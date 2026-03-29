@@ -7,12 +7,12 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 
-from infrastructure.config import REPO_ROOT, STEPS, resolve_path
+from infrastructure.config import METRICS_DIR, REPO_ROOT, STEPS, resolve_path
 
 logger = logging.getLogger(__name__)
 
 
-def _safe_repo_path(relative_path: str) -> Path:
+def safe_repo_path(relative_path: str) -> Path:
     if not relative_path:
         raise ValueError("path is required")
     normalized = relative_path[2:] if relative_path.startswith("./") else relative_path
@@ -39,11 +39,12 @@ def get_paths_map() -> Dict[str, str]:
     paths["log.prompts"] = str(resolve_path("./prompts.log"))
     paths["log.workflow_prompts_dir"] = str(resolve_path("./logs"))
     paths["log.workflow_prompts_glob"] = str(resolve_path("./logs/stego_prompts_*.log"))
+    paths["metrics.dir"] = str(METRICS_DIR)
     return paths
 
 
 def list_directory(relative_path: str, recursive: bool = False, limit: int = 200) -> Dict[str, Any]:
-    root = _safe_repo_path(relative_path)
+    root = safe_repo_path(relative_path)
     if not root.exists():
         raise FileNotFoundError(f"path not found: {relative_path}")
     if not root.is_dir():
@@ -82,7 +83,7 @@ def list_directory(relative_path: str, recursive: bool = False, limit: int = 200
 
 
 def read_json_file(relative_path: str) -> Dict[str, Any]:
-    file_path = _safe_repo_path(relative_path)
+    file_path = safe_repo_path(relative_path)
     if not file_path.exists():
         raise FileNotFoundError(f"path not found: {relative_path}")
     if not file_path.is_file():
@@ -105,7 +106,7 @@ def read_json_file(relative_path: str) -> Dict[str, Any]:
 
 
 def write_json_file(relative_path: str, data: Dict[str, Any], overwrite: bool = True) -> Dict[str, Any]:
-    file_path = _safe_repo_path(relative_path)
+    file_path = safe_repo_path(relative_path)
     if file_path.suffix.lower() != ".json":
         raise ValueError("only .json files are supported by this endpoint")
     if file_path.exists() and not overwrite:
@@ -127,7 +128,7 @@ def write_json_file(relative_path: str, data: Dict[str, Any], overwrite: bool = 
 
 
 def delete_path(relative_path: str, recursive: bool = False) -> Dict[str, Any]:
-    target = _safe_repo_path(relative_path)
+    target = safe_repo_path(relative_path)
     if not target.exists():
         return {"deleted": False, "path": relative_path}
     if target.is_dir():

@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 from flask import Blueprint, Response, current_app, request, stream_with_context
 
 from app.schemas.responses import fail, ok
-from infrastructure.config import REPO_ROOT, STEPS
+from infrastructure.config import METRICS_DIR, POSTS_DIRECTORY, REPO_ROOT, STEPS
 from infrastructure.json_logging import (
     bind_trace_id,
     clear_api_log_file,
@@ -27,6 +27,8 @@ from services.angles_service import analyze_angles
 from services.kv_service import delete_value, get_value, init_db, list_values, migrate_json_to_sqlite, set_value
 from services.posts_service import get_post, list_posts, save_object, save_post
 from services.search_service import search_bing, search_google, search_news_api, search_ollama
+from services.state_service import safe_repo_path
+from services.stego_metrics_service import list_metrics_history, run_divergence_metrics, run_perplexity_metrics
 from services.semantic_service import find_best_match, semantic_search
 from services.state_service import (
     clear_cache,
@@ -118,6 +120,53 @@ def _optional_body_str(body: dict[str, Any], key: str) -> tuple[str | None, tupl
         return None, fail(f"'{key}' must be a string when provided", status=400)
     normalized = value.strip()
     return normalized or None, None
+
+
+def _body_metrics_output_dir(body: dict[str, Any]) -> tuple[Path | None, tuple[Any, int] | None]:
+    raw = body.get("output_dir", "output-results")
+    if not isinstance(raw, str):
+        return None, fail("'output_dir' must be a string", status=400)
+    rel = raw.strip() or "output-results"
+    try:
+        return safe_repo_path(rel), None
+    except ValueError as exc:
+        return None, fail(str(exc), status=400)
+
+
+def _body_metrics_dir(body: dict[str, Any]) -> tuple[Path | None, tuple[Any, int] | None]:
+    raw = body.get("metrics_dir")
+    if raw is None:
+        return METRICS_DIR, None
+    if not isinstance(raw, str):
+        return None, fail("'metrics_dir' must be a string", status=400)
+    stripped = raw.strip()
+    if not stripped:
+        return METRICS_DIR, None
+    try:
+        return safe_repo_path(stripped), None
+    except ValueError as exc:
+        return None, fail(str(exc), status=400)
+
+
+def _body_metrics_dataset_dir(body: dict[str, Any]) -> tuple[Path | None, tuple[Any, int] | None]:
+    raw = body.get("dataset_dir", POSTS_DIRECTORY)
+    if not isinstance(raw, str):
+        return None, fail("'dataset_dir' must be a string", status=400)
+    rel = raw.strip() or POSTS_DIRECTORY
+    try:
+        return safe_repo_path(rel), None
+    except ValueError as exc:
+        return None, fail(str(exc), status=400)
+
+
+def _query_metrics_dir_param() -> tuple[Path | None, tuple[Any, int] | None]:
+    raw = request.args.get("metrics_dir")
+    if raw is None or not str(raw).strip():
+        return METRICS_DIR, None
+    try:
+        return safe_repo_path(str(raw).strip()), None
+    except ValueError as exc:
+        return None, fail(str(exc), status=400)
 
 
 def _required_body_str(body: dict[str, Any], key: str) -> tuple[str | None, tuple[Any, int] | None]:
@@ -1027,6 +1076,28 @@ def wf_stego_receiver_live() -> Any:
     if parsed_max_post_attempts < 1:
         return fail("'max_post_attempts' must be at least 1", status=400)
 
+    if _wants_workflow_stream(body):
+        return _stream_workflow(
+            "stego-receiver-live",
+            lambda emit: runner.run_stego_receiver_live_sim(
+                sender_user_id,
+                post_id=post_id,
+                payload=payload,
+                tag=tag,
+                list_offset=parsed_list_offset,
+                simulation_root=simulation_root,
+                max_post_attempts=parsed_max_post_attempts,
+                allow_fallback=allow_fallback,
+                compressed_full=compressed_full,
+                max_padding_bits=max_padding_bits,
+                on_progress=lambda event, progress_payload: emit(
+                    "progress",
+                    {"event": event, **progress_payload},
+                ),
+            ),
+            trace_id=get_trace_id(),
+        )
+
     try:
         data = _sync_workflow(
             "stego-receiver-live",
@@ -1599,6 +1670,129 @@ def tool_fetch_url() -> tuple[Any, int]:
         return ok(data)
     except Exception as exc:
         return fail("URL fetch failed", status=500, details=str(exc))
+
+
+@bp.route("/tools/metrics/perplexity", methods=["POST"])
+def tool_metrics_perplexity() -> tuple[Any, int]:
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    output_dir, err = _body_metrics_output_dir(body)
+    if err:
+        return err
+    assert output_dir is not None
+    metrics_dir, err = _body_metrics_dir(body)
+    if err:
+        return err
+    assert metrics_dir is not None
+    model_raw = body.get("model_name", "gpt2")
+    if not isinstance(model_raw, str) or not model_raw.strip():
+        return fail("'model_name' must be a non-empty string", status=400)
+    stride, err = _body_int(body, "stride", 512)
+    if err:
+        return err
+    assert stride is not None
+    if stride <= 0:
+        return fail("'stride' must be a positive integer", status=400)
+    device_raw = body.get("device", "auto")
+    if not isinstance(device_raw, str) or device_raw not in ("auto", "cpu", "cuda"):
+        return fail("'device' must be one of: auto, cpu, cuda", status=400)
+    try:
+        data = run_perplexity_metrics(
+            output_dir,
+            metrics_dir,
+            model_name=model_raw.strip(),
+            stride=stride,
+            device=device_raw,
+            progress_hook=None,
+        )
+        return ok(data)
+    except FileNotFoundError as exc:
+        return fail(str(exc), status=404)
+    except ValueError as exc:
+        return fail(str(exc), status=400)
+    except ImportError as exc:
+        return fail(str(exc), status=501)
+    except Exception as exc:
+        logger.exception("Perplexity metrics failed")
+        return fail("Perplexity metrics failed", status=500, details=str(exc))
+
+
+@bp.route("/tools/metrics/divergence", methods=["POST"])
+def tool_metrics_divergence() -> tuple[Any, int]:
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    output_dir, err = _body_metrics_output_dir(body)
+    if err:
+        return err
+    assert output_dir is not None
+    dataset_dir, err = _body_metrics_dataset_dir(body)
+    if err:
+        return err
+    assert dataset_dir is not None
+    metrics_dir, err = _body_metrics_dir(body)
+    if err:
+        return err
+    assert metrics_dir is not None
+    alpha_raw = body.get("alpha", 1e-6)
+    try:
+        alpha = float(alpha_raw)
+    except (TypeError, ValueError):
+        return fail("'alpha' must be a number", status=400)
+    if alpha <= 0:
+        return fail("'alpha' must be positive", status=400)
+    try:
+        data = run_divergence_metrics(
+            output_dir,
+            dataset_dir,
+            metrics_dir,
+            alpha=alpha,
+            progress_hook=None,
+        )
+        return ok(data)
+    except FileNotFoundError as exc:
+        return fail(str(exc), status=404)
+    except ValueError as exc:
+        return fail(str(exc), status=400)
+    except Exception as exc:
+        logger.exception("Divergence metrics failed")
+        return fail("Divergence metrics failed", status=500, details=str(exc))
+
+
+@bp.route("/tools/metrics/history", methods=["GET"])
+def tool_metrics_history() -> tuple[Any, int]:
+    type_raw = (request.args.get("type") or "all").strip().lower()
+    if type_raw not in ("all", "perplexity", "divergence"):
+        return fail("'type' query must be all, perplexity, or divergence", status=400)
+    limit, err = _query_int("limit", default=50)
+    if err:
+        return err
+    assert limit is not None
+    safe_limit = max(1, min(limit, 200))
+    metrics_dir, err = _query_metrics_dir_param()
+    if err:
+        return err
+    assert metrics_dir is not None
+    try:
+        items = list_metrics_history(
+            metrics_dir,
+            kind_filter=type_raw,
+            limit=safe_limit,
+        )
+    except ValueError as exc:
+        return fail(str(exc), status=400)
+    return ok(
+        {
+            "metrics_dir": str(metrics_dir.resolve()),
+            "type": type_raw,
+            "limit": safe_limit,
+            "count": len(items),
+            "history": items,
+        }
+    )
 
 
 @bp.route("/tools/search/news", methods=["GET"])

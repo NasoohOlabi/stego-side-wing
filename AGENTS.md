@@ -24,6 +24,9 @@ Excluded (non-strict): e.g. `src/util`, `src/angles`, `src/**/__pycache__`.
 
 ## Layout (high level)
 
+- `docs/` — API and operator-facing spec ([`docs/api-spec.md`](docs/api-spec.md))
+- `scripts/` — standalone CLIs (e.g. metrics: `avg_perplexity.py`, `avg_kld.py`)
+- `metrics/` — default output for metrics JSON reports (created on first run)
 - `src/app/` — Flask app factory, routes, schemas
 - `src/workflows/` — workflow runner, pipelines, adapters, contracts
 - `src/pipelines/` — legacy/angle and scraper-related pipeline code

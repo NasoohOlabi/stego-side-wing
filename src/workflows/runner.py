@@ -15,7 +15,7 @@ from workflows.pipelines.decode import DecodePipeline
 from workflows.pipelines.gen_angles import GenAnglesPipeline
 from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline
 from workflows.pipelines.receiver import ReceiverPipeline
-from workflows.pipelines.research import ResearchPipeline
+from workflows.pipelines.research import ResearchPipeline, is_likely_google_quota_error
 from workflows.pipelines.stego import StegoPipeline
 from workflows.utils.protocol_utils import stable_hash
 
@@ -35,6 +35,22 @@ def _isolated_workflow_config_for_side(base: Path, side: str) -> WorkflowConfig:
 def _is_receiver_data_load_failure(exc: Exception) -> bool:
     """True when receiver rebuild failed because URL/HTML fetch did not yield usable body."""
     return "Receiver data-load failed" in str(exc)
+
+
+def _compressed_full_for_live_receiver(
+    stego_out: Dict[str, Any], override: Optional[str]
+) -> Optional[str]:
+    """Prefer explicit API override; else use sender embedding (same bitstring receiver must recover)."""
+    if isinstance(override, str) and override.strip():
+        return override.strip()
+    emb = stego_out.get("embedding")
+    if not isinstance(emb, dict):
+        return None
+    comp = emb.get("compression")
+    if not isinstance(comp, dict):
+        return None
+    c = comp.get("compressed")
+    return c if isinstance(c, str) and c else None
 
 
 def _receiver_post_from_stego(stego_result: Dict[str, Any], sender_user_id: str) -> Dict[str, Any]:
@@ -127,6 +143,8 @@ def _run_stego_receiver_live_sim_once(
             "simulation": sim_meta,
         }
 
+    effective_compressed = _compressed_full_for_live_receiver(stego_out, compressed_full)
+
     with isolated_workflow_config(receiver_cfg):
         rr = WorkflowRunner()
         recv_out = rr.run_receiver(
@@ -137,7 +155,7 @@ def _run_stego_receiver_live_sim_once(
             persist_terms_cache=True,
             use_fetch_cache_research=True,
             allow_fallback=allow_fallback,
-            compressed_full=compressed_full,
+            compressed_full=effective_compressed,
             max_padding_bits=max_padding_bits,
             on_progress=on_progress,
         )
@@ -674,17 +692,26 @@ class WorkflowRunner:
                     max_padding_bits=max_padding_bits,
                     on_progress=on_progress,
                 )
-            except RuntimeError as exc:
-                if multi and _is_receiver_data_load_failure(exc):
+            except Exception as exc:
+                if multi and (
+                    _is_receiver_data_load_failure(exc)
+                    or is_likely_google_quota_error(exc)
+                ):
+                    stage = (
+                        "receiver_data_load"
+                        if _is_receiver_data_load_failure(exc)
+                        else "search_quota"
+                    )
                     _LOG.info(
-                        "live_sim_skip_receiver_data_load attempt={} offset={} err={}",
+                        "live_sim_skip_post stage={} attempt={} offset={} err={}",
+                        stage,
                         attempt_idx,
                         stego_off,
                         str(exc)[:200],
                     )
                     skipped.append(
                         {
-                            "stage": "receiver_data_load",
+                            "stage": stage,
                             "list_offset": stego_off,
                             "error": str(exc),
                         }

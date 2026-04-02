@@ -1,4 +1,5 @@
 """Jina Reader (r.jina.ai) — fetch page content as markdown via HTTP."""
+
 from __future__ import annotations
 
 import logging
@@ -18,6 +19,10 @@ def _reader_base() -> str:
 
 
 def _build_reader_url(target_url: str) -> str:
+    print(f"Target URL: {target_url}")
+    print(f"Reader base: {_reader_base()}")
+    print(f"Quote: {quote(target_url, safe='')}")
+    print(f"Reader URL: {f'{_reader_base()}/{quote(target_url, safe="")}'}")
     return f"{_reader_base()}/{quote(target_url, safe='')}"
 
 

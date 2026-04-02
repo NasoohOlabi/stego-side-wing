@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from loguru import logger
 
+from infrastructure.config import REPO_ROOT, get_env, resolve_path
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.config import WorkflowConfig, isolated_workflow_config
 from workflows.pipelines.data_load import DataLoadPipeline
@@ -24,6 +25,28 @@ _LOG = logger.bind(component="WorkflowRunner")
 
 def _isolated_workflow_config_for_side(base: Path, side: str) -> WorkflowConfig:
     root = (base / side).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return WorkflowConfig(
+        url_cache_dir=root / "url_cache",
+        research_terms_db_path=root / "research_terms_cache.db",
+        angles_cache_dir=root / "angles_cache",
+    )
+
+
+def _workflow_cache_paths(cfg: WorkflowConfig) -> Dict[str, str]:
+    return {
+        "url_cache_dir": str(cfg.url_cache_dir),
+        "research_terms_db_path": str(cfg.research_terms_db_path),
+        "angles_cache_dir": str(cfg.angles_cache_dir),
+    }
+
+
+def _double_process_validation_workflow_config() -> WorkflowConfig:
+    raw = (get_env("DOUBLE_PROCESS_VALIDATION_ROOT") or "").strip()
+    if raw:
+        root = resolve_path(raw).resolve()
+    else:
+        root = (REPO_ROOT / "datasets" / "double_process_validation").resolve()
     root.mkdir(parents=True, exist_ok=True)
     return WorkflowConfig(
         url_cache_dir=root / "url_cache",
@@ -1260,8 +1283,9 @@ class WorkflowRunner:
         """
         Process one new post twice through data_load -> research -> gen_angles.
 
-        Pass 1 uses caches enabled.
-        Pass 2 replays the same post with caches disabled.
+        Pass 1 uses the main URL/terms/angles caches. Pass 2 uses the same cache
+        flags but binds an isolated validation cache namespace (see
+        ``DOUBLE_PROCESS_VALIDATION_ROOT``).
         """
         self._emit(
             on_progress,
@@ -1303,7 +1327,7 @@ class WorkflowRunner:
                     allow_angles_fallback=allow_angles_fallback,
                     on_progress=on_progress,
                     pass_num=1,
-                    cache_mode="cached",
+                    cache_mode="main",
                 )
                 self._clear_fetch_failure(post_id)
                 break
@@ -1339,35 +1363,40 @@ class WorkflowRunner:
                 "event": "pass_1_finished",
                 "post_id": post_id,
                 "pass": 1,
-                "cache_mode": "cached",
+                "cache_mode": "main",
                 "elapsed_ms": pass1_total_ms,
             },
         )
         _LOG.bind(post_id=post_id, pass_num=1, elapsed_ms=pass1_total_ms).info(
             "workflow_progress_double_process_pass_finished"
         )
+        first_pass["settings"]["cache_profile"] = "main"
+        first_pass["settings"]["cache_paths"] = _workflow_cache_paths(WorkflowConfig())
+
         self._emit(
             on_progress,
             "stage_progress",
             {
                 "stage": "double-process-new-post",
-                "event": "pass_2_cacheless_start",
+                "event": "pass_2_validation_start",
                 "post_id": post_id,
             },
         )
         t_pass2 = time.perf_counter()
+        validation_cfg = _double_process_validation_workflow_config()
         while True:
             try:
-                second_pass = self._run_three_stage_post(
-                    post_id=post_id,
-                    use_terms_cache=False,
-                    persist_terms_cache=False,
-                    use_fetch_cache=False,
-                    allow_angles_fallback=allow_angles_fallback,
-                    on_progress=on_progress,
-                    pass_num=2,
-                    cache_mode="cacheless",
-                )
+                with isolated_workflow_config(validation_cfg):
+                    second_pass = self._run_three_stage_post(
+                        post_id=post_id,
+                        use_terms_cache=True,
+                        persist_terms_cache=True,
+                        use_fetch_cache=True,
+                        allow_angles_fallback=allow_angles_fallback,
+                        on_progress=on_progress,
+                        pass_num=2,
+                        cache_mode="validation",
+                    )
                 break
             except Exception as exc:
                 if not self._is_data_load_fetch_failure(exc):
@@ -1401,13 +1430,16 @@ class WorkflowRunner:
                 "event": "pass_2_finished",
                 "post_id": post_id,
                 "pass": 2,
-                "cache_mode": "cacheless",
+                "cache_mode": "validation",
                 "elapsed_ms": pass2_total_ms,
             },
         )
         _LOG.bind(post_id=post_id, pass_num=2, elapsed_ms=pass2_total_ms).info(
             "workflow_progress_double_process_pass_finished"
         )
+        second_pass["settings"]["cache_profile"] = "validation"
+        second_pass["settings"]["cache_paths"] = _workflow_cache_paths(validation_cfg)
+
         comparison = {
             stage: first_pass["steps"][stage]["hash"] == second_pass["steps"][stage]["hash"]
             for stage in ("data_load", "research", "gen_angles")
@@ -1418,7 +1450,7 @@ class WorkflowRunner:
             "source_file": file_name,
             "passes": {
                 "pass_1_cached": first_pass,
-                "pass_2_cacheless": second_pass,
+                "pass_2_validation": second_pass,
             },
             "stage_hash_match": comparison,
         }

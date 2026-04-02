@@ -92,5 +92,6 @@ Some endpoints/pipelines require provider credentials (for example):
 - `SCRAPINGDOG_API_KEY`
 - `OLLAMA_API_KEY`
 - `NEWS_API_KEY`
+- `DOUBLE_PROCESS_VALIDATION_ROOT` — optional root directory for the isolated URL/terms/angles caches used in `POST /workflows/double-process-new-post` pass 2 (default: `datasets/double_process_validation` under the repo)
 
 Use a local `.env` file (loaded by `python-dotenv`) for development.

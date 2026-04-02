@@ -1,24 +1,86 @@
 """Adapter for content fetching with explicit local/HTTP clients."""
 from __future__ import annotations
 
+import hashlib
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
+from loguru import logger
 
 from pipelines.headless_browser_analyzer import deterministic_hash_sha256, normalize_url
 from workflows.config import WorkflowConfig, get_config
 from workflows.contracts import FetchUrlResult
+
+_LOG = logger.bind(component="ContentAdapter")
+
+_CONTENT_VALIDATION_LOG_CHARS = 4000
+_CONTENT_VALIDATION_SUFFIX_CHARS = 500
+
+_ERROR_INDICATORS: tuple[str, ...] = (
+    "404",
+    "not found",
+    "page not found",
+    "error",
+    "access denied",
+    "forbidden",
+)
+
+
+def _validation_indicator_hits(text_lower: str) -> Dict[str, int]:
+    return {tok: text_lower.count(tok) for tok in _ERROR_INDICATORS if tok in text_lower}
+
+
+def _build_validation_report(text: Optional[str]) -> Dict[str, Any]:
+    if not text or not str(text).strip():
+        return {
+            "passed": False,
+            "reason": "empty_or_whitespace_text",
+            "matched_indicators": [],
+            "indicator_hits": {},
+            "distinct_indicator_count": 0,
+            "text_length": 0,
+        }
+    body = str(text)
+    lower = body.lower()
+    hits = _validation_indicator_hits(lower)
+    matched: List[str] = [k for k in _ERROR_INDICATORS if k in lower]
+    distinct = len(matched)
+    passed = distinct < 2
+    return {
+        "passed": passed,
+        "reason": "content_heuristic_ok" if passed else "error_indicator_heuristic",
+        "matched_indicators": matched,
+        "indicator_hits": hits,
+        "distinct_indicator_count": distinct,
+        "text_length": len(body),
+    }
+
+
+def _enrich_validation_log_fields(text: Optional[str], base: Dict[str, Any]) -> Dict[str, Any]:
+    if not text:
+        return base
+    body = text
+    out = dict(base)
+    out["text_sha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    if len(body) <= _CONTENT_VALIDATION_LOG_CHARS:
+        out["text_preview"] = body
+        out["text_truncated"] = False
+    else:
+        out["text_preview"] = body[:_CONTENT_VALIDATION_LOG_CHARS]
+        out["text_truncated"] = True
+        out["text_suffix_preview"] = body[-_CONTENT_VALIDATION_SUFFIX_CHARS:]
+    return out
 
 
 class LocalContentClient:
     """In-process content fetch client."""
 
     @staticmethod
-    def fetch(url: str) -> Dict[str, Any]:
+    def fetch(url: str, *, use_disk_cache: bool = True) -> Dict[str, Any]:
         from services.analysis_service import fetch_url_content_crawl4ai
 
-        return fetch_url_content_crawl4ai(url)
+        return fetch_url_content_crawl4ai(url, use_disk_cache=use_disk_cache)
 
 
 class HttpContentClient:
@@ -42,9 +104,10 @@ class ContentAdapter:
 
     def __init__(self, base_url: Optional[str] = None):
         self.config: WorkflowConfig = get_config()
-        self.base_url = base_url or self.config.base_url
+        resolved = base_url or self.config.base_url or "http://127.0.0.1:5001"
+        self.base_url = resolved
         self.local = LocalContentClient()
-        self.http = HttpContentClient(self.base_url)
+        self.http = HttpContentClient(resolved)
 
     @staticmethod
     def _normalize_result(url: str, result_data: Any) -> FetchUrlResult:
@@ -118,16 +181,17 @@ class ContentAdapter:
                 return cached
 
         try:
-            api_response = self.local.fetch(url)
+            api_response = self.local.fetch(url, use_disk_cache=use_cache)
         except Exception:
             try:
                 api_response = self.http.fetch(url)
             except Exception as e:
                 return FetchUrlResult(url=url, success=False, error=f"Fetch error: {str(e)}")
-        if isinstance(api_response, dict):
-            result_data = api_response.get("result")
+        raw: Any = api_response
+        if not isinstance(raw, dict):
+            result_data = raw
         else:
-            result_data = api_response
+            result_data = raw.get("result")
         result = self._normalize_result(url=url, result_data=result_data)
         if result.success and result.text:
             self._cache_content(url, api_response)
@@ -162,17 +226,29 @@ class ContentAdapter:
         except Exception:
             pass
 
+    def content_validation_report(self, text: Optional[str]) -> Dict[str, Any]:
+        """Structured outcome of the HTML/text heuristic (for logs and debugging)."""
+        base = _build_validation_report(text)
+        raw = text if text and str(text).strip() else None
+        return _enrich_validation_log_fields(raw, base)
+
     def validate_content(self, text: Optional[str]) -> bool:
-        if not text:
-            return False
-        error_indicators = [
-            "404",
-            "not found",
-            "page not found",
-            "error",
-            "access denied",
-            "forbidden",
-        ]
-        text_lower = text.lower()
-        error_count = sum(1 for token in error_indicators if token in text_lower)
-        return error_count < 2
+        return bool(_build_validation_report(text)["passed"])
+
+    def log_validation_failed(self, *, url: str, text: Optional[str], phase: str) -> None:
+        """Emit JSONL-friendly fields when ``validate_content`` would reject ``text``."""
+        report = self.content_validation_report(text)
+        _LOG.bind(trace_id=None).warning(
+            "fetch_url_content_validation_failed",
+            url=url,
+            phase=phase,
+            validation_reason=report.get("reason"),
+            matched_indicators=report.get("matched_indicators"),
+            indicator_hits=report.get("indicator_hits"),
+            distinct_indicator_count=report.get("distinct_indicator_count"),
+            text_length=report.get("text_length"),
+            text_sha256=report.get("text_sha256"),
+            text_preview=report.get("text_preview"),
+            text_truncated=report.get("text_truncated", False),
+            text_suffix_preview=report.get("text_suffix_preview"),
+        )

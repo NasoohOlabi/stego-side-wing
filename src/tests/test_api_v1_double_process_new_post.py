@@ -19,7 +19,7 @@ def test_double_process_new_post_sync_success(client, monkeypatch):
         "source_file": "abc123.json",
         "passes": {
             "pass_1_cached": {"settings": {"use_fetch_cache": True}},
-            "pass_2_cacheless": {"settings": {"use_fetch_cache": False}},
+            "pass_2_validation": {"settings": {"use_fetch_cache": True}},
         },
     }
 

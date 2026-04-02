@@ -206,7 +206,7 @@ def test_run_stego_run_all_max_posts_one_caps_batch():
     assert runner.stego.calls == 1
 
 
-def test_run_double_process_new_post_runs_cached_then_cacheless():
+def test_run_double_process_new_post_main_then_validation_cache():
     runner = WorkflowRunner.__new__(WorkflowRunner)
     calls = []
 
@@ -261,25 +261,38 @@ def test_run_double_process_new_post_runs_cached_then_cacheless():
 
     assert result["post_id"] == "n1"
     assert result["source_file"] == "n1.json"
-    assert result["passes"]["pass_1_cached"]["settings"] == {
-        "use_terms_cache": True,
-        "persist_terms_cache": True,
-        "use_fetch_cache": True,
-        "allow_angles_fallback": False,
+    p1s = result["passes"]["pass_1_cached"]["settings"]
+    assert p1s["use_terms_cache"] is True
+    assert p1s["persist_terms_cache"] is True
+    assert p1s["use_fetch_cache"] is True
+    assert p1s["allow_angles_fallback"] is False
+    assert p1s["cache_profile"] == "main"
+    assert set(p1s["cache_paths"]) == {
+        "url_cache_dir",
+        "research_terms_db_path",
+        "angles_cache_dir",
     }
-    assert result["passes"]["pass_2_cacheless"]["settings"] == {
-        "use_terms_cache": False,
-        "persist_terms_cache": False,
-        "use_fetch_cache": False,
-        "allow_angles_fallback": False,
+
+    p2s = result["passes"]["pass_2_validation"]["settings"]
+    assert p2s["use_terms_cache"] is True
+    assert p2s["persist_terms_cache"] is True
+    assert p2s["use_fetch_cache"] is True
+    assert p2s["allow_angles_fallback"] is False
+    assert p2s["cache_profile"] == "validation"
+    assert set(p2s["cache_paths"]) == {
+        "url_cache_dir",
+        "research_terms_db_path",
+        "angles_cache_dir",
     }
+    assert "double_process_validation" in p2s["cache_paths"]["url_cache_dir"].replace("\\", "/")
+
     assert calls == [
         ("posts_list", "filter-url-unresolved", 1, 0, None),
         ("data_load", "n1", "filter-url-unresolved", True),
         ("research", "n1", "filter-researched", True, True, True, True),
         ("gen_angles", "n1", "angles-step", False),
-        ("data_load", "n1", "filter-url-unresolved", False),
-        ("research", "n1", "filter-researched", True, False, False, False),
+        ("data_load", "n1", "filter-url-unresolved", True),
+        ("research", "n1", "filter-researched", True, True, True, True),
         ("gen_angles", "n1", "angles-step", False),
     ]
 
@@ -375,7 +388,7 @@ def test_run_double_process_new_post_retries_same_post_until_fetch_succeeds(monk
     assert result["post_id"] == "bad"
     assert result["source_file"] == "bad.json"
     assert runner._fetch_fail_counts == {}
-    assert calls == [("bad", True), ("bad", True), ("bad", False)]
+    assert calls == [("bad", True), ("bad", True), ("bad", True)]
 
 
 def test_run_batch_angles_determinism_empty_post_ids_raises():

@@ -91,6 +91,24 @@ def extract_stego_text_perplexity(data: Any) -> str | None:
     return None
 
 
+def extract_stego_text_unified(data: Any) -> str | None:
+    """Stego string for single-post metrics: array stegoText first, then dict keys."""
+    if isinstance(data, list) and data:
+        first = data[0]
+        if isinstance(first, dict):
+            stego = first.get("stegoText")
+            if isinstance(stego, str):
+                return stego
+    if isinstance(data, dict):
+        stego = data.get("stegoText")
+        if isinstance(stego, str):
+            return stego
+        stego = data.get("stego_text")
+        if isinstance(stego, str):
+            return stego
+    return None
+
+
 def resolve_device(torch_module: Any, device_arg: str) -> str:
     if device_arg != "auto":
         return device_arg
@@ -536,6 +554,135 @@ def run_divergence_metrics(
     }
     report_path = save_divergence_report(metrics_dir, report)
     return {"report": report, "report_path": str(report_path.resolve())}
+
+
+def _perplexity_one_text(
+    stego_text: str,
+    model_name: str,
+    stride: int,
+    device: str,
+) -> tuple[float | None, str | None, str | None]:
+    """Returns (perplexity, resolved_device, warning). Warning set if deps missing or score invalid."""
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError as exc:
+        return None, None, f"Perplexity skipped: missing transformers/torch ({exc})."
+    resolved = resolve_device(torch, device)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    causal_lm = cast(Any, AutoModelForCausalLM.from_pretrained(model_name))
+    causal_lm.to(resolved)
+    causal_lm.eval()
+    max_length = int(getattr(causal_lm.config, "n_positions", 1024))
+    ppl = compute_text_perplexity(
+        tokenizer,
+        causal_lm,
+        torch,
+        stego_text,
+        stride,
+        max_length,
+        resolved,
+    )
+    if not math.isfinite(ppl):
+        return None, resolved, "Perplexity unavailable (sequence too short for scoring)."
+    return ppl, resolved, None
+
+
+def _kl_jsd_pair(
+    stego_counter: Counter,
+    baseline: Counter | None,
+    alpha: float,
+) -> tuple[float | None, float | None]:
+    if baseline is None or not baseline or not stego_counter:
+        return None, None
+    kl = kl_divergence(stego_counter, baseline, alpha)
+    jsd = js_divergence(stego_counter, baseline, alpha)
+    return _json_number(kl), _json_number(jsd)
+
+
+def run_single_post_metrics(
+    output_file: Path,
+    dataset_dir: Path,
+    *,
+    model_name: str = "gpt2",
+    stride: int = 512,
+    device: str = "auto",
+    alpha: float = 1e-6,
+    progress_hook: Callable[[str, int, int], None] | None = None,
+) -> dict[str, Any]:
+    """Perplexity + KL/JSD for one pipeline output JSON; no report file written."""
+    if stride <= 0:
+        raise ValueError("stride must be a positive integer")
+    if alpha <= 0:
+        raise ValueError("alpha must be positive")
+    if not output_file.is_file():
+        raise FileNotFoundError(f"Output file not found: {output_file}")
+    if not dataset_dir.is_dir():
+        raise FileNotFoundError(f"dataset_dir not found or not a directory: {dataset_dir}")
+    try:
+        payload = json.loads(output_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in output file: {exc}") from exc
+    stego_text = extract_stego_text_unified(payload)
+    if stego_text is None:
+        raise ValueError("No stego text found (stegoText / stego_text).")
+    if not stego_text.strip():
+        raise ValueError("Stego text is empty.")
+    post_id = output_file.stem.split("_version_")[0]
+    stego_counter = Counter(tokenize(stego_text))
+    warnings: list[str] = []
+    if not stego_counter:
+        warnings.append("Stego text produced zero word unigrams; KL/JSD omitted.")
+    _, global_counter, _ = load_global_stats(dataset_dir, progress_hook)
+    primary_path = dataset_dir / f"{post_id}.json"
+    primary_counter: Counter | None = None
+    if primary_path.is_file():
+        primary_counter = extract_comment_counter(primary_path)
+        if not primary_counter:
+            warnings.append("Primary baseline: matched post has no comment tokens.")
+    else:
+        warnings.append(f"Primary baseline: missing dataset file {post_id}.json")
+    ppl, resolved_dev, ppl_warn = _perplexity_one_text(
+        stego_text, model_name, stride, device
+    )
+    if ppl_warn:
+        warnings.append(ppl_warn)
+    kl_p, jsd_p = _kl_jsd_pair(stego_counter, primary_counter, alpha)
+    kl_g, jsd_g = _kl_jsd_pair(stego_counter, global_counter, alpha)
+    if not global_counter:
+        warnings.append("Global baseline has no comment tokens in dataset_dir.")
+    rel_file = _repo_relative_path(output_file.resolve(), REPO_ROOT)
+    primary_block: dict[str, Any] | None = None
+    if primary_path.is_file():
+        primary_block = {
+            "matched_post_file": _repo_relative_path(primary_path.resolve(), REPO_ROOT),
+            "kl_stego_vs_matched_post": kl_p,
+            "jsd_stego_vs_matched_post": jsd_p,
+        }
+    secondary_block: dict[str, Any] | None = None
+    if kl_g is not None or jsd_g is not None:
+        secondary_block = {
+            "kl_stego_vs_global_corpus": kl_g,
+            "jsd_stego_vs_global_corpus": jsd_g,
+        }
+    return {
+        "file": rel_file,
+        "post_id": post_id,
+        "perplexity": _json_number(ppl) if ppl is not None else None,
+        "resolved_device": resolved_dev,
+        "primary_baseline_matched_post": primary_block,
+        "secondary_baseline_global_corpus": secondary_block,
+        "warnings": warnings,
+        "config": {
+            "model_name": model_name,
+            "stride": stride,
+            "device_requested": device,
+            "smoothing_alpha": alpha,
+            "tokenization": "word_unigram",
+            "token_regex": TOKEN_RE.pattern,
+            "kl_direction": "KL(stego||baseline)",
+        },
+    }
 
 
 def _repo_relative_path(absolute_path: Path, repo_root: Path) -> str:

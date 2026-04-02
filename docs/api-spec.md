@@ -29,10 +29,10 @@ No auth is currently enforced in this service. Frontend should treat this API as
 
 ### Testing and protocol QA
 
-These endpoints support **reproducibility**, **cache vs cacheless** comparison, and **LLM determinism** checks. They are documented in detail under **Workflows** and **Tools**; this section only maps intent:
+These endpoints support **reproducibility**, **main vs isolated-cache** comparison, and **LLM determinism** checks. They are documented in detail under **Workflows** and **Tools**; this section only maps intent:
 
 - **`POST /workflows/validate-post`** — Replays data-load → research → gen-angles **in memory**, compares each stage’s live output to **saved** artifacts (strict JSON equality). Does **not** overwrite artifacts.
-- **`POST /workflows/double-process-new-post`** — Picks one new post from the data-load queue, runs the three-stage pipeline **twice** (warm caches vs no caches), **writes** artifacts each time, and reports per-stage hash match between passes.
+- **`POST /workflows/double-process-new-post`** — Picks one new post from the data-load queue, runs the three-stage pipeline **twice** (main caches vs isolated validation caches; cache **flags** stay enabled on both passes), **writes** artifacts each time, and reports per-stage hash match between passes.
 - **`POST /workflows/batch-angles-determinism`** — For each `post_id`, runs angle extraction **twice** with angles disk cache disabled and compares normalized angle lists; measures same-host repeatability, not cross-machine parity.
 - **Protocol previews** (`POST /tools/protocol/data-load-preview`, `research-preview`, `angles-preview`, `gen-terms`) — Live protocol steps with controlled persistence for inspecting behavior before full pipeline runs.
 - **`POST /workflows/gen-angles`** — Batch angle generation over the `angles-step` queue (`count` / `offset`); persists via `GenAnglesPipeline.process_posts`.
@@ -219,16 +219,16 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
   - **Note:** This endpoint is now protocol-oriented. It does **not** overwrite saved artifacts during validation. LLM calls in this path use temperature 0 where applicable, but live web/search/provider drift can still cause `valid: false`.
 
 - `POST /workflows/double-process-new-post`
-  - **Purpose:** Pick one **new** post (same queue as data-load: JSON in `datasets/news_cleaned` with no matching `{id}.json` yet in `datasets/news_url_fetched`), then run the full three-stage pipeline **twice** on that same `post_id` to compare cached vs cacheless behavior.
+  - **Purpose:** Pick one **new** post (same queue as data-load: JSON in `datasets/news_cleaned` with no matching `{id}.json` yet in `datasets/news_url_fetched`), then run the full three-stage pipeline **twice** on that same `post_id` to compare **main** URL/terms/angles caches vs an **isolated validation** cache namespace (both passes keep `use_fetch_cache` / `use_terms_cache` / `persist_terms_cache` **true**).
   - Body: `stream?` (bool; same SSE default as other workflow routes), `allow_angles_fallback?` (bool, default `false`) — passed through to gen-angles (same semantics as `validate-post` / `angles-preview`).
-  - **Pass 1 (`pass_1_cached`):** `use_fetch_cache=true`, `use_terms_cache=true`, `persist_terms_cache=true` — normal “warm” run.
-  - **Pass 2 (`pass_2_cacheless`):** `use_fetch_cache=false`, `use_terms_cache=false`, `persist_terms_cache=false` — forces fresh URL fetch and fresh term/search/fetch paths where those flags apply.
+  - **Pass 1 (`pass_1_cached`):** Default workflow config — main `datasets/url_cache`, `datasets/research_terms_cache.db`, `datasets/angles_cache`.
+  - **Pass 2 (`pass_2_validation`):** Same cache **flags** as pass 1, but the run is executed under `isolated_workflow_config` pointing at a dedicated tree: default `datasets/double_process_validation/` (`url_cache/`, `angles_cache/`, `research_terms_cache.db` under that root), or override the root with env **`DOUBLE_PROCESS_VALIDATION_ROOT`** (absolute or repo-relative path as resolved by the app). Pass 2 does not read pass 1’s cache files; an empty validation store yields cache misses and full fetch/LLM work while using the same code paths as a normal cached run.
   - **Persistence:** Unlike `validate-post`, this **writes** stage outputs to disk each time (same as running data-load → research → gen-angles manually). The second pass overwrites artifacts for that `post_id` in `filter-url-unresolved`, `filter-researched`, and `angles-step` destinations.
   - Response `data` shape (summary):
     - `mode`: `double_process_new_post`
     - `post_id`: string (stem of selected file)
     - `source_file`: e.g. `{post_id}.json` as listed by the queue
-    - `passes.pass_1_cached` / `passes.pass_2_cacheless`: each has `settings` (the four flags above) and `steps` with per-stage summaries (`data_load`, `research`, `gen_angles`) including stable `hash` and stage-specific fields (same summarizer as other workflow reports)
+    - `passes.pass_1_cached` / `passes.pass_2_validation`: each has `settings` with the four cache flags above plus `cache_profile` (`main` | `validation`) and `cache_paths` (`url_cache_dir`, `research_terms_db_path`, `angles_cache_dir`), and `steps` with per-stage summaries (`data_load`, `research`, `gen_angles`) including stable `hash` and stage-specific fields (same summarizer as other workflow reports)
     - `stage_hash_match`: `{ "data_load": bool, "research": bool, "gen_angles": bool }` — whether the full-post hash for each stage matched between the two passes (search/API non-determinism often makes `research` differ between passes even on the same day)
   - Also available as `POST /workflows/run` with `"command": "double-process-new-post"` and the same body fields.
 
@@ -314,6 +314,24 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
     curl -sS -X POST 'http://127.0.0.1:5001/api/v1/tools/metrics/divergence' \
       -H 'Content-Type: application/json' \
       -d '{"output_dir":"output-results","dataset_dir":"datasets/news_cleaned"}'
+    ```
+
+- `POST /tools/metrics/post`
+  - For **one** pipeline output JSON under `output_dir`, extracts stego text once and returns **perplexity** (same causal-LM sliding-window method as batch perplexity) plus word-unigram **KL(stego ∥ baseline)** and **JSD** vs the matched post in `dataset_dir` and vs the **global** comment corpus over `dataset_dir` (same logic as `POST /tools/metrics/divergence`). Does **not** write a report under `metrics/` (response-only).
+  - **Stego extraction:** JSON array `[{ "stegoText": ... }]` first, else object `stegoText` / `stego_text`.
+  - **Body (JSON):**
+    - `filename` (required) — basename only, must end with `.json` (e.g. `1look5n_version_15.json`). No path separators.
+    - `output_dir?` (default `output-results`)
+    - `dataset_dir?` (default `datasets/news_cleaned`)
+    - `model_name?`, `stride?`, `device?` — same as perplexity endpoint
+    - `alpha?` — same as divergence (default `1e-6`, must be > `0`)
+  - **Success `data`:** `file` (repo-relative path when under repo root), `post_id`, `perplexity` (number or `null` if `torch`/`transformers` missing or scoring failed), `resolved_device`, `primary_baseline_matched_post`, `secondary_baseline_global_corpus`, `warnings` (string array), `config`.
+  - **Errors:** `400` (invalid `filename`, bad JSON in output file, missing stego), `404` (output file or `dataset_dir` missing), `500` (other failures).
+  - **Example:**
+    ```bash
+    curl -sS -X POST 'http://127.0.0.1:5001/api/v1/tools/metrics/post' \
+      -H 'Content-Type: application/json' \
+      -d '{"filename":"1look5n_version_15.json","output_dir":"output-results","dataset_dir":"datasets/news_cleaned","device":"cpu"}'
     ```
 
 - `GET /tools/metrics/history`

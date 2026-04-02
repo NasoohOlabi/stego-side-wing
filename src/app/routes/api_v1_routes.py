@@ -28,7 +28,12 @@ from services.kv_service import delete_value, get_value, init_db, list_values, m
 from services.posts_service import get_post, list_posts, save_object, save_post
 from services.search_service import search_bing, search_google, search_news_api, search_ollama
 from services.state_service import safe_repo_path
-from services.stego_metrics_service import list_metrics_history, run_divergence_metrics, run_perplexity_metrics
+from services.stego_metrics_service import (
+    list_metrics_history,
+    run_divergence_metrics,
+    run_perplexity_metrics,
+    run_single_post_metrics,
+)
 from services.semantic_service import find_best_match, semantic_search
 from services.state_service import (
     clear_cache,
@@ -157,6 +162,23 @@ def _body_metrics_dataset_dir(body: dict[str, Any]) -> tuple[Path | None, tuple[
         return safe_repo_path(rel), None
     except ValueError as exc:
         return None, fail(str(exc), status=400)
+
+
+def _body_metrics_output_basename(body: dict[str, Any]) -> tuple[str | None, tuple[Any, int] | None]:
+    raw = body.get("filename")
+    if not isinstance(raw, str) or not raw.strip():
+        return None, fail("'filename' must be a non-empty string", status=400)
+    stripped = raw.strip()
+    if "/" in stripped or "\\" in stripped:
+        return None, fail("'filename' must be a basename only (no path separators)", status=400)
+    name = Path(stripped).name
+    if name != stripped:
+        return None, fail("'filename' must be a basename only", status=400)
+    if name in (".", "..") or name.startswith(".."):
+        return None, fail("invalid filename", status=400)
+    if not name.lower().endswith(".json"):
+        return None, fail("'filename' must end with .json", status=400)
+    return name, None
 
 
 def _query_metrics_dir_param() -> tuple[Path | None, tuple[Any, int] | None]:
@@ -294,8 +316,8 @@ def _heartbeat_activity_label(
             return f"selected post {progress.get('post_id')}"
         if ev == "pass_1_cached_start":
             return "pass 1 (cached) · running data_load → research → gen_angles"
-        if ev == "pass_2_cacheless_start":
-            return "pass 2 (cacheless) · running data_load → research → gen_angles"
+        if ev == "pass_2_validation_start":
+            return "pass 2 (validation cache) · running data_load → research → gen_angles"
         if ev == "fetch_failed":
             return (
                 f"URL fetch failed (pass {progress.get('pass')}, "
@@ -1760,6 +1782,64 @@ def tool_metrics_divergence() -> tuple[Any, int]:
     except Exception as exc:
         logger.exception("Divergence metrics failed")
         return fail("Divergence metrics failed", status=500, details=str(exc))
+
+
+@bp.route("/tools/metrics/post", methods=["POST"])
+def tool_metrics_single_post() -> tuple[Any, int]:
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    basename, err = _body_metrics_output_basename(body)
+    if err:
+        return err
+    assert basename is not None
+    output_dir, err = _body_metrics_output_dir(body)
+    if err:
+        return err
+    assert output_dir is not None
+    dataset_dir, err = _body_metrics_dataset_dir(body)
+    if err:
+        return err
+    assert dataset_dir is not None
+    model_raw = body.get("model_name", "gpt2")
+    if not isinstance(model_raw, str) or not model_raw.strip():
+        return fail("'model_name' must be a non-empty string", status=400)
+    stride, err = _body_int(body, "stride", 512)
+    if err:
+        return err
+    assert stride is not None
+    if stride <= 0:
+        return fail("'stride' must be a positive integer", status=400)
+    device_raw = body.get("device", "auto")
+    if not isinstance(device_raw, str) or device_raw not in ("auto", "cpu", "cuda"):
+        return fail("'device' must be one of: auto, cpu, cuda", status=400)
+    alpha_raw = body.get("alpha", 1e-6)
+    try:
+        alpha = float(alpha_raw)
+    except (TypeError, ValueError):
+        return fail("'alpha' must be a number", status=400)
+    if alpha <= 0:
+        return fail("'alpha' must be positive", status=400)
+    output_file = output_dir / basename
+    try:
+        data = run_single_post_metrics(
+            output_file,
+            dataset_dir,
+            model_name=model_raw.strip(),
+            stride=stride,
+            device=device_raw,
+            alpha=alpha,
+            progress_hook=None,
+        )
+        return ok(data)
+    except FileNotFoundError as exc:
+        return fail(str(exc), status=404)
+    except ValueError as exc:
+        return fail(str(exc), status=400)
+    except Exception as exc:
+        logger.exception("Single-post metrics failed")
+        return fail("Single-post metrics failed", status=500, details=str(exc))
 
 
 @bp.route("/tools/metrics/history", methods=["GET"])

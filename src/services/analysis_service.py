@@ -144,12 +144,14 @@ def _fetch_url_after_cache_miss(url: str, normalized_url: str) -> Any:
     )
 
 
-def fetch_url_content_crawl4ai(url: str) -> Dict:
+def fetch_url_content_crawl4ai(url: str, *, use_disk_cache: bool = True) -> Dict:
     """
     Fetch URL content with caching: Jina Reader first, then crawl4ai + LLM.
 
     Args:
         url: URL to fetch
+        use_disk_cache: When False, skip read/write of ``datasets/url_cache`` JSON
+            (forces live Jina / crawl4ai path; successful results are still written).
 
     Returns:
         Dict with fetched content or cached result
@@ -180,18 +182,23 @@ def fetch_url_content_crawl4ai(url: str) -> Dict:
     cache_key = deterministic_hash_sha256(normalized_url)
     filename = f"./datasets/url_cache/{cache_key}.json"
 
-    # Check cache first (ignore entries from failed runs — e.g. null/empty extraction)
-    cached_response = read_json_cache(filename)
-    if cached_response and _crawl4ai_extract_ok(cached_response.get("result")):
-        logger.info(
-            "url_fetch_cache_hit",
-            extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
-        )
-        return cached_response
+    if use_disk_cache:
+        cached_response = read_json_cache(filename)
+        if cached_response and _crawl4ai_extract_ok(cached_response.get("result")):
+            logger.info(
+                "url_fetch_cache_hit",
+                extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
+            )
+            return cached_response
 
-    if cached_response:
+        if cached_response:
+            logger.info(
+                "url_fetch_cache_stale_skip",
+                extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
+            )
+    else:
         logger.info(
-            "url_fetch_cache_stale_skip",
+            "url_fetch_disk_cache_bypass",
             extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
         )
 

@@ -53,7 +53,19 @@ def main() -> None:
         log_file=args.log_file,
         enable_file_log=not args.no_log_file,
     )
-    dev_mode = True  # args.dev or _is_truthy(os.environ.get("API_DEBUG"))
+    dev_mode = args.dev or _is_truthy(os.environ.get("API_DEBUG"))
+    print("--------------------------------")
+    print("--------------------------------")
+    print("--------------------------------")
+    print("--------------------------------")
+    print("--------------------------------")
+    print(f"Args: {args}")
+    print(f"Dev mode: {dev_mode}")
+    print("--------------------------------")
+    print("--------------------------------")
+    print("--------------------------------")
+    print("--------------------------------")
+    print("--------------------------------")
     log_process_start(
         logging.getLogger("app"),
         "api_server",

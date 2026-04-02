@@ -69,3 +69,39 @@ def test_metrics_divergence_endpoint_ok(client, monkeypatch):
     payload = r.get_json()
     assert payload["ok"] is True
     assert payload["data"]["report_path"].endswith(".json")
+
+
+def test_metrics_single_post_endpoint_ok(client, monkeypatch):
+    from app.routes import api_v1_routes
+
+    monkeypatch.setattr(
+        api_v1_routes,
+        "run_single_post_metrics",
+        lambda *a, **k: {
+            "file": "output-results/x_version_1.json",
+            "post_id": "x",
+            "perplexity": 10.0,
+            "resolved_device": "cpu",
+            "primary_baseline_matched_post": None,
+            "secondary_baseline_global_corpus": {"kl_stego_vs_global_corpus": 0.1, "jsd_stego_vs_global_corpus": 0.05},
+            "warnings": [],
+            "config": {},
+        },
+    )
+    r = client.post(
+        "/api/v1/tools/metrics/post",
+        json={"filename": "x_version_1.json"},
+    )
+    assert r.status_code == 200
+    payload = r.get_json()
+    assert payload["ok"] is True
+    assert payload["data"]["post_id"] == "x"
+    assert payload["data"]["perplexity"] == 10.0
+
+
+def test_metrics_single_post_rejects_path_in_filename(client) -> None:
+    r = client.post(
+        "/api/v1/tools/metrics/post",
+        json={"filename": "subdir/x_version_1.json"},
+    )
+    assert r.status_code == 400

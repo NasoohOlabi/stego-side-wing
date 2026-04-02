@@ -10,6 +10,10 @@ from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
 from loguru import logger
 
 from workflows.utils import stego_codec
+from workflows.utils.output_results_shape import (
+    assert_valid_n8n_stego_artifact,
+    n8n_save_object_body,
+)
 from workflows.utils.stego_codec import (
     augment_post as codec_augment_post,
     build_dictionary as codec_build_dictionary,
@@ -17,14 +21,14 @@ from workflows.utils.stego_codec import (
     embed_in_angle_selection as codec_embed_in_angle_selection,
     embed_in_comment_selection as codec_embed_in_comment_selection,
     flatten_comments,
-    get_bit_width as _get_bit_width,
-    take_bits as _take_bits,
 )
 
 # Backward-compatible names for tests and callers.
 MAX_LITERAL_LEN = stego_codec.MAX_LITERAL_LEN
 _is_non_empty_string = stego_codec.is_non_empty_string
 _flatten_comments = flatten_comments
+_get_bit_width = stego_codec.get_bit_width
+_take_bits = stego_codec.take_bits
 
 STEGO_WORKFLOW_ID = "27rZrYtywu3k9e7Q"
 STEGO_DEFAULT_OFFSET = 1
@@ -284,14 +288,15 @@ class StegoPipeline:
             return stripped
 
         prompt, system_message = self._build_prompt(sample, comment_embedding)
-        _STEGO_LOG.info(
+        prompt_log = _STEGO_LOG.bind(tag="encode")
+        prompt_log.info(
             "[STEGO][PROMPT][ENCODE] category={} tangent={} source_quote={}",
             sample.get("category"),
             _text_preview(sample.get("tangent", ""), max_len=120),
             _text_preview(sample.get("source_quote", ""), max_len=120),
         )
-        _STEGO_LOG.info("[STEGO][PROMPT][ENCODE][SYSTEM]\n{}", system_message)
-        _STEGO_LOG.info("[STEGO][PROMPT][ENCODE][USER]\n{}", prompt)
+        prompt_log.info("[STEGO][PROMPT][ENCODE][SYSTEM]\n{}", system_message)
+        prompt_log.info("[STEGO][PROMPT][ENCODE][USER]\n{}", prompt)
         response = self.llm.call_llm(
             prompt=prompt,
             system_message=system_message,
@@ -376,7 +381,8 @@ class StegoPipeline:
 
         success_idx = -1
         for idx, decoded_obj in enumerate(decodeds):
-            if _eq_angle(decoded_obj, selected_angle):
+            candidate_text = candidate_texts[idx] if idx < len(candidate_texts) else None
+            if _eq_angle(decoded_obj, selected_angle) and _is_non_empty_string(candidate_text):
                 success_idx = idx
                 break
 
@@ -504,6 +510,11 @@ class StegoPipeline:
                     selected_angle=selected_angle,
                 )
                 if validation.get("succeeded"):
+                    stego_text = validation.get("stegoText")
+                    if not _is_non_empty_string(stego_text):
+                        raise RuntimeError(
+                            "Cross-validation reported success with empty stego text."
+                        )
                     _STEGO_LOG.info(
                         "[STEGO][SUCCESS] post_id={} attempt={} success_candidate={} decoded_indices={}",
                         post_id,
@@ -512,7 +523,7 @@ class StegoPipeline:
                         validation.get("decodedIndices", []),
                     )
                     return {
-                        "stego_text": validation["stegoText"],
+                        "stego_text": stego_text,
                         "post": post,
                         "selected_angle": selected_angle,
                         "angle_index": selected_idx,
@@ -592,19 +603,7 @@ class StegoPipeline:
                     }
                 retry_count += 1
 
-        _STEGO_LOG.error("[STEGO][FAILED] post_id={} max retries exceeded", post_id)
-        return {
-            "stego_text": "",
-            "post": post,
-            "selected_angle": selected_angle,
-            "angle_index": selected_idx,
-            "succeeded": False,
-            "retry_count": retry_count,
-            "tag": tag,
-            "error": "Max retries exceeded",
-            "breakdown": last_breakdown,
-            "embedding": post_augmentation,
-        }
+        raise RuntimeError("Stego encode retry loop exited unexpectedly.")
 
     def process_post(
         self,
@@ -693,14 +692,30 @@ class StegoPipeline:
             if resolved_tag
             else f"{result_post_id}.json"
         )
-        # Keep parity with n8n workflow: write final output artifact into ./output-results.
-        self.backend.save_object_local(result, step="final-step", filename=filename)
-        _STEGO_LOG.info(
-            "[STEGO][PROCESS] saved result post_id={} step={} filename={}",
-            result_post_id,
-            "final-step",
-            filename,
-        )
+        stego_text = result.get("stego_text")
+        should_save = bool(result.get("succeeded")) and _is_non_empty_string(stego_text)
+        if should_save:
+            artifact = n8n_save_object_body(result)
+            assert_valid_n8n_stego_artifact(artifact)
+            # Keep parity with n8n workflow: write final output artifact into ./output-results.
+            self.backend.save_object_local(artifact, step="final-step", filename=filename)
+            _STEGO_LOG.info(
+                "[STEGO][PROCESS] saved result post_id={} step={} filename={}",
+                result_post_id,
+                "final-step",
+                filename,
+            )
+        else:
+            missing_state = "missing"
+            if isinstance(stego_text, str):
+                missing_state = "empty" if not stego_text.strip() else "present"
+            _STEGO_LOG.error(
+                "[STEGO][PROCESS] skipped output artifact post_id={} succeeded={} stego_text_state={} error={}",
+                result_post_id,
+                bool(result.get("succeeded")),
+                missing_state,
+                result.get("error"),
+            )
 
         if not result.get("succeeded"):
             _STEGO_LOG.error(

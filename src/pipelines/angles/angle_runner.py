@@ -11,12 +11,12 @@ from typing import Any, Dict, List
 import requests
 from requests.exceptions import (
     ChunkedEncodingError,
-    ConnectionError as RequestsConnectionError,
     HTTPError,
     ReadTimeout,
     RequestException,
     Timeout,
 )
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from infrastructure.cache import deterministic_hash_sha256
 from infrastructure.config import get_env, get_lm_studio_url
@@ -31,7 +31,9 @@ REPO_ROOT = ANGLES_DIR.parent.parent
 SYSTEM_PROMPT_PATH = ANGLES_DIR / "systemPrompt.txt"
 USER_PROMPT_PATH = ANGLES_DIR / "userPrompt.txt"
 
-ANGLES_CACHE_DIR = REPO_ROOT / "datasets" / "angles_cache"  # default; live paths use get_angles_cache_dir()
+ANGLES_CACHE_DIR = (
+    REPO_ROOT / "datasets" / "angles_cache"
+)  # default; live paths use get_angles_cache_dir()
 
 SYSTEM_PROMPT = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 USER_PROMPT_TEMPLATE = USER_PROMPT_PATH.read_text(encoding="utf-8")
@@ -50,7 +52,8 @@ def angles_model_name() -> str:
     fallback = (get_env("MODEL") or "").strip()
     if fallback:
         return fallback
-    return "openai/gpt-oss-20b"
+    # return "openai/gpt-oss-20b"
+    return "qwen/qwen3.5-9b"
 
 
 MODEL_NAME = angles_model_name()
@@ -64,8 +67,12 @@ MAX_CHARS_PER_TEXT = 30_000
 SEPARATOR = "\n\n---\n\n"
 
 # On HTTP errors that look like context limits, re-send as N overlapping chunks (no trimming).
-CONTEXT_RETRY_NUM_CHUNKS = max(1, int(get_env("ANGLES_CONTEXT_RETRY_CHUNKS", "3") or "3"))
-CONTEXT_RETRY_OVERLAP_CHARS = max(0, int(get_env("ANGLES_CONTEXT_RETRY_OVERLAP_CHARS", "5000") or "5000"))
+CONTEXT_RETRY_NUM_CHUNKS = max(
+    1, int(get_env("ANGLES_CONTEXT_RETRY_CHUNKS", "3") or "3")
+)
+CONTEXT_RETRY_OVERLAP_CHARS = max(
+    0, int(get_env("ANGLES_CONTEXT_RETRY_OVERLAP_CHARS", "5000") or "5000")
+)
 
 _TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
 _CONNECTIVITY_EXCEPTIONS: tuple[type[BaseException], ...] = (
@@ -480,9 +487,7 @@ def _run_context_window_split(
     )
     merged: List[Dict[str, str]] = []
     for j, part in enumerate(parts, start=1):
-        merged.extend(
-            _run_angle_llm_on_batch([part], j, len(parts), _depth=0)
-        )
+        merged.extend(_run_angle_llm_on_batch([part], j, len(parts), _depth=0))
     return merged
 
 
@@ -538,9 +543,7 @@ def _run_angle_llm_on_batch(
             sub_batches = _transport_sub_batches(batch)
         except ValueError:
             raise exc
-        return _merge_transport_splits(
-            sub_batches, batch_index, batch_total, _depth
-        )
+        return _merge_transport_splits(sub_batches, batch_index, batch_total, _depth)
 
 
 def _repair_json(raw_text: str, error_message: str, attempt: int) -> str:
@@ -591,7 +594,9 @@ def _parse_or_repair(raw_text: str) -> List[Dict[str, str]]:
     return data
 
 
-def analyze_angles_from_texts(texts: List[str], *, use_cache: bool = True) -> List[Dict[str, str]]:
+def analyze_angles_from_texts(
+    texts: List[str], *, use_cache: bool = True
+) -> List[Dict[str, str]]:
     all_responses: List[Dict[str, str]] = []
 
     cache_root = get_angles_cache_dir()

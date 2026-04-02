@@ -4,6 +4,17 @@ import pytest
 
 from workflows.pipelines import stego
 from workflows.pipelines.stego import StegoPipeline
+from workflows.utils.output_results_shape import n8n_save_object_body
+
+
+def test_n8n_save_object_body_legacy_shape():
+    body = n8n_save_object_body(
+        {"stego_text": "x", "embedding": {"a": 1}, "post": {"id": "1"}}
+    )
+    assert body == [{"stegoText": "x", "embedding": {"a": 1}, "post": {"id": "1"}}]
+    assert n8n_save_object_body({}) == [
+        {"stegoText": "", "embedding": None, "post": None}
+    ]
 
 
 def test_stego_helpers_cover_edge_cases():
@@ -91,7 +102,9 @@ def test_process_post_falls_back_to_angles_step_and_persists_on_success():
             if step == "final-step"
             else {"id": "p9", "angles": [{"source_quote": "q", "tangent": "t", "category": "c"}]}
         ),
-        save_object_local=lambda data, step, filename: calls.append((step, filename, data.get("succeeded"))),
+        save_object_local=lambda data, step, filename: calls.append(
+            (step, filename, bool(data and data[0].get("stegoText")))
+        ),
     )
     pipeline.encode = lambda payload, post, tag: {"succeeded": True, "post": post, "stego_text": "ok"}
 
@@ -180,3 +193,63 @@ def test_process_post_falls_back_to_auto_select_when_post_id_missing_on_disk():
         "tag": "same-tag",
     }
     assert saved == [("final-step", "p11_same-tag.json")]
+
+
+def test_cross_validate_rejects_empty_matching_candidate_text():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    angle = {"category": "c", "tangent": "t", "source_quote": "q"}
+    pipeline.decode_pipeline = SimpleNamespace(decode=lambda **kwargs: 0)
+
+    result = pipeline._cross_validate(
+        candidate_texts=[""],
+        few_shots=[],
+        tangents_db=[angle],
+        selected_angle=angle,
+    )
+
+    assert result["succeeded"] is False
+
+
+def test_process_post_skips_save_when_encode_failed():
+    saved = []
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    pipeline.backend = SimpleNamespace(
+        get_post_local=lambda filename, step: {
+            "id": "p12",
+            "angles": [{"source_quote": "q", "tangent": "t", "category": "c"}],
+        },
+        save_object_local=lambda data, step, filename: saved.append((step, filename)),
+    )
+    pipeline.encode = lambda payload, post, tag: {
+        "succeeded": False,
+        "post": post,
+        "stego_text": "candidate text",
+        "error": "Decoding validation failed",
+    }
+
+    result = pipeline.process_post(post_id="p12", payload="x", tag="v1")
+
+    assert result["succeeded"] is False
+    assert saved == []
+
+
+def test_process_post_skips_save_when_stego_text_empty_on_success():
+    saved = []
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    pipeline.backend = SimpleNamespace(
+        get_post_local=lambda filename, step: {
+            "id": "p13",
+            "angles": [{"source_quote": "q", "tangent": "t", "category": "c"}],
+        },
+        save_object_local=lambda data, step, filename: saved.append((step, filename)),
+    )
+    pipeline.encode = lambda payload, post, tag: {
+        "succeeded": True,
+        "post": post,
+        "stego_text": "",
+    }
+
+    result = pipeline.process_post(post_id="p13", payload="x", tag="v1")
+
+    assert result["succeeded"] is True
+    assert saved == []

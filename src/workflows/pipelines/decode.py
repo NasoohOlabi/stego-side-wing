@@ -4,6 +4,7 @@ Parity with n8n workflow ``workflows/tWT6U8IK_9oUBlJMRl0oa.json`` (Decode):
 HTTP semantic_search with n=20, then G Decode agent with model gpt-oss-20b
 (``openai/gpt-oss-20b`` via LM Studio / OpenAI-compatible), retries max 5.
 """
+
 import json
 import logging
 import re
@@ -15,11 +16,18 @@ from workflows.adapters.llm import LLMAdapter
 logger = logging.getLogger(__name__)
 
 # Must match ``gpt-oss`` node + stego encoder (``stego.STEGO_LLM_MODEL``).
-DECODE_LLM_MODEL = "openai/gpt-oss-20b"
+# DECODE_LLM_MODEL = "openai/gpt-oss-20b"
+DECODE_LLM_MODEL = "qwen/qwen3.5-9b"
 # HTTP Request body ``n`` in Decode workflow.
 DECODE_SEMANTIC_TOP_N = 20
 # G Decode node: retryOnFail / maxTries.
 DECODE_LLM_MAX_TRIES = 5
+_DECODE_PROMPT_LOG_EXTRA: dict[str, str] = {
+    "tag": "decode",
+    "component": "DecodePipeline",
+}
+# Cap decode completion so the model cannot emit long reasoning (LM Studio / local models).
+_DECODE_MAX_TOKENS = 48
 
 
 def _angle_signature(angle: Dict[str, Any]) -> Tuple[str, str, str]:
@@ -28,6 +36,71 @@ def _angle_signature(angle: Dict[str, Any]) -> Tuple[str, str, str]:
         str(angle.get("source_quote", "")),
         str(angle.get("tangent", "")),
     )
+
+
+def _strip_code_fence(text: str) -> str:
+    s = text.strip()
+    if s.startswith("```"):
+        lines = s.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```"):
+            inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+            s = "\n".join(inner).strip()
+    return s
+
+
+def _try_labeled_or_json_idx(raw: str, allowed: set[int]) -> Tuple[Optional[int], str]:
+    m_json = re.search(r'"idx"\s*:\s*(\d+)', raw)
+    if m_json:
+        n = int(m_json.group(1))
+        if n in allowed:
+            return n, "json_idx"
+    for pat in (
+        r"(?:^|\n)\s*idx\s*[:=]\s*(\d+)",
+        r"(?:^|\n)\s*index\s*[:=]\s*(\d+)",
+        r"(?:answer|output)\s*[:=]\s*(\d+)",
+    ):
+        m = re.search(pat, raw, re.IGNORECASE)
+        if m:
+            n = int(m.group(1))
+            if n in allowed:
+                return n, "labeled"
+    return None, "none"
+
+
+def _try_last_line_digits(raw: str, allowed: set[int]) -> Tuple[Optional[int], str]:
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    if not lines:
+        return None, "none"
+    last = lines[-1]
+    if re.fullmatch(r"\d+", last):
+        n = int(last)
+        if n in allowed:
+            return n, "last_line"
+    return None, "none"
+
+
+def _extract_decode_index(
+    response: str,
+    allowed_indices: set[int],
+    top_candidates: List[Dict[str, Any]],
+) -> Tuple[Optional[int], str]:
+    """Prefer structured / final-line digits over the first number in verbose prose."""
+    raw = _strip_code_fence(response)
+    for fn in (_try_labeled_or_json_idx, _try_last_line_digits):
+        n, how = fn(raw, allowed_indices)
+        if n is not None:
+            return n, how
+    numbers = [int(x) for x in re.findall(r"\d+", raw)]
+    for number in reversed(numbers):
+        if number in allowed_indices:
+            return number, "last_allowed_digit"
+    for number in numbers:
+        if number in allowed_indices:
+            return number, "first_allowed_digit"
+    for number in reversed(numbers):
+        if 1 <= number <= len(top_candidates):
+            return top_candidates[number - 1]["index"], "rank_fallback"
+    return None, "none"
 
 
 class DecodePipeline:
@@ -111,7 +184,9 @@ class DecodePipeline:
                 )
 
             if not top_candidates:
-                logger.warning("[DECODE][SEMANTIC] No candidates mapped to source angles")
+                logger.warning(
+                    "[DECODE][SEMANTIC] No candidates mapped to source angles"
+                )
                 return None
 
             # Build few-shot prompt section.
@@ -142,17 +217,27 @@ class DecodePipeline:
                 f"{few_shot_text}\n\n"
                 "### INPUT TEXT:\n"
                 f"{stego_text}\n\n"
-                "### OUTPUT (idx only):"
+                "Reply with exactly one line in this form and nothing else:\n"
+                "idx: <integer>\n"
+                "where <integer> is the 0-based index of the matching angle from the list in the system message."
             )
             system_message = (
-                "You Job is to identify the angle/tangent from given texts from the given predefined list\n\n"
-                "return the angle/tangent index only! (OUTPUT: MUST BE A SINGLE NUMBER)\n\n"
-                "the index must be within the following list size, please make sure to return one number "
-                f"thats smaller than {len(angles)} and larger than 0 (0 <= x < {len(angles)})!\n\n\n"
+                "You choose exactly one angle from the JSON list below that best matches the INPUT TEXT.\n"
+                "Output format (mandatory): a single line only, exactly: idx: N\n"
+                "N must be an integer with 0 <= N < "
+                f"{len(angles)}. Do not explain, apologize, analyze, or add any other text or numbers.\n\n"
                 f"{system_candidates_text}"
             )
-            logger.info("[DECODE][PROMPT][SYSTEM]\n%s", system_message)
-            logger.info("[DECODE][PROMPT][USER]\n%s", prompt)
+            logger.info(
+                "[DECODE][PROMPT][SYSTEM]\n%s",
+                system_message,
+                extra=_DECODE_PROMPT_LOG_EXTRA,
+            )
+            logger.info(
+                "[DECODE][PROMPT][USER]\n%s",
+                prompt,
+                extra=_DECODE_PROMPT_LOG_EXTRA,
+            )
 
             response: Optional[str] = None
             last_exc: Optional[BaseException] = None
@@ -164,6 +249,7 @@ class DecodePipeline:
                         model=DECODE_LLM_MODEL,
                         provider="lm_studio",
                         temperature=0.0,
+                        max_tokens=_DECODE_MAX_TOKENS,
                     )
                     break
                 except Exception as exc:
@@ -180,26 +266,22 @@ class DecodePipeline:
 
             logger.info("[DECODE][LLM][RAW] %s", response.strip())
 
-            numbers = [int(x) for x in re.findall(r"\d+", response.strip())]
-            for number in numbers:
-                if number in allowed_indices:
-                    logger.info("[DECODE][LLM] Selected index=%s", number)
-                    return number
-
-            # Rank-based fallback: LLM returns 1-based rank within semantic shortlist.
-            for number in numbers:
-                if 1 <= number <= len(top_candidates):
-                    ranked_idx = top_candidates[number - 1]["index"]
-                    logger.warning(
-                        "[DECODE][LLM] Interpreting rank=%s as index=%s fallback",
-                        number,
-                        ranked_idx,
-                    )
-                    return ranked_idx
+            picked, how = _extract_decode_index(
+                response, allowed_indices, top_candidates
+            )
+            if picked is not None and how != "rank_fallback":
+                logger.info("[DECODE][LLM] index=%s via=%s", picked, how)
+                return picked
+            if picked is not None and how == "rank_fallback":
+                logger.warning(
+                    "[DECODE][LLM] rank fallback -> index=%s",
+                    picked,
+                )
+                return picked
 
             semantic_fallback = top_candidates[0]["index"]
             logger.warning(
-                "[DECODE][FALLBACK] Invalid LLM response '%s'; using top semantic index=%s",
+                "[DECODE][FALLBACK] Unparsed LLM response '%s'; using top semantic index=%s",
                 response.strip(),
                 semantic_fallback,
             )

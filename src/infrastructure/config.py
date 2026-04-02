@@ -76,6 +76,23 @@ def get_lm_studio_url(default: Optional[str] = None) -> str:
     return normalized
 
 
+def get_lm_studio_request_timeout_seconds(default: int = 600) -> int:
+    """
+    HTTP timeout (seconds) for LM Studio OpenAI-compatible /chat/completions.
+
+    Single value applies to connect + read (``requests`` timeout).
+    Override with ``LM_STUDIO_REQUEST_TIMEOUT_SEC`` (integer seconds).
+    """
+    raw = get_env("LM_STUDIO_REQUEST_TIMEOUT_SEC")
+    if not raw:
+        return default
+    try:
+        n = int(raw.strip())
+    except ValueError:
+        return default
+    return max(30, min(n, 86400))
+
+
 # Common configuration constants
 POSTS_DIRECTORY = "datasets/news_cleaned"
 METRICS_DIR = REPO_ROOT / "metrics"

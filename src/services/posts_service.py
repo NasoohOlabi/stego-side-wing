@@ -184,12 +184,12 @@ def save_post(post_data: Dict[str, Any], step: str) -> Dict[str, Any]:
     }
 
 
-def save_object(data: Dict[str, Any], step: str, filename: str) -> Dict[str, Any]:
+def save_object(data: Any, step: str, filename: str) -> Dict[str, Any]:
     """
     Save arbitrary object to step's destination directory.
     
     Args:
-        data: Data to save
+        data: JSON-serializable value (dict, list, etc.)
         step: Step name (must be in STEPS)
         filename: Filename (must not contain directory separators)
         

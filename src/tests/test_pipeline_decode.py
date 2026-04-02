@@ -8,6 +8,26 @@ def test_decode_returns_none_when_no_angles():
     assert pipeline.decode("stego", []) is None
 
 
+def test_decode_prefers_labeled_idx_in_verbose_response():
+    """Prose may contain other digits; idx: N should win."""
+    angles = [
+        {"source_quote": "q0", "tangent": "t0"},
+        {"source_quote": "q1", "tangent": "t1"},
+        {"source_quote": "q2", "tangent": "t2"},
+    ]
+    pipeline = DecodePipeline.__new__(DecodePipeline)
+    pipeline.backend = SimpleNamespace(
+        semantic_search=lambda text, objects, n: {"results": [{"object": angles[1]}]}
+    )
+    verbose = (
+        "Step 1: consider candidates 0 1 2. Scores vary. "
+        "The best match is angle 1. idx: 1"
+    )
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: verbose)
+
+    assert pipeline.decode("message", angles) == 1
+
+
 def test_decode_uses_llm_integer_when_valid_candidate():
     angles = [
         {"source_quote": "q0", "tangent": "t0"},

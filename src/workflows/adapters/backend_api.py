@@ -37,7 +37,7 @@ class LocalBackendClient:
 
         return save_post(post_data=post, step=step)
 
-    def save_object(self, data: Dict[str, Any], step: str, filename: str) -> Dict[str, Any]:
+    def save_object(self, data: Any, step: str, filename: str) -> Dict[str, Any]:
         from services.posts_service import save_object
 
         return save_object(data=data, step=step, filename=filename)
@@ -76,7 +76,7 @@ class LocalBackendClient:
         with open(dest_dir / f"{post_id}.json", "w", encoding="utf-8") as f:
             json.dump(post, f, indent=2, ensure_ascii=False)
 
-    def save_object_local(self, data: Dict[str, Any], step: str, filename: str) -> None:
+    def save_object_local(self, data: Any, step: str, filename: str) -> None:
         _, dest_dir = self.config.get_step_dirs(step)
         dest_dir.mkdir(parents=True, exist_ok=True)
         with open(dest_dir / filename, "w", encoding="utf-8") as f:
@@ -148,7 +148,7 @@ class BackendAPIAdapter:
     def save_post(self, post: Dict[str, Any], step: str) -> Dict[str, Any]:
         return self._local_client().save_post(post=post, step=step)
 
-    def save_object(self, data: Dict[str, Any], step: str, filename: str) -> Dict[str, Any]:
+    def save_object(self, data: Any, step: str, filename: str) -> Dict[str, Any]:
         return self._local_client().save_object(data=data, step=step, filename=filename)
 
     def google_search(self, query: str, first: int = 1, count: int = 10) -> Dict[str, Any]:
@@ -177,7 +177,7 @@ class BackendAPIAdapter:
     def save_post_local(self, post: Dict[str, Any], step: str) -> None:
         self._local_client().save_post_local(post=post, step=step)
 
-    def save_object_local(self, data: Dict[str, Any], step: str, filename: str) -> None:
+    def save_object_local(self, data: Any, step: str, filename: str) -> None:
         self._local_client().save_object_local(data=data, step=step, filename=filename)
 
     def _needle_finder_batch_local(self, needles: List[Any], haystack: List[str]) -> Dict[str, Any]:

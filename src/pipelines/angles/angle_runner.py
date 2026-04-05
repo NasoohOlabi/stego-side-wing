@@ -52,8 +52,8 @@ def angles_model_name() -> str:
     fallback = (get_env("MODEL") or "").strip()
     if fallback:
         return fallback
-    # return "openai/gpt-oss-20b"
-    return "qwen/qwen3.5-9b"
+    return "openai/gpt-oss-20b"
+    # return "qwen/qwen3.5-9b"
 
 
 MODEL_NAME = angles_model_name()

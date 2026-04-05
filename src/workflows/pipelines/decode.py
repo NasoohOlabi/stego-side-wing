@@ -17,8 +17,8 @@ from workflows.utils.workflow_llm_prompts import get_prompts
 logger = logging.getLogger(__name__)
 
 # Must match ``gpt-oss`` node + stego encoder (``stego.STEGO_LLM_MODEL``).
-# DECODE_LLM_MODEL = "openai/gpt-oss-20b"
-DECODE_LLM_MODEL = "qwen/qwen3.5-9b"
+DECODE_LLM_MODEL = "openai/gpt-oss-20b"
+# DECODE_LLM_MODEL = "qwen/qwen3.5-9b"
 # HTTP Request body ``n`` in Decode workflow.
 DECODE_SEMANTIC_TOP_N = 20
 # G Decode node: retryOnFail / maxTries.

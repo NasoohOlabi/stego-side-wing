@@ -492,8 +492,8 @@ class LLMAdapter:
             messages.append({"role": "system", "content": system_message})
         messages.append({"role": "user", "content": prompt})
 
-        # resolved_model = model or "openai/gpt-oss-20b"
-        resolved_model = model or "qwen/qwen3.5-9b"
+        resolved_model = model or "openai/gpt-oss-20b"
+        # resolved_model = model or "qwen/qwen3.5-9b"
         payload: Dict[str, Any] = {
             "model": resolved_model,
             "messages": messages,

@@ -38,7 +38,7 @@ def test_generate_angles_filters_incomplete_results():
     pipeline.backend = SimpleNamespace(
         analyze_angles=lambda texts: {
             "results": [
-                {"source_quote": "q1", "tangent": "t1", "category": "c1"},
+                {"source_quote": "q1", "tangent": "t1", "category": "c1", "source_document": 0},
                 {"source_quote": "q2", "tangent": "", "category": "c2"},
             ]
         }
@@ -46,7 +46,9 @@ def test_generate_angles_filters_incomplete_results():
 
     post = {"selftext": "content"}
     angles = pipeline.generate_angles(post)
-    assert angles == [{"source_quote": "q1", "tangent": "t1", "category": "c1"}]
+    assert angles == [
+        {"source_quote": "q1", "tangent": "t1", "category": "c1", "source_document": 0},
+    ]
 
 
 def test_generate_angles_falls_back_to_llm():
@@ -57,7 +59,9 @@ def test_generate_angles_falls_back_to_llm():
     pipeline._generate_angles_llm = lambda texts: [{"source_quote": "q", "tangent": "t", "category": "c"}]
 
     angles = pipeline.generate_angles({"selftext": "content"}, allow_fallback=True)
-    assert angles == [{"source_quote": "q", "tangent": "t", "category": "c"}]
+    assert angles == [
+        {"source_quote": "q", "tangent": "t", "category": "c", "source_document": 0},
+    ]
 
 
 def test_process_posts_reads_processes_and_saves():
@@ -77,3 +81,33 @@ def test_process_posts_reads_processes_and_saves():
     result = pipeline.process_posts(step="angles-step", count=1, offset=0)
     assert result[0]["options_count"] == 1
     assert saved[0][1] == "angles-step"
+
+
+def test_process_posts_records_partial_failure_summary():
+    saved = []
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+
+    def _get_post_local(file_name, step):
+        if file_name == "p1.json":
+            return {"id": "p1"}
+        raise RuntimeError("missing post")
+
+    pipeline.backend = SimpleNamespace(
+        posts_list=lambda step, count, offset: {"fileNames": ["p1.json", "p2.json"]},
+        get_post_local=_get_post_local,
+        save_post_local=lambda post, step: saved.append((post, step)),
+    )
+    pipeline.process_post = lambda post, step, allow_fallback=False: {
+        **post,
+        "angles": [{"x": 1}],
+        "options_count": 1,
+    }
+
+    result = pipeline.process_posts(step="angles-step", count=2, offset=0)
+
+    assert len(result) == 1
+    assert pipeline._last_batch_summary["requested_count"] == 2
+    assert pipeline._last_batch_summary["loaded_count"] == 1
+    assert pipeline._last_batch_summary["load_failed_count"] == 1
+    assert pipeline._last_batch_summary["processed_count"] == 1
+    assert pipeline._last_batch_summary["failed_count"] == 1

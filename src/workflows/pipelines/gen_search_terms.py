@@ -21,11 +21,14 @@ class GenSearchTermsPipeline:
     def __init__(self):
         self.config = get_config()
         self.llm = LLMAdapter()
+        self._last_cache_error: Optional[str] = None
+        self._last_parse_mode: Optional[str] = None
         self._init_cache_db()
     
     def _init_cache_db(self):
         """Initialize SQLite cache database (replacing n8n datatable)."""
         cache_db = self.config.research_terms_db_path
+        Path(cache_db).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(cache_db)
         conn.execute(
             """
@@ -41,29 +44,80 @@ class GenSearchTermsPipeline:
     
     def _get_cached_terms(self, post_id: str) -> Optional[List[str]]:
         """Get cached search terms for a post."""
-        conn = sqlite3.connect(self.cache_db_path)
-        cursor = conn.execute(
-            "SELECT search_terms FROM research_terms WHERE post_id = ?", (post_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
-        
-        if row:
+        self._last_cache_error = None
+        try:
+            conn = sqlite3.connect(self.cache_db_path)
             try:
-                return json.loads(row[0])
-            except json.JSONDecodeError:
+                cursor = conn.execute(
+                    "SELECT search_terms FROM research_terms WHERE post_id = ?", (post_id,)
+                )
+                row = cursor.fetchone()
+            finally:
+                conn.close()
+        except Exception as exc:
+            self._last_cache_error = str(exc)
+            logger.exception(
+                "search terms cache read failed post_id=%s",
+                post_id,
+                extra={"event": "gen_search_terms_cache", "cache_action": "read", "post_id": post_id},
+            )
+            return None
+
+        if not row:
+            return None
+
+        try:
+            cached = json.loads(row[0])
+            if not isinstance(cached, list):
+                self._last_cache_error = "cache root must be array"
+                logger.warning(
+                    "search terms cache corrupt post_id=%s",
+                    post_id,
+                    extra={
+                        "event": "gen_search_terms_cache",
+                        "cache_action": "corrupt",
+                        "post_id": post_id,
+                        "cache_error": self._last_cache_error,
+                    },
+                )
                 return None
-        return None
+            return cached
+        except json.JSONDecodeError as exc:
+            self._last_cache_error = str(exc)
+            logger.warning(
+                "search terms cache corrupt post_id=%s",
+                post_id,
+                extra={
+                    "event": "gen_search_terms_cache",
+                    "cache_action": "corrupt",
+                    "post_id": post_id,
+                    "cache_error": self._last_cache_error,
+                },
+            )
+            return None
     
     def _cache_terms(self, post_id: str, terms: List[str]) -> None:
         """Cache search terms for a post."""
-        conn = sqlite3.connect(self.cache_db_path)
-        conn.execute(
-            "INSERT OR REPLACE INTO research_terms (post_id, search_terms) VALUES (?, ?)",
-            (post_id, json.dumps(terms)),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect(self.cache_db_path)
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO research_terms (post_id, search_terms) VALUES (?, ?)",
+                    (post_id, json.dumps(terms)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            logger.exception(
+                "search terms cache write failed post_id=%s",
+                post_id,
+                extra={
+                    "event": "gen_search_terms_cache",
+                    "cache_action": "write",
+                    "post_id": post_id,
+                },
+            )
 
     @staticmethod
     def _build_prompt(
@@ -91,21 +145,38 @@ class GenSearchTermsPipeline:
         persist_cache: bool = True,
     ) -> Dict[str, Any]:
         """Generate search terms and return protocol metadata."""
+        t_start = time.perf_counter()
         prompt = self._build_prompt(
             post_title=post_title,
             post_text=post_text,
             post_url=post_url,
         )
         system_message = get_prompts().gen_search_terms.system_template
+        cache_hit = False
+        cache_error = None
+        cached_terms: Optional[List[str]] = None
+        cache_db_path = str(getattr(self, "cache_db_path", "") or "") or None
 
-        cached_terms: Optional[List[str]] = self._get_cached_terms(post_id) if use_cache else None
-        if cached_terms:
+        if use_cache:
+            cached_terms = self._get_cached_terms(post_id)
+            cache_error = getattr(self, "_last_cache_error", None)
+            cache_hit = cached_terms is not None
+        if cached_terms is not None:
             normalized_cached_terms = self._normalize_terms(cached_terms)
+            elapsed_ms = int((time.perf_counter() - t_start) * 1000)
             logger.info(
                 "search terms cache hit post_id=%s count=%s hash=%s",
                 post_id,
                 len(normalized_cached_terms),
                 stable_hash(normalized_cached_terms),
+                extra={
+                    "event": "gen_search_terms",
+                    "post_id": post_id,
+                    "cache_hit": True,
+                    "cache_error": cache_error,
+                    "parse_mode": "cache",
+                    "elapsed_ms": elapsed_ms,
+                },
             )
             return {
                 "post_id": post_id,
@@ -113,6 +184,12 @@ class GenSearchTermsPipeline:
                 "model": self.config.model,
                 "temperature": 0.0,
                 "used_cache": True,
+                "cache_hit": True,
+                "cache_error": cache_error,
+                "cache_db_path": cache_db_path,
+                "parse_mode": "cache",
+                "elapsed_ms": elapsed_ms,
+                "retry_count": 0,
                 "prompt_hash": stable_hash(prompt),
                 "system_prompt_hash": stable_hash(system_message),
                 "terms": normalized_cached_terms,
@@ -138,9 +215,11 @@ class GenSearchTermsPipeline:
                 temperature=0.0,
             )
             llm_ms = int((time.perf_counter() - t_llm) * 1000)
+            llm_meta = dict(getattr(self.llm, "last_call_metadata", {}) or {})
             terms = self._normalize_terms(self._parse_terms(response))
-            if terms and persist_cache:
+            if persist_cache:
                 self._cache_terms(post_id, terms)
+            total_ms = int((time.perf_counter() - t_start) * 1000)
             logger.info(
                 "generated search terms post_id=%s count=%s hash=%s use_cache=%s persist_cache=%s llm_elapsed_ms=%s",
                 post_id,
@@ -149,6 +228,16 @@ class GenSearchTermsPipeline:
                 use_cache,
                 persist_cache,
                 llm_ms,
+                extra={
+                    "event": "gen_search_terms",
+                    "post_id": post_id,
+                    "cache_hit": cache_hit,
+                    "cache_error": cache_error,
+                    "parse_mode": getattr(self, "_last_parse_mode", None),
+                    "elapsed_ms": total_ms,
+                    "llm_elapsed_ms": llm_ms,
+                    "retry_count": int(llm_meta.get("retry_count", 0) or 0),
+                },
             )
             return {
                 "post_id": post_id,
@@ -156,19 +245,52 @@ class GenSearchTermsPipeline:
                 "model": self.config.model,
                 "temperature": 0.0,
                 "used_cache": False,
+                "cache_hit": False,
+                "cache_error": cache_error,
+                "cache_db_path": cache_db_path,
+                "parse_mode": getattr(self, "_last_parse_mode", None),
+                "elapsed_ms": total_ms,
+                "llm_elapsed_ms": llm_ms,
+                "retry_count": int(llm_meta.get("retry_count", 0) or 0),
                 "prompt_hash": stable_hash(prompt),
                 "system_prompt_hash": stable_hash(system_message),
                 "terms": terms,
                 "terms_hash": stable_hash(terms),
             }
         except Exception as e:
-            logger.exception("search term generation failed for post_id=%s", post_id)
+            llm_meta = dict(getattr(self.llm, "last_call_metadata", {}) or {})
+            elapsed_ms = int((time.perf_counter() - t_start) * 1000)
+            logger.exception(
+                "search term generation failed for post_id=%s",
+                post_id,
+                extra={
+                    "event": "gen_search_terms",
+                    "post_id": post_id,
+                    "cache_hit": cache_hit,
+                    "cache_error": cache_error,
+                    "parse_mode": getattr(self, "_last_parse_mode", None),
+                    "elapsed_ms": elapsed_ms,
+                    "retry_count": int(llm_meta.get("retry_count", 0) or 0),
+                    "http_status": llm_meta.get("http_status"),
+                    "error_kind": llm_meta.get("error_kind") or type(e).__name__,
+                    "response_snippet": llm_meta.get("response_snippet"),
+                },
+            )
             return {
                 "post_id": post_id,
                 "provider": "lm_studio",
                 "model": self.config.model,
                 "temperature": 0.0,
                 "used_cache": False,
+                "cache_hit": cache_hit,
+                "cache_error": cache_error,
+                "cache_db_path": cache_db_path,
+                "parse_mode": getattr(self, "_last_parse_mode", None),
+                "elapsed_ms": elapsed_ms,
+                "retry_count": int(llm_meta.get("retry_count", 0) or 0),
+                "http_status": llm_meta.get("http_status"),
+                "error_kind": llm_meta.get("error_kind") or type(e).__name__,
+                "response_snippet": llm_meta.get("response_snippet"),
                 "prompt_hash": stable_hash(prompt),
                 "system_prompt_hash": stable_hash(system_message),
                 "terms": [],
@@ -211,6 +333,7 @@ class GenSearchTermsPipeline:
         """Parse search terms from LLM response."""
         terms = parse_json_array_response(response)
         if terms:
+            self._last_parse_mode = "json_array"
             return [str(t) for t in terms if t]
         
         # Last resort: split by newlines and commas
@@ -223,5 +346,5 @@ class GenSearchTermsPipeline:
             line = line.strip('"\'[]')
             if line:
                 terms.append(line)
-        
+        self._last_parse_mode = "line_fallback" if terms else "empty"
         return terms[:20]  # Limit to 20 terms

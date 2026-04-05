@@ -105,6 +105,7 @@ def _angle_summary(angle: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         "category": angle.get("category"),
         "tangent": angle.get("tangent"),
         "source_quote": angle.get("source_quote"),
+        "source_document": angle.get("source_document"),
     }
 
 

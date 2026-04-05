@@ -201,10 +201,84 @@ def _log_llm_retry(attempt: int, *, reason: str, wait_sec: float) -> None:
     )
 
 
+def _log_transient_http_response(
+    response: requests.Response, *, attempt: int, attempts_max: int
+) -> None:
+    _LOG.warning(
+        "angles_llm_transient_http_response",
+        extra={
+            "event": "angles.llm_transient_http_response",
+            "tags": [TAG_WORKFLOW],
+            "component": "angle_runner",
+            "attempt": attempt,
+            "attempts_max": attempts_max,
+            "http_status": response.status_code,
+            "chat_endpoint": _chat_endpoint_for_log(),
+            "model": angles_model_name(),
+            "body_snippet": _safe_response_body_snippet(response),
+        },
+    )
+
+
+def _log_retry_exhausted(
+    *,
+    retry_history: List[Dict[str, Any]],
+    final_error: BaseException | None,
+    response: requests.Response | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "event": "angles.llm_retry_exhausted",
+        "tags": [TAG_WORKFLOW],
+        "component": "angle_runner",
+        "chat_endpoint": _chat_endpoint_for_log(),
+        "model": angles_model_name(),
+        "retry_history": retry_history,
+    }
+    if response is not None:
+        payload["http_status"] = response.status_code
+        payload["body_snippet"] = _safe_response_body_snippet(response)
+    if final_error is not None:
+        payload["error_kind"] = type(final_error).__name__
+        payload["error"] = str(final_error)
+    _LOG.error("angles_llm_retry_exhausted", extra=payload)
+
+
 def _retry_after_delay(attempt_idx: int, *, reason: str) -> None:
     wait = _llm_retry_backoff_sec(attempt_idx)
     _log_llm_retry(attempt_idx + 1, reason=reason, wait_sec=wait)
     time.sleep(wait)
+
+
+def _quarantine_cache_file(cache_file: Path, reason: str) -> None:
+    quarantine_dir = cache_file.parent / "_quarantine"
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    quarantined = quarantine_dir / f"{cache_file.stem}.{stamp}{cache_file.suffix}"
+    try:
+        cache_file.replace(quarantined)
+        _LOG.warning(
+            "angles_cache_quarantined",
+            extra={
+                "event": "angles.cache_quarantined",
+                "tags": [TAG_WORKFLOW],
+                "component": "angle_runner",
+                "cache_file": str(cache_file),
+                "quarantined_file": str(quarantined),
+                "reason": reason,
+            },
+        )
+    except Exception as exc:
+        _LOG.exception(
+            "angles_cache_quarantine_failed",
+            extra={
+                "event": "angles.cache_quarantine_failed",
+                "tags": [TAG_WORKFLOW],
+                "component": "angle_runner",
+                "cache_file": str(cache_file),
+                "reason": reason,
+                "error": str(exc),
+            },
+        )
 
 
 def _http_error_should_retry(exc: HTTPError) -> bool:
@@ -228,12 +302,6 @@ def _assistant_from_chat_response(response: requests.Response) -> str | None:
     return _assistant_content_from_json(response.json())
 
 
-def _retry_or_raise_http(attempt: int, exc: HTTPError) -> None:
-    if not _http_error_should_retry(exc):
-        raise exc
-    _retry_after_delay(attempt, reason=_http_retry_reason(exc))
-
-
 def _log_angles_llm_attempt_start(attempt_one_based: int, attempts_max: int) -> None:
     _LOG.info(
         "angles_llm_request",
@@ -255,27 +323,93 @@ def _run_post_retry_loop(
     timeout: float | None,
 ) -> str:
     attempts = _llm_max_attempts()
+    retry_history: List[Dict[str, Any]] = []
     last_err: BaseException | None = None
-    for attempt in range(attempts):
+    final_failure_logged = False
+    for attempt in range(1, attempts + 1):
         try:
-            _log_angles_llm_attempt_start(attempt + 1, attempts)
+            _log_angles_llm_attempt_start(attempt, attempts)
             response = requests.post(
                 CHAT_ENDPOINT,
                 json=payload,
                 headers=headers,
                 timeout=timeout,
             )
+            if response.status_code in _TRANSIENT_HTTP_STATUSES:
+                retry_history.append(
+                    {
+                        "attempt": attempt,
+                        "http_status": response.status_code,
+                        "body_snippet": _safe_response_body_snippet(response),
+                    }
+                )
+                _log_transient_http_response(
+                    response, attempt=attempt, attempts_max=attempts
+                )
+                if attempt >= attempts:
+                    last_err = HTTPError(
+                        f"Transient HTTP {response.status_code} from {CHAT_ENDPOINT}"
+                    )
+                    last_err.response = response
+                    _log_retry_exhausted(
+                        retry_history=retry_history,
+                        final_error=last_err,
+                        response=response,
+                    )
+                    final_failure_logged = True
+                    break
+                _retry_after_delay(attempt - 1, reason=f"http_{response.status_code}")
+                continue
             text = _assistant_from_chat_response(response)
             if text is not None:
                 return text
-            _retry_after_delay(attempt, reason=f"http_{response.status_code}")
         except HTTPError as exc:
             last_err = exc
-            _retry_or_raise_http(attempt, exc)
+            status = exc.response.status_code if exc.response is not None else None
+            retry_history.append(
+                {
+                    "attempt": attempt,
+                    "http_status": status,
+                    "body_snippet": _safe_response_body_snippet(exc.response)
+                    if exc.response is not None
+                    else "",
+                    "error_kind": type(exc).__name__,
+                }
+            )
+            if not _http_error_should_retry(exc):
+                _log_retry_exhausted(
+                    retry_history=retry_history,
+                    final_error=exc,
+                    response=exc.response,
+                )
+                final_failure_logged = True
+                raise
+            if attempt >= attempts:
+                _log_retry_exhausted(
+                    retry_history=retry_history,
+                    final_error=exc,
+                    response=exc.response,
+                )
+                final_failure_logged = True
+                raise
+            _retry_after_delay(attempt - 1, reason=_http_retry_reason(exc))
         except _CONNECTIVITY_EXCEPTIONS as exc:
             last_err = exc
-            _retry_after_delay(attempt, reason=type(exc).__name__)
+            retry_history.append(
+                {
+                    "attempt": attempt,
+                    "error_kind": type(exc).__name__,
+                    "reason": type(exc).__name__,
+                }
+            )
+            if attempt >= attempts:
+                _log_retry_exhausted(retry_history=retry_history, final_error=exc)
+                final_failure_logged = True
+                raise
+            _retry_after_delay(attempt - 1, reason=type(exc).__name__)
     if last_err is not None:
+        if not final_failure_logged:
+            _log_retry_exhausted(retry_history=retry_history, final_error=last_err)
         raise last_err
     raise RuntimeError("angles LLM request failed with no exception recorded")
 
@@ -594,54 +728,97 @@ def _parse_or_repair(raw_text: str) -> List[Dict[str, str]]:
     return data
 
 
+def _tag_source_document(
+    angles: List[Dict[str, Any]], source_document: int
+) -> List[Dict[str, Any]]:
+    """Attach 0-based index into the caller's text dictionary (see build_post_text_dictionary)."""
+    out: List[Dict[str, Any]] = []
+    for a in angles:
+        row = dict(a)
+        row["source_document"] = source_document
+        out.append(row)
+    return out
+
+
 def analyze_angles_from_texts(
     texts: List[str], *, use_cache: bool = True
-) -> List[Dict[str, str]]:
-    all_responses: List[Dict[str, str]] = []
+) -> List[Dict[str, Any]]:
+    all_responses: List[Dict[str, Any]] = []
 
     cache_root = get_angles_cache_dir()
-    cache_root.mkdir(parents=True, exist_ok=True)
+    try:
+        cache_root.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        _LOG.warning(
+            "angles_cache_dir_unavailable",
+            extra={
+                "event": "angles.cache_dir_unavailable",
+                "tags": [TAG_WORKFLOW],
+                "component": "angle_runner",
+                "cache_root": str(cache_root),
+                "error": str(exc),
+            },
+        )
+        use_cache = False
 
+    running = 0
     for text in texts:
         if not text:
             continue
 
-        cache_key = deterministic_hash_sha256(text)
-        cache_file = cache_root / f"{cache_key}.json"
+        try:
+            cache_key = deterministic_hash_sha256(text)
+            cache_file = cache_root / f"{cache_key}.json"
 
-        if use_cache and cache_file.exists():
-            _emit_status(f"[angles] cache hit {cache_key[:10]}...")
-            try:
-                cached_data = json.loads(cache_file.read_text(encoding="utf-8"))
-                all_responses.extend(cached_data)
+            if use_cache and cache_file.exists():
+                _emit_status(f"[angles] cache hit {cache_key[:10]}...")
+                try:
+                    cached_data = json.loads(cache_file.read_text(encoding="utf-8"))
+                    if not isinstance(cached_data, list):
+                        raise ValueError("cache root must be array")
+                    all_responses.extend(_tag_source_document(cached_data, running))
+                    continue
+                except Exception as e:
+                    _emit_status(f"[angles] cache read error {cache_key[:10]}...: {e}")
+                    _LOG.warning(
+                        "angles_cache_corrupt",
+                        extra={
+                            "event": "angles.cache_corrupt",
+                            "tags": [TAG_WORKFLOW],
+                            "component": "angle_runner",
+                            "cache_file": str(cache_file),
+                            "cache_key": cache_key,
+                            "error": str(e),
+                        },
+                    )
+                    _quarantine_cache_file(cache_file, str(e))
+
+            _emit_status(f"[angles] cache miss {cache_key[:10]}...")
+
+            segments = _chunk_text_at_boundaries(text, MAX_CHARS_PER_TEXT)
+            if not segments:
                 continue
-            except Exception as e:
-                _emit_status(f"[angles] cache read error {cache_key[:10]}...: {e}")
 
-        _emit_status(f"[angles] cache miss {cache_key[:10]}...")
+            batches = _make_batches(segments, _effective_max_chars_per_prompt())
+            text_responses: List[Dict[str, str]] = []
 
-        segments = _chunk_text_at_boundaries(text, MAX_CHARS_PER_TEXT)
-        if not segments:
-            continue
+            for idx, batch in enumerate(batches, start=1):
+                validated = _run_angle_llm_on_batch(batch, idx, len(batches))
+                text_responses.extend(validated)
 
-        batches = _make_batches(segments, _effective_max_chars_per_prompt())
-        text_responses: List[Dict[str, str]] = []
+            # Cache LLM shape only (no source_document) so the same text can reuse cache at any index.
+            if use_cache:
+                try:
+                    cache_file.write_text(
+                        json.dumps(text_responses, indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                except Exception as e:
+                    _emit_status(f"[angles] cache save error {cache_key[:10]}...: {e}")
 
-        for idx, batch in enumerate(batches, start=1):
-            validated = _run_angle_llm_on_batch(batch, idx, len(batches))
-            text_responses.extend(validated)
-
-        # Cache results for this specific text
-        if use_cache:
-            try:
-                cache_file.write_text(
-                    json.dumps(text_responses, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-            except Exception as e:
-                _emit_status(f"[angles] cache save error {cache_key[:10]}...: {e}")
-
-        all_responses.extend(text_responses)
+            all_responses.extend(_tag_source_document(text_responses, running))
+        finally:
+            running += 1
 
     return all_responses
 

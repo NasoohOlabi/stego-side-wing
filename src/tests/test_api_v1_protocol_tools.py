@@ -36,6 +36,44 @@ def test_protocol_gen_terms_endpoint(client, monkeypatch):
     assert payload["data"]["terms"] == ["a", "b"]
 
 
+def test_protocol_gen_terms_endpoint_preserves_failure_metadata(client, monkeypatch):
+    from app.routes import api_v1_routes
+
+    monkeypatch.setattr(
+        api_v1_routes.runner.backend,
+        "get_post_local",
+        lambda post_filename, step: {"id": "abc", "title": "hello", "url": "https://example.com"},
+    )
+    monkeypatch.setattr(
+        api_v1_routes.runner.gen_terms,
+        "preview_generation",
+        lambda **kwargs: {
+            "post_id": kwargs["post_id"],
+            "terms": [],
+            "used_cache": False,
+            "cache_hit": False,
+            "cache_error": "cache root must be array",
+            "retry_count": 2,
+            "elapsed_ms": 321,
+            "error": "503 Server Error",
+            "error_kind": "HTTPError",
+        },
+    )
+
+    response = client.post(
+        "/api/v1/tools/protocol/gen-terms",
+        json={"post_id": "abc", "use_cache": False, "persist_cache": False},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["data"]["error_kind"] == "HTTPError"
+    assert payload["data"]["retry_count"] == 2
+    assert payload["data"]["cache_error"] == "cache root must be array"
+    assert payload["data"]["elapsed_ms"] == 321
+
+
 def test_protocol_research_preview_endpoint(client, monkeypatch):
     from app.routes import api_v1_routes
 

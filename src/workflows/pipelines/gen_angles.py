@@ -5,7 +5,6 @@ from typing import Any, Dict, List
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
-from workflows.contracts import AngleResult
 from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.text_utils import (
     build_post_text_dictionary,
@@ -28,6 +27,7 @@ class GenAnglesPipeline:
         self.backend = BackendAPIAdapter()
         self.llm = LLMAdapter()
         self.config = get_config()
+        self._last_batch_summary: Dict[str, Any] = {}
     
     def _flatten_comments(self, comments: List[Dict]) -> List[Dict]:
         """Flatten nested comment structure."""
@@ -79,11 +79,14 @@ class GenAnglesPipeline:
             angles = []
             for result in results:
                 if isinstance(result, dict):
-                    angle = {
+                    angle: Dict[str, Any] = {
                         "source_quote": result.get("source_quote", ""),
                         "tangent": result.get("tangent", ""),
                         "category": result.get("category", ""),
                     }
+                    sd = result.get("source_document")
+                    if isinstance(sd, int):
+                        angle["source_document"] = sd
                     if angle["source_quote"] and angle["tangent"] and angle["category"]:
                         angles.append(angle)
             processed_post = dict(post)
@@ -106,10 +109,21 @@ class GenAnglesPipeline:
             return {"post": processed_post, "report": report}
         except Exception as e:
             if not allow_fallback:
-                logger.exception("angles generation failed post_id=%s", post_id)
-                raise RuntimeError(f"Angles generation failed for post {post_id}: {e}") from e
+                logger.exception(
+                    "angles generation failed post_id=%s",
+                    post_id,
+                    extra={
+                        "event": "gen_angles",
+                        "post_id": post_id,
+                        "input_count": len(dictionary),
+                        "error_kind": type(e).__name__,
+                    },
+                )
+                raise
             logger.exception("angles api failed; using fallback for post_id=%s", post_id)
             angles = self._generate_angles_llm(dictionary)
+            for a in angles:
+                a.setdefault("source_document", 0)
             processed_post = dict(post)
             processed_post["angles"] = angles
             processed_post["options_count"] = len(angles)
@@ -154,17 +168,20 @@ class GenAnglesPipeline:
             )
             
             parsed_items = parse_json_array_response(response)
+            # Single combined prompt: no reliable per-chunk index; use 0 (see analyze_angles_from_texts).
+            fallback_doc = 0
             return [
                 {
                     "source_quote": a.get("source_quote", ""),
                     "tangent": a.get("tangent", ""),
                     "category": a.get("category", ""),
+                    "source_document": fallback_doc,
                 }
                 for a in parsed_items
                 if isinstance(a, dict)
             ]
             
-        except Exception as e:
+        except Exception:
             logger.exception("angles fallback llm failed")
             return []
     
@@ -206,17 +223,51 @@ class GenAnglesPipeline:
         # Get list of post filenames
         posts_list = self.backend.posts_list(step=step, count=count, offset=offset)
         file_names = posts_list.get("fileNames", [])
-        
+        load_failed_count = 0
         if not file_names:
+            self._last_batch_summary = {
+                "step": step,
+                "requested_count": count,
+                "listed_count": 0,
+                "loaded_count": 0,
+                "load_failed_count": 0,
+                "processed_count": 0,
+                "failed_count": 0,
+            }
             return []
-        
+
         posts: List[Dict[str, Any]] = []
         for file_name in file_names:
             try:
                 posts.append(self.backend.get_post_local(file_name, step))
-            except Exception as e:
+            except Exception:
                 logger.exception("angles load failed file=%s", file_name)
-        return self.process_post_objects(posts=posts, step=step)
+                load_failed_count += 1
+        processed_posts = self.process_post_objects(posts=posts, step=step)
+        processing_summary = dict(getattr(self, "_last_batch_summary", {}))
+        processing_failed = int(processing_summary.get("failed_count", 0) or 0)
+        self._last_batch_summary = {
+            "step": step,
+            "requested_count": count,
+            "listed_count": len(file_names),
+            "loaded_count": len(posts),
+            "load_failed_count": load_failed_count,
+            "processed_count": len(processed_posts),
+            "processing_failed_count": processing_failed,
+            "failed_count": load_failed_count + processing_failed,
+            "allow_fallback": bool(processing_summary.get("allow_fallback", False)),
+        }
+        if self._last_batch_summary["failed_count"] > 0:
+            logger.warning(
+                "angles batch summary step=%s requested=%s loaded=%s processed=%s failed=%s",
+                step,
+                self._last_batch_summary["requested_count"],
+                self._last_batch_summary["loaded_count"],
+                self._last_batch_summary["processed_count"],
+                self._last_batch_summary["failed_count"],
+                extra={"event": "angles_batch", **self._last_batch_summary},
+            )
+        return processed_posts
 
     def process_post_objects(
         self,
@@ -232,8 +283,15 @@ class GenAnglesPipeline:
                 processed = self.process_post(post, step, allow_fallback=allow_fallback)
                 self.backend.save_post_local(processed, step=step)
                 processed_posts.append(processed)
-            except Exception as e:
+            except Exception:
                 logger.exception("angles process failed post_id=%s", post_id)
+        self._last_batch_summary = {
+            "step": step,
+            "input_count": len(posts),
+            "processed_count": len(processed_posts),
+            "failed_count": len(posts) - len(processed_posts),
+            "allow_fallback": allow_fallback,
+        }
         return processed_posts
 
     def process_post_id(

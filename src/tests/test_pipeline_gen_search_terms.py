@@ -58,3 +58,45 @@ def test_generate_returns_empty_list_on_llm_error():
     pipeline._cache_terms = lambda post_id, terms: None
 
     assert pipeline.generate(post_id="p3") == []
+
+
+def test_preview_generation_includes_retry_metadata_on_llm_error():
+    pipeline = GenSearchTermsPipeline.__new__(GenSearchTermsPipeline)
+    pipeline.config = SimpleNamespace(model="dummy")
+    pipeline.llm = SimpleNamespace(
+        call_llm=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("llm down")),
+        last_call_metadata={
+            "retry_count": 2,
+            "http_status": 503,
+            "response_snippet": "Service Unavailable",
+            "elapsed_ms": 1234,
+        },
+    )
+    pipeline._get_cached_terms = lambda post_id: None
+    pipeline._cache_terms = lambda post_id, terms: None
+
+    report = pipeline.preview_generation(post_id="p4", post_title="title")
+
+    assert report["terms"] == []
+    assert report["error_kind"] == "RuntimeError"
+    assert report["retry_count"] == 2
+    assert report["http_status"] == 503
+    assert report["response_snippet"] == "Service Unavailable"
+    assert report["cache_hit"] is False
+    assert report["cache_error"] is None
+
+
+def test_preview_generation_carries_cache_error_metadata():
+    pipeline = GenSearchTermsPipeline.__new__(GenSearchTermsPipeline)
+    pipeline.config = SimpleNamespace(model="dummy")
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "[\"term-a\"]", last_call_metadata={})
+    pipeline._get_cached_terms = lambda post_id: None
+    pipeline._cache_terms = lambda post_id, terms: None
+    pipeline._last_cache_error = "cache root must be array"
+
+    report = pipeline.preview_generation(post_id="p5", post_title="title")
+
+    assert report["terms"] == ["term-a"]
+    assert report["cache_error"] == "cache root must be array"
+    assert report["cache_hit"] is False
+    assert report["parse_mode"] == "json_array"

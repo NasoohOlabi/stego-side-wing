@@ -1,12 +1,13 @@
 """Angles analysis service."""
 import logging
+from typing import Any
 
 from pipelines.angles.angle_runner import analyze_angles_from_texts
 
 logger = logging.getLogger(__name__)
 
 
-def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, str]]:
+def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, Any]]:
     """
     Analyze angles from text chunks.
     
@@ -15,7 +16,8 @@ def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, s
         use_cache: When False, skip angles disk cache read/write (forces fresh LLM work).
 
     Returns:
-        List of angle dicts with source_quote, tangent, category
+        List of angle dicts with source_quote, tangent, category, and source_document
+        (0-based index into ``texts``, counting only non-empty blocks in order).
         
     Raises:
         ValueError: If texts is invalid
@@ -35,12 +37,30 @@ def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, s
                 "event": "angles",
                 "action": "analyze",
                 "text_blocks": len(cast_texts),
+                "use_cache": use_cache,
             },
         )
         results = analyze_angles_from_texts(cast_texts, use_cache=use_cache)
         return results
     except ValueError as e:
-        raise ValueError(str(e))
+        logger.exception(
+            "angles analysis validation failed",
+            extra={
+                "event": "angles",
+                "action": "analyze",
+                "text_blocks": len(texts) if isinstance(texts, list) else None,
+                "use_cache": use_cache,
+            },
+        )
+        raise
     except Exception as e:
-        # Re-raise with context
-        raise RuntimeError(f"Angles analysis failed: {e}") from e
+        logger.exception(
+            "angles analysis failed",
+            extra={
+                "event": "angles",
+                "action": "analyze",
+                "text_blocks": len(cast_texts),
+                "use_cache": use_cache,
+            },
+        )
+        raise

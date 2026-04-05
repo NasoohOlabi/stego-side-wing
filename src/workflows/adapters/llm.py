@@ -2,8 +2,10 @@
 
 import json
 import re
+import random
+import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from uuid import uuid4
 
 import openai
@@ -16,12 +18,107 @@ from infrastructure.config import (
     get_lm_studio_request_timeout_seconds,
     get_lm_studio_url,
 )
+from services.workflow_run_tracker import get_run_id
+from workflows.utils.protocol_utils import stable_hash
+from infrastructure.json_logging import get_trace_id
 
 
 PROMPTS_LOG_TIMESTAMP = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 PROMPTS_LOG_PATH = REPO_ROOT / "logs" / f"stego_prompts_{PROMPTS_LOG_TIMESTAMP}.log"
 
 _LLM_ADAPTER_LOG = logger.bind(component="LLMAdapter")
+
+_RETRYABLE_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+def _llm_max_attempts() -> int:
+    raw = (get_env("LLM_MAX_ATTEMPTS") or "").strip()
+    return max(1, int(raw or "3"))
+
+
+def _llm_retry_backoff_sec(attempt_index: int) -> float:
+    base = float((get_env("LLM_RETRY_BACKOFF_BASE_SEC") or "").strip() or "1.0")
+    cap = float((get_env("LLM_RETRY_BACKOFF_CAP_SEC") or "").strip() or "30.0")
+    return min(cap, base * (2**attempt_index))
+
+
+def _llm_retry_jitter_sec(wait_sec: float) -> float:
+    if wait_sec <= 0:
+        return 0.0
+    jitter_cap = min(1.0, wait_sec * 0.2)
+    return random.uniform(0.0, jitter_cap)
+
+
+def _exception_status_code(exc: BaseException) -> Optional[int]:
+    response = getattr(exc, "response", None)
+    if response is not None and hasattr(response, "status_code"):
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            return status
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    return None
+
+
+def _exception_snippet(exc: BaseException, limit: int = 400) -> str:
+    response = getattr(exc, "response", None)
+    if response is not None:
+        for attr in ("text", "content"):
+            value = getattr(response, attr, None)
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            if isinstance(value, str) and value:
+                return value[:limit] + ("..." if len(value) > limit else "")
+    text = str(exc)
+    return text[:limit] + ("..." if len(text) > limit else "")
+
+
+def _is_retryable_llm_error(exc: BaseException) -> bool:
+    status = _exception_status_code(exc)
+    if status is not None:
+        return status in _RETRYABLE_HTTP_STATUSES
+    name = type(exc).__name__.lower()
+    return any(token in name for token in ("timeout", "connection", "connect", "chunked"))
+
+
+def _provider_endpoint(provider: str, *, lm_studio_url: str | None = None, model: str | None = None) -> str:
+    if provider == "openai":
+        return "https://api.openai.com/v1/chat/completions"
+    if provider == "gemini":
+        return f"https://generativelanguage.googleapis.com/v1beta/models/{model or 'gemini-pro'}:generateContent"
+    if provider == "groq":
+        return "https://api.groq.com/openai/v1/chat/completions"
+    if provider == "lm_studio" and lm_studio_url:
+        return f"{lm_studio_url.rstrip('/')}/chat/completions"
+    return provider
+
+
+def _llm_attempt_log_fields(
+    *,
+    provider: str,
+    model: str,
+    endpoint: str,
+    prompt: str,
+    system_message: Optional[str],
+    temperature: float,
+    max_tokens: Optional[int],
+    attempt: int,
+    attempts_max: int,
+) -> dict[str, Any]:
+    return {
+        "event": "workflow_llm_request",
+        "provider": provider,
+        "model": model,
+        "endpoint": endpoint,
+        "attempt": attempt,
+        "attempts_max": attempts_max,
+        "retry_count": attempt - 1,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "trace_id": get_trace_id(),
+        "run_id": get_run_id(),
+        "prompt_hash": stable_hash(prompt),
+        "system_prompt_hash": stable_hash(system_message or ""),
+    }
 
 
 def _openai_compatible_meta(
@@ -192,6 +289,7 @@ class LLMAdapter:
         self.lm_studio_url = get_lm_studio_url()
         self.lm_studio_api_token = get_env("LM_STUDIO_API_TOKEN", "lm-studio")
         self.lm_studio_timeout_sec = get_lm_studio_request_timeout_seconds()
+        self.last_call_metadata: Dict[str, Any] = {}
 
     def _log_workflow_llm_turn(
         self,
@@ -210,11 +308,20 @@ class LLMAdapter:
         """Append prompt + assistant text for one workflow LLM call to a timestamped log."""
         thinking, response = _split_thinking_and_answer(assistant_response_raw)
         truncation_suspected = finish_reason == "length"
+        call_meta = dict(getattr(self, "last_call_metadata", {}))
         record: Dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "scope": "workflows",
+            "component": "LLMAdapter",
+            "trace_id": get_trace_id(),
+            "run_id": get_run_id(),
             "provider": provider,
             "model": model,
+            "endpoint": call_meta.get("endpoint"),
+            "attempt": call_meta.get("attempt"),
+            "attempts_max": call_meta.get("attempts_max"),
+            "retry_count": call_meta.get("retry_count"),
+            "elapsed_ms": call_meta.get("elapsed_ms"),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "finish_reason": finish_reason,
@@ -230,6 +337,8 @@ class LLMAdapter:
             "response": response,
             "assistant_response_raw": assistant_response_raw,
             "assistant_response": response,
+            "prompt_hash": call_meta.get("prompt_hash"),
+            "system_prompt_hash": call_meta.get("system_prompt_hash"),
         }
         try:
             PROMPTS_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -249,6 +358,96 @@ class LLMAdapter:
             response=response,
             truncation_suspected=truncation_suspected,
         )
+
+    def _call_with_retry(
+        self,
+        *,
+        provider: str,
+        model: str,
+        endpoint: str,
+        prompt: str,
+        system_message: Optional[str],
+        temperature: float,
+        max_tokens: Optional[int],
+        request_fn: Callable[[], str],
+    ) -> str:
+        attempts = _llm_max_attempts()
+        started_at = time.perf_counter()
+        last_exc: BaseException | None = None
+        for attempt in range(1, attempts + 1):
+            self.last_call_metadata = {
+                "provider": provider,
+                "model": model,
+                "endpoint": endpoint,
+                "attempt": attempt,
+                "attempts_max": attempts,
+                "retry_count": attempt - 1,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "trace_id": get_trace_id(),
+                "run_id": get_run_id(),
+                "prompt_hash": stable_hash(prompt),
+                "system_prompt_hash": stable_hash(system_message or ""),
+            }
+            _LLM_ADAPTER_LOG.info("llm_request_begin", extra=_llm_attempt_log_fields(
+                provider=provider,
+                model=model,
+                endpoint=endpoint,
+                prompt=prompt,
+                system_message=system_message,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                attempt=attempt,
+                attempts_max=attempts,
+            ))
+            try:
+                text = request_fn()
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                self.last_call_metadata.update({"elapsed_ms": elapsed_ms, "success": True})
+                return text
+            except Exception as exc:
+                last_exc = exc
+                elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                status = _exception_status_code(exc)
+                retryable = _is_retryable_llm_error(exc)
+                snippet = _exception_snippet(exc)
+                self.last_call_metadata.update(
+                    {
+                        "elapsed_ms": elapsed_ms,
+                        "success": False,
+                        "error_kind": type(exc).__name__,
+                        "http_status": status,
+                        "response_snippet": snippet,
+                        "retryable": retryable,
+                    }
+                )
+                if retryable and attempt < attempts:
+                    wait = _llm_retry_backoff_sec(attempt - 1) + _llm_retry_jitter_sec(
+                        _llm_retry_backoff_sec(attempt - 1)
+                    )
+                    self.last_call_metadata["wait_sec"] = wait
+                    _LLM_ADAPTER_LOG.warning(
+                        "llm_request_retry",
+                        extra={
+                            **self.last_call_metadata,
+                            "event": "workflow_llm_retry",
+                            "message": "retrying LLM request after transient failure",
+                        },
+                    )
+                    time.sleep(wait)
+                    continue
+                _LLM_ADAPTER_LOG.error(
+                    "llm_request_failed",
+                    extra={
+                        **self.last_call_metadata,
+                        "event": "workflow_llm_failure",
+                        "message": "LLM request failed",
+                    },
+                )
+                raise
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("LLM request failed without an exception")
 
     def call_llm(
         self,
@@ -320,44 +519,54 @@ class LLMAdapter:
         """Call OpenAI API."""
         if not self.openai_api_key:
             raise RuntimeError("OpenAI API key not configured")
-
-        client = openai.OpenAI(api_key=self.openai_api_key)
-
-        messages = []
-        if system_message:
-            messages.append({"role": "system", "content": system_message})
-        messages.append({"role": "user", "content": prompt})
-
         resolved_model = model or "gpt-4"
-        kwargs: Dict[str, Any] = {
-            "model": resolved_model,
-            "messages": messages,
-            "temperature": temperature,
-        }
-        if max_tokens:
-            kwargs["max_tokens"] = max_tokens
+        endpoint = _provider_endpoint("openai")
 
-        response = client.chat.completions.create(**kwargs)
-        choice0 = response.choices[0]
-        raw = choice0.message.content or ""
-        text = _strip_redacted_thinking(raw)
-        fr = getattr(choice0, "finish_reason", None)
-        usage = getattr(response, "usage", None)
-        pt = getattr(usage, "prompt_tokens", None) if usage else None
-        ct = getattr(usage, "completion_tokens", None) if usage else None
-        self._log_workflow_llm_turn(
+        def _request() -> str:
+            client = openai.OpenAI(api_key=self.openai_api_key)
+            messages = []
+            if system_message:
+                messages.append({"role": "system", "content": system_message})
+            messages.append({"role": "user", "content": prompt})
+            kwargs: Dict[str, Any] = {
+                "model": resolved_model,
+                "messages": messages,
+                "temperature": temperature,
+            }
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+            response = client.chat.completions.create(**kwargs)
+            choice0 = response.choices[0]
+            raw = choice0.message.content or ""
+            text = _strip_redacted_thinking(raw)
+            fr = getattr(choice0, "finish_reason", None)
+            usage = getattr(response, "usage", None)
+            pt = getattr(usage, "prompt_tokens", None) if usage else None
+            ct = getattr(usage, "completion_tokens", None) if usage else None
+            self._log_workflow_llm_turn(
+                provider="openai",
+                model=resolved_model,
+                prompt=prompt,
+                system_message=system_message,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                assistant_response_raw=raw,
+                finish_reason=str(fr) if fr is not None else None,
+                prompt_tokens=int(pt) if isinstance(pt, int) else None,
+                completion_tokens=int(ct) if isinstance(ct, int) else None,
+            )
+            return text
+
+        return self._call_with_retry(
             provider="openai",
             model=resolved_model,
+            endpoint=endpoint,
             prompt=prompt,
             system_message=system_message,
             temperature=temperature,
             max_tokens=max_tokens,
-            assistant_response_raw=raw,
-            finish_reason=str(fr) if fr is not None else None,
-            prompt_tokens=int(pt) if isinstance(pt, int) else None,
-            completion_tokens=int(ct) if isinstance(ct, int) else None,
+            request_fn=_request,
         )
-        return text
 
     def _call_gemini(
         self,
@@ -370,50 +579,53 @@ class LLMAdapter:
         """Call Google Gemini API."""
         if not self.google_palm_api_key:
             raise RuntimeError("Google Gemini API key not configured")
-
-        # Combine system message and prompt
-        full_prompt = prompt
-        if system_message:
-            full_prompt = f"{system_message}\n\n{prompt}"
-
-        url = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         model_name = model or "gemini-pro"
-        url = url.format(model=model_name)
+        endpoint = _provider_endpoint("gemini", model=model_name)
 
-        payload: Dict[str, Any] = {
-            "contents": [{"parts": [{"text": full_prompt}]}],
-            "generationConfig": {
-                "temperature": temperature,
-            },
-        }
-        if max_tokens:
-            payload["generationConfig"]["maxOutputTokens"] = max_tokens
+        def _request() -> str:
+            full_prompt = prompt
+            if system_message:
+                full_prompt = f"{system_message}\n\n{prompt}"
+            payload: Dict[str, Any] = {
+                "contents": [{"parts": [{"text": full_prompt}]}],
+                "generationConfig": {"temperature": temperature},
+            }
+            if max_tokens:
+                payload["generationConfig"]["maxOutputTokens"] = max_tokens
+            response = requests.post(
+                endpoint,
+                params={"key": self.google_palm_api_key},
+                json=payload,
+                timeout=120,
+            )
+            response.raise_for_status()
+            data = response.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                raise RuntimeError("No candidates in Gemini response")
+            raw = candidates[0]["content"]["parts"][0]["text"]
+            text = _strip_redacted_thinking(raw)
+            self._log_workflow_llm_turn(
+                provider="gemini",
+                model=model_name,
+                prompt=prompt,
+                system_message=system_message,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                assistant_response_raw=raw,
+            )
+            return text
 
-        response = requests.post(
-            url,
-            params={"key": self.google_palm_api_key},
-            json=payload,
-            timeout=120,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        candidates = data.get("candidates", [])
-        if not candidates:
-            raise RuntimeError("No candidates in Gemini response")
-
-        raw = candidates[0]["content"]["parts"][0]["text"]
-        text = _strip_redacted_thinking(raw)
-        self._log_workflow_llm_turn(
+        return self._call_with_retry(
             provider="gemini",
             model=model_name,
+            endpoint=endpoint,
             prompt=prompt,
             system_message=system_message,
             temperature=temperature,
             max_tokens=max_tokens,
-            assistant_response_raw=raw,
+            request_fn=_request,
         )
-        return text
 
     def _call_groq(
         self,
@@ -426,51 +638,57 @@ class LLMAdapter:
         """Call Groq API."""
         if not self.groq_api_key:
             raise RuntimeError("Groq API key not configured")
-
-        url = "https://api.groq.com/openai/v1/chat/completions"
+        url = _provider_endpoint("groq")
         headers = {
             "Authorization": f"Bearer {self.groq_api_key}",
             "Content-Type": "application/json",
         }
-
-        messages = []
-        if system_message:
-            messages.append({"role": "system", "content": system_message})
-        messages.append({"role": "user", "content": prompt})
-
         resolved_model = model or "llama3-70b-8192"
-        payload: Dict[str, Any] = {
-            "model": resolved_model,
-            "messages": messages,
-            "temperature": temperature,
-        }
-        if max_tokens:
-            payload["max_tokens"] = max_tokens
+        def _request() -> str:
+            messages = []
+            if system_message:
+                messages.append({"role": "system", "content": system_message})
+            messages.append({"role": "user", "content": prompt})
+            payload: Dict[str, Any] = {
+                "model": resolved_model,
+                "messages": messages,
+                "temperature": temperature,
+            }
+            if max_tokens:
+                payload["max_tokens"] = max_tokens
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
+            response.raise_for_status()
+            data = response.json()
+            choices = data.get("choices", [])
+            if not choices:
+                raise RuntimeError("No choices in Groq response")
+            raw = choices[0]["message"]["content"] or ""
+            text = _strip_redacted_thinking(raw)
+            fr, pt, ct = _openai_compatible_meta(data)
+            self._log_workflow_llm_turn(
+                provider="groq",
+                model=resolved_model,
+                prompt=prompt,
+                system_message=system_message,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                assistant_response_raw=raw,
+                finish_reason=fr,
+                prompt_tokens=pt,
+                completion_tokens=ct,
+            )
+            return text
 
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
-        response.raise_for_status()
-        data = response.json()
-
-        choices = data.get("choices", [])
-        if not choices:
-            raise RuntimeError("No choices in Groq response")
-
-        raw = choices[0]["message"]["content"] or ""
-        text = _strip_redacted_thinking(raw)
-        fr, pt, ct = _openai_compatible_meta(data)
-        self._log_workflow_llm_turn(
+        return self._call_with_retry(
             provider="groq",
             model=resolved_model,
+            endpoint=url,
             prompt=prompt,
             system_message=system_message,
             temperature=temperature,
             max_tokens=max_tokens,
-            assistant_response_raw=raw,
-            finish_reason=fr,
-            prompt_tokens=pt,
-            completion_tokens=ct,
+            request_fn=_request,
         )
-        return text
 
     def _call_lm_studio(
         self,
@@ -481,50 +699,56 @@ class LLMAdapter:
         max_tokens: Optional[int],
     ) -> str:
         """Call LM Studio API."""
-        url = f"{self.lm_studio_url.rstrip('/')}/chat/completions"
+        url = _provider_endpoint("lm_studio", lm_studio_url=self.lm_studio_url)
         headers = {
             "Authorization": f"Bearer {self.lm_studio_api_token}",
             "Content-Type": "application/json",
         }
-
-        messages = []
-        if system_message:
-            messages.append({"role": "system", "content": system_message})
-        messages.append({"role": "user", "content": prompt})
-
         resolved_model = model or "openai/gpt-oss-20b"
-        # resolved_model = model or "qwen/qwen3.5-9b"
-        payload: Dict[str, Any] = {
-            "model": resolved_model,
-            "messages": messages,
-            "temperature": temperature,
-        }
-        if max_tokens:
-            payload["max_tokens"] = max_tokens
+        def _request() -> str:
+            messages = []
+            if system_message:
+                messages.append({"role": "system", "content": system_message})
+            messages.append({"role": "user", "content": prompt})
+            payload: Dict[str, Any] = {
+                "model": resolved_model,
+                "messages": messages,
+                "temperature": temperature,
+            }
+            if max_tokens:
+                payload["max_tokens"] = max_tokens
+            response = requests.post(
+                url, headers=headers, json=payload, timeout=self.lm_studio_timeout_sec
+            )
+            response.raise_for_status()
+            data = response.json()
+            choices = data.get("choices", [])
+            if not choices:
+                raise RuntimeError("No choices in LM Studio response")
+            raw = choices[0]["message"]["content"] or ""
+            text = _strip_redacted_thinking(raw)
+            fr, pt, ct = _openai_compatible_meta(data)
+            self._log_workflow_llm_turn(
+                provider="lm_studio",
+                model=resolved_model,
+                prompt=prompt,
+                system_message=system_message,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                assistant_response_raw=raw,
+                finish_reason=fr,
+                prompt_tokens=pt,
+                completion_tokens=ct,
+            )
+            return text
 
-        response = requests.post(
-            url, headers=headers, json=payload, timeout=self.lm_studio_timeout_sec
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        choices = data.get("choices", [])
-        if not choices:
-            raise RuntimeError("No choices in LM Studio response")
-
-        raw = choices[0]["message"]["content"] or ""
-        text = _strip_redacted_thinking(raw)
-        fr, pt, ct = _openai_compatible_meta(data)
-        self._log_workflow_llm_turn(
+        return self._call_with_retry(
             provider="lm_studio",
             model=resolved_model,
+            endpoint=url,
             prompt=prompt,
             system_message=system_message,
             temperature=temperature,
             max_tokens=max_tokens,
-            assistant_response_raw=raw,
-            finish_reason=fr,
-            prompt_tokens=pt,
-            completion_tokens=ct,
+            request_fn=_request,
         )
-        return text

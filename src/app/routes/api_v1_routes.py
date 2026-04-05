@@ -46,7 +46,14 @@ from services.state_service import (
     read_json_file,
     write_json_file,
 )
-from services.workflow_run_tracker import end_run, iter_snapshot, register_run, track_workflow
+from services.workflow_run_tracker import (
+    bind_run_id,
+    end_run,
+    iter_snapshot,
+    register_run,
+    reset_run_id,
+    track_workflow,
+)
 from pydantic import ValidationError
 
 from workflows.runner import WorkflowRunner
@@ -380,21 +387,56 @@ class _WorkflowLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            message = self.format(record)
-            if not message:
-                return
+            payload = _workflow_log_payload(record)
             self._events.put(
                 (
                     "log",
-                    {
-                        "level": record.levelname.lower(),
-                        "logger": record.name,
-                        "message": message,
-                    },
+                    payload,
                 )
             )
         except Exception:
             return
+
+
+_WORKFLOW_LOG_RESERVED_FIELDS = {
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "message",
+    "asctime",
+}
+
+
+def _workflow_log_payload(record: logging.LogRecord) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "level": record.levelname.lower(),
+        "logger": record.name,
+        "message": record.getMessage(),
+    }
+    for key, value in record.__dict__.items():
+        if key in _WORKFLOW_LOG_RESERVED_FIELDS or key.startswith("_"):
+            continue
+        payload[key] = value
+    if record.exc_info:
+        payload["exc_info"] = logging.Formatter().formatException(record.exc_info)
+    return payload
 
 
 def _sync_workflow(command: str, run_fn: Callable[[], Any]) -> Any:
@@ -435,8 +477,10 @@ def _stream_workflow(
 
     def _worker() -> None:
         trace_token = None
+        run_token = None
         if trace_id:
             trace_token = bind_trace_id(trace_id)
+        run_token = bind_run_id(run_id)
         stream_started = time.perf_counter()
         logger.info(
             "workflow_stream_begin",
@@ -506,6 +550,8 @@ def _stream_workflow(
         finally:
             if trace_token is not None:
                 reset_trace_id(trace_token)
+            if run_token is not None:
+                reset_run_id(run_token)
             end_run(run_id)
             done.set()
 

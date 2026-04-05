@@ -53,6 +53,14 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
 - **Post text overrides:** `post_title`, `post_text`, `post_url` on `gen-terms` and protocol tools where listed.
 - **Tools:** `text` on `POST /tools/semantic/search`; `needle` and `haystack` (string array) on `POST /tools/semantic/needle`; `texts` (string array) on `POST /tools/angles/analyze`.
 
+### Angle objects
+
+Posts, previews, and tool responses may include an `angles` array. Each angle includes:
+
+- **`source_quote`**, **`tangent`**, **`category`** (strings) — required for a “complete” angle in gen-angles filtering.
+- **`source_document`** (integer) — 0-based index into the **text dictionary** used for extraction: the same ordered list as `build_post_text_dictionary` in code (post body / selftext, then each search-result text snippet, then each flattened comment body). For **`POST /tools/angles/analyze`**, the server assigns one index per **non-empty** string in the request `texts` array (first block → `0`, second → `1`, …). On-disk angles cache files store LLM output **without** this field; the index is applied when results are merged. The **gen-angles LLM fallback** (single combined prompt) sets `source_document` to **`0`** for every row.
+- **`idx`** (integer, optional) — added by the stego codec when angles are flattened for embedding; canonical global angle index for decode workflows.
+
 ### Stego metrics (perplexity, KL/JSD)
 
 - **Purpose:** Score stego-bearing texts produced by the pipeline (typically under `output-results`, i.e. `final-step` in `[STEPS](../src/infrastructure/config.py)`) for language-model perplexity and for distributional distance (word unigrams) vs comment baselines.
@@ -238,7 +246,7 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
     - `stage_hash_match`: `{ "data_load": bool, "research": bool, "gen_angles": bool }` — whether the full-post hash for each stage matched between the two passes (search/API non-determinism often makes `research` differ between passes even on the same day)
   - Also available as `POST /workflows/run` with `"command": "double-process-new-post"` and the same body fields.
 - `POST /workflows/batch-angles-determinism`
-  - **Purpose:** For each `post_id`, load the post from `step` (default `angles-step`), build the same text dictionary as gen-angles, then run angle extraction **twice** with **angles disk cache disabled** (`use_cache=false` on `analyze_angles_from_texts`) and compare normalized angle lists (non-empty `source_quote` / `tangent` / `category` only, same as production preview).
+  - **Purpose:** For each `post_id`, load the post from `step` (default `angles-step`), build the same text dictionary as gen-angles, then run angle extraction **twice** with **angles disk cache disabled** (`use_cache=false` on `analyze_angles_from_texts`) and compare normalized angle lists (non-empty `source_quote` / `tangent` / `category` only, same as production preview). The hash comparison **ignores** other fields such as **`source_document`**; persisted posts from gen-angles still include **`source_document`** when present (see **Angle objects**).
   - Body: `post_ids` (required non-empty string array), `step?` (default `angles-step`), `stream?` (bool; same SSE default as other workflow routes).
   - Response `data`: `mode` (`batch_angles_determinism`), `posts_requested`, `posts_succeeded`, `all_identical` (true only if every row without `error` has `identical: true`), `results[]` per post (`run_1_hash` / `run_2_hash`, `identical`, `error?`, etc.).
   - **Note:** This does **not** prove cross-machine parity; it only measures whether two fresh runs on **this** host+LLM return the same normalized list for the same inputs.
@@ -274,7 +282,8 @@ Common **string-oriented** request fields across v1 (see each endpoint for full 
 - `POST /tools/semantic/needle`
   - Body: `needle`, `haystack` (string array)
 - `POST /tools/angles/analyze`
-  - Body: `texts` (string array)
+  - Body: `texts` (string array; at least one non-empty string). Empty strings are skipped; **`source_document`** on each result is the 0-based index among **non-empty** inputs in order (aligned with gen-angles’ post text dictionary when that list is built the same way).
+  - Success `data`: `{ "results": [ ... ] }` — each item has `source_quote`, `tangent`, `category`, and **`source_document`** (integer).
 - `POST /tools/metrics/perplexity`
   - Computes sliding-window **GPT-style perplexity** (causal LM negative log-likelihood) over stego text in each `*.json` under `output_dir`, writes a report JSON under `metrics_dir`, and returns the full report plus the absolute `report_path`.
   - **Input extraction:** Accepts either a JSON **object** with `stego_text` or `stegoText`, or a JSON **array** whose first element is an object with `stegoText` (same flexibility as `[scripts/avg_perplexity.py](../scripts/avg_perplexity.py)`).

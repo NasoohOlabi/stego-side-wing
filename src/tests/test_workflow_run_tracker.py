@@ -30,6 +30,7 @@ def test_track_workflow_context():
         snap = list(tracker.iter_snapshot())
         assert len(snap) == 1
         assert snap[0]["command"] == "decode"
+        assert tracker.get_run_id() == snap[0]["id"]
     assert list(tracker.iter_snapshot()) == []
 
 

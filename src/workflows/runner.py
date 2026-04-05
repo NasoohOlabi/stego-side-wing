@@ -456,10 +456,21 @@ class WorkflowRunner:
             count=count,
             offset=offset,
         )
+        summary = dict(getattr(self.gen_angles, "_last_batch_summary", {}) or {})
         self._emit(
             on_progress,
             "stage_done",
-            {"stage": "gen-angles", "processed_count": len(results)},
+            {
+                "stage": "gen-angles",
+                "processed_count": len(results),
+                "requested_count": summary.get("requested_count"),
+                "listed_count": summary.get("listed_count"),
+                "loaded_count": summary.get("loaded_count"),
+                "load_failed_count": summary.get("load_failed_count"),
+                "processing_failed_count": summary.get("processing_failed_count"),
+                "failed_count": summary.get("failed_count"),
+                "degraded": bool(summary.get("failed_count", 0)),
+            },
         )
         return results
     
@@ -782,16 +793,32 @@ class WorkflowRunner:
             "stage_start",
             {"stage": "gen-terms", "post_id": post_id},
         )
-        terms = self.gen_terms.generate(
+        report = self.gen_terms.preview_generation(
             post_id=post_id,
             post_title=post_title,
             post_text=post_text,
             post_url=post_url,
         )
+        terms = list(report.get("terms", []))
+        stage_done = {
+            "stage": "gen-terms",
+            "terms_count": len(terms),
+            "terms_hash": report.get("terms_hash"),
+            "used_cache": report.get("used_cache"),
+            "cache_hit": report.get("cache_hit"),
+            "retry_count": report.get("retry_count"),
+            "elapsed_ms": report.get("elapsed_ms"),
+            "parse_mode": report.get("parse_mode"),
+            "degraded": bool(report.get("error")),
+        }
+        if report.get("error"):
+            stage_done["error"] = report.get("error")
+            stage_done["error_kind"] = report.get("error_kind")
+            stage_done["http_status"] = report.get("http_status")
         self._emit(
             on_progress,
             "stage_done",
-            {"stage": "gen-terms", "terms_count": len(terms)},
+            stage_done,
         )
         return terms
 

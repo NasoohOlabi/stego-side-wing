@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pytest
 
@@ -73,3 +74,35 @@ def test_receiver_stream_has_run_id_and_trace(client, monkeypatch):
             break
     else:
         pytest.fail("no accepted event with run_id")
+
+
+def test_receiver_stream_forwards_structured_log_extras(client, monkeypatch):
+    from app.routes import api_v1_routes
+
+    def _run(post, sender_user_id, on_progress=None, **kwargs):
+        logging.getLogger("workflows.test").info(
+            "structured log from test",
+            extra={
+                "trace_id": "trace-test",
+                "run_id": "run-test",
+                "custom_field": "custom-value",
+            },
+        )
+        if on_progress:
+            on_progress("receiver.locate_comment", {"post_id": "p1"})
+        return {"succeeded": True, "payload": "x"}
+
+    monkeypatch.setattr(api_v1_routes.runner, "run_receiver", _run)
+
+    r = client.post(
+        "/api/v1/workflows/receiver",
+        json={
+            "post": {"id": "p1", "comments": []},
+            "sender_user_id": "alice",
+            "stream": True,
+        },
+    )
+    assert r.status_code == 200
+    text = r.get_data(as_text=True)
+    assert "custom_field" in text
+    assert "trace-test" in text

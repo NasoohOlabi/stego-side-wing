@@ -22,6 +22,7 @@ from workflows.utils.stego_codec import (
     embed_in_comment_selection as codec_embed_in_comment_selection,
     flatten_comments,
 )
+from workflows.utils.workflow_llm_prompts import get_prompts
 
 # Backward-compatible names for tests and callers.
 MAX_LITERAL_LEN = stego_codec.MAX_LITERAL_LEN
@@ -33,28 +34,55 @@ _take_bits = stego_codec.take_bits
 STEGO_WORKFLOW_ID = "27rZrYtywu3k9e7Q"
 STEGO_DEFAULT_OFFSET = 1
 STEGO_LLM_MODEL = DECODE_LLM_MODEL
+# Headroom for models that emit thinking in-content before the JSON array.
+STEGO_ENCODE_MAX_TOKENS = 1536
 _STEGO_LOG = logger.bind(component="StegoPipeline")
-N8N_STEGO_SYSTEM_TEMPLATE = (
-    "ROLE: Human Redditor — stay in character at all times.\n\n"
-    "MISSION: Write three short, natural Reddit-style comments reacting to the Original Post.\n"
-    "Each comment must explore the perspective derived from “{tangent}”, "
-    "and feel emotionally consistent with {category}.\n"
-    "The writing should sound human, grounded, and reflective — never robotic or abstract.\n\n"
-    "---\n\n"
-    "RULES\n\n"
-    "1. Output one JSON array of exactly three plain text strings.\n"
-    "   Each string must be non-empty, one to two sentences, and contain no markdown, bullets, lists, or code fences.\n"
-    "2. Do not add labels, numbering, explanations, or any extra wrapper text.\n"
-    "3. Keep the tone human: casual, spontaneous, slightly imperfect, and easy to read.\n"
-    "4. Clear intent: Each comment must naturally express\n\n"
-    "   * who is reacting (subject),\n"
-    "   * what they are thinking or doing (action),\n"
-    "   * how they feel about it (emotion).\n"
-    "     Do not force grammar; keep phrasing natural.\n"
-    "5. Priority rule: If any rules conflict, prioritize thematic accuracy and natural human expression.\n\n"
-    "IMPORTANT: Your final response must be formatted as valid JSON.\n"
-    "# TODO: Consider requiring each comment to take a distinct angle once the prompt settles.\n"
-)
+
+
+def _stego_log_bind(
+    log_area: str,
+    *,
+    log_op: str = "encode",
+    prompt_role: Optional[str] = None,
+    llm_stage: Optional[str] = None,
+    process_event: Optional[str] = None,
+) -> Any:
+    """Structured stego log context (log_domain / log_area / log_op); message stays prefix-free."""
+    fields: Dict[str, Any] = {
+        "log_domain": "stego",
+        "log_area": log_area,
+        "log_op": log_op,
+    }
+    if prompt_role is not None:
+        fields["prompt_role"] = prompt_role
+    if llm_stage is not None:
+        fields["llm_stage"] = llm_stage
+    if process_event is not None:
+        fields["process_event"] = process_event
+    return _STEGO_LOG.bind(**fields)
+
+
+# Must match stego encode system template rule 1 (exactly three strings).
+STEGO_LLM_JSON_STRING_COUNT = 3
+
+
+def _stego_clean_json_string_list(items: Any) -> List[str]:
+    if not isinstance(items, list):
+        return []
+    return [str(x).strip() for x in items if isinstance(x, str) and str(x).strip()]
+
+
+def _stego_comment_strings_from_parsed(parsed: Any) -> Optional[List[str]]:
+    """Three non-empty strings: top-level array or dict texts/comments/items/output."""
+    direct = _stego_clean_json_string_list(parsed)
+    if direct:
+        return direct if len(direct) == STEGO_LLM_JSON_STRING_COUNT else None
+    if isinstance(parsed, dict):
+        for key in ("texts", "comments", "items", "output"):
+            clean = _stego_clean_json_string_list(parsed.get(key))
+            if clean and len(clean) == STEGO_LLM_JSON_STRING_COUNT:
+                return clean
+    return None
 
 
 def _eq_angle(lhs: Optional[Dict[str, Any]], rhs: Optional[Dict[str, Any]]) -> bool:
@@ -249,21 +277,17 @@ class StegoPipeline:
             if rendered:
                 chain_section = "\n---\n" + "\n---\n".join(rendered)
 
-        prompt = (
-            "## Context to React To\n\n"
-            "### Relevant Research / Domain Info\n"
-            f"{sample.get('best_match', '')}\n\n"
-            "---\n\n"
-            "### Original Post / Comments\n\n"
-            f"Title: {title}\n"
-            f"Author: {author}\n\n"
-            "Content:\n"
-            f"{selftext}{chain_section}"
+        enc = get_prompts().stego_encode
+        prompt = enc.user_template.format(
+            best_match=str(sample.get("best_match", "")),
+            title=title,
+            author=author,
+            selftext=selftext,
+            chain_section=chain_section,
         )
-
-        system_message = N8N_STEGO_SYSTEM_TEMPLATE.format(
-            tangent=sample.get("tangent", ""),
-            category=sample.get("category", ""),
+        system_message = enc.system_template.format(
+            tangent=str(sample.get("tangent", "")),
+            category=str(sample.get("category", "")),
         )
         return prompt, system_message
 
@@ -272,12 +296,6 @@ class StegoPipeline:
         sample: Dict[str, Any],
         comment_embedding: Dict[str, Any],
     ) -> List[str]:
-        def _clean_text_list(items: Any) -> List[str]:
-            if not isinstance(items, list):
-                return []
-            cleaned = [str(x).strip() for x in items if isinstance(x, str) and str(x).strip()]
-            return cleaned
-
         def _extract_json_block(raw: str) -> str:
             stripped = raw.strip()
             if not stripped.startswith("```"):
@@ -288,24 +306,24 @@ class StegoPipeline:
             return stripped
 
         prompt, system_message = self._build_prompt(sample, comment_embedding)
-        prompt_log = _STEGO_LOG.bind(tag="encode")
-        prompt_log.info(
-            "[STEGO][PROMPT][ENCODE] category={} tangent={} source_quote={}",
+        _stego_log_bind("prompt").info(
+            "category={} tangent={} source_quote={}",
             sample.get("category"),
             _text_preview(sample.get("tangent", ""), max_len=120),
             _text_preview(sample.get("source_quote", ""), max_len=120),
         )
-        prompt_log.info("[STEGO][PROMPT][ENCODE][SYSTEM]\n{}", system_message)
-        prompt_log.info("[STEGO][PROMPT][ENCODE][USER]\n{}", prompt)
+        _stego_log_bind("prompt", prompt_role="system").info("{}", system_message)
+        _stego_log_bind("prompt", prompt_role="user").info("{}", prompt)
         response = self.llm.call_llm(
             prompt=prompt,
             system_message=system_message,
             model=STEGO_LLM_MODEL,
             provider="lm_studio",
             temperature=0.7,
+            max_tokens=STEGO_ENCODE_MAX_TOKENS,
         )
         text = response.strip()
-        _STEGO_LOG.info("[STEGO][LLM][ENCODE][RAW]\n{}", text)
+        _stego_log_bind("llm", llm_stage="raw").info("{}", text)
 
         # Accept plain JSON and markdown-fenced JSON payloads.
         json_candidates = [text, _extract_json_block(text)]
@@ -316,31 +334,25 @@ class StegoPipeline:
                 parsed = json.loads(payload)
             except json.JSONDecodeError:
                 continue
-
-            direct = _clean_text_list(parsed)
-            if direct:
-                _STEGO_LOG.info(
-                    "[STEGO][LLM][ENCODE][PARSED] extracted={} mode=array",
-                    len(direct),
+            strings = _stego_comment_strings_from_parsed(parsed)
+            if strings:
+                _stego_log_bind("llm", llm_stage="parsed").info(
+                    "extracted={} mode=json_contract",
+                    len(strings),
                 )
-                return direct
+                return strings
 
-            if isinstance(parsed, dict):
-                for key in ("texts", "comments", "items", "output"):
-                    clean = _clean_text_list(parsed.get(key))
-                    if clean:
-                        _STEGO_LOG.info(
-                            "[STEGO][LLM][ENCODE][PARSED] extracted={} mode={}",
-                            len(clean),
-                            key,
-                        )
-                        return clean
-
-        _STEGO_LOG.warning(
-            "[STEGO][LLM][ENCODE][PARSE] Falling back to raw text payload for sample tangent={}",
+        _stego_log_bind("llm", llm_stage="parse").error(
+            "Strict JSON contract failed tangent={} preview={}",
             _text_preview(sample.get("tangent", ""), max_len=120),
+            _text_preview(text, max_len=200),
         )
-        return [text] if text else []
+        raise RuntimeError(
+            "Stego LLM output must be valid JSON: exactly "
+            f"{STEGO_LLM_JSON_STRING_COUNT} non-empty strings (array or "
+            "object with texts/comments/items/output), optionally in a "
+            "markdown code fence — no prose before/after."
+        )
 
     def _cross_validate(
         self,
@@ -432,8 +444,8 @@ class StegoPipeline:
             raise ValueError("Post must have angles")
 
         post_id = post.get("id")
-        _STEGO_LOG.info(
-            "[STEGO][START] post_id={} payload_len={} max_retries={}",
+        _stego_log_bind("start").info(
+            "post_id={} payload_len={} max_retries={}",
             post_id,
             len(payload),
             max_retries,
@@ -442,8 +454,8 @@ class StegoPipeline:
         post_augmentation = self._augment_post(payload, post)
         samples, tangents_db = self._build_samples(post_augmentation, post)
         if not samples:
-            _STEGO_LOG.error(
-                "[STEGO][PREP] No samples generated from angle embedding for post_id={}",
+            _stego_log_bind("prep").error(
+                "No samples generated from angle embedding for post_id={}",
                 post_id,
             )
             return {
@@ -469,8 +481,8 @@ class StegoPipeline:
 
         while retry_count <= max_retries:
             try:
-                _STEGO_LOG.info(
-                    "[STEGO][ATTEMPT] post_id={} attempt={}/{} selected_idx={}",
+                _stego_log_bind("attempt").info(
+                    "post_id={} attempt={}/{} selected_idx={}",
                     post_id,
                     retry_count + 1,
                     max_retries + 1,
@@ -496,8 +508,8 @@ class StegoPipeline:
                 if not primary_texts:
                     raise RuntimeError("Encoder did not return candidate texts")
 
-                _STEGO_LOG.info(
-                    "[STEGO][GENERATE] post_id={} attempt={} primary_candidates={} few_shot_groups={}",
+                _stego_log_bind("generate").info(
+                    "post_id={} attempt={} primary_candidates={} few_shot_groups={}",
                     post_id,
                     retry_count + 1,
                     len(primary_texts),
@@ -515,8 +527,8 @@ class StegoPipeline:
                         raise RuntimeError(
                             "Cross-validation reported success with empty stego text."
                         )
-                    _STEGO_LOG.info(
-                        "[STEGO][SUCCESS] post_id={} attempt={} success_candidate={} decoded_indices={}",
+                    _stego_log_bind("success").info(
+                        "post_id={} attempt={} success_candidate={} decoded_indices={}",
                         post_id,
                         retry_count + 1,
                         validation.get("successIdx"),
@@ -538,8 +550,8 @@ class StegoPipeline:
 
                 last_breakdown = validation.get("breakDown", {})
                 validation_details = validation.get("validationDetails", {})
-                _STEGO_LOG.warning(
-                    "[STEGO][VALIDATION] post_id={} attempt={} failed selected_idx={} decoded_indices={}",
+                _stego_log_bind("validation").warning(
+                    "post_id={} attempt={} failed selected_idx={} decoded_indices={}",
                     post_id,
                     retry_count + 1,
                     selected_idx,
@@ -554,8 +566,8 @@ class StegoPipeline:
                         "decoded_indices": validation.get("decodedIndices", []),
                         "candidate_results": validation_details.get("candidates", []),
                     }
-                    _STEGO_LOG.error(
-                        "[STEGO][FAILED] post_id={} reason={}",
+                    _stego_log_bind("failed").error(
+                        "post_id={} reason={}",
                         post_id,
                         error_details["reason"],
                     )
@@ -576,8 +588,8 @@ class StegoPipeline:
                     }
                 retry_count += 1
             except Exception as exc:
-                _STEGO_LOG.exception(
-                    "[STEGO][ERROR] post_id={} attempt={} type={}",
+                _stego_log_bind("error").exception(
+                    "post_id={} attempt={} type={}",
                     post_id,
                     retry_count + 1,
                     type(exc).__name__,
@@ -632,15 +644,15 @@ class StegoPipeline:
                 )
             first_file = file_names[0]
             next_post_id = first_file[:-5] if first_file.endswith(".json") else first_file
-            _STEGO_LOG.info(
-                "[STEGO][PROCESS] auto-selected post_id={} for tag={}",
+            _stego_log_bind("process", process_event="auto_selected").info(
+                "post_id={} for tag={}",
                 next_post_id,
                 resolved_tag,
             )
             return next_post_id
 
-        _STEGO_LOG.info(
-            "[STEGO][PROCESS] start post_id={} list_offset={}",
+        _stego_log_bind("process", process_event="start").info(
+            "post_id={} list_offset={}",
             post_id,
             list_offset,
         )
@@ -668,8 +680,8 @@ class StegoPipeline:
                 # If caller passed an outdated/nonexistent post_id, keep API parity with n8n:
                 # pick next unprocessed post for the same tag instead of hard-failing.
                 if post_id:
-                    _STEGO_LOG.warning(
-                        "[STEGO][PROCESS] post_id={} not found; falling back to next unprocessed for tag={}",
+                    _stego_log_bind("process", process_event="fallback_post").warning(
+                        "post_id={} not found; falling back to next unprocessed for tag={}",
                         resolved_post_id,
                         resolved_tag,
                     )
@@ -699,8 +711,8 @@ class StegoPipeline:
             assert_valid_n8n_stego_artifact(artifact)
             # Keep parity with n8n workflow: write final output artifact into ./output-results.
             self.backend.save_object_local(artifact, step="final-step", filename=filename)
-            _STEGO_LOG.info(
-                "[STEGO][PROCESS] saved result post_id={} step={} filename={}",
+            _stego_log_bind("process", process_event="saved").info(
+                "post_id={} step={} filename={}",
                 result_post_id,
                 "final-step",
                 filename,
@@ -709,8 +721,8 @@ class StegoPipeline:
             missing_state = "missing"
             if isinstance(stego_text, str):
                 missing_state = "empty" if not stego_text.strip() else "present"
-            _STEGO_LOG.error(
-                "[STEGO][PROCESS] skipped output artifact post_id={} succeeded={} stego_text_state={} error={}",
+            _stego_log_bind("process", process_event="skipped_artifact").error(
+                "post_id={} succeeded={} stego_text_state={} error={}",
                 result_post_id,
                 bool(result.get("succeeded")),
                 missing_state,
@@ -718,8 +730,8 @@ class StegoPipeline:
             )
 
         if not result.get("succeeded"):
-            _STEGO_LOG.error(
-                "[STEGO][PROCESS] failed post_id={} error={}",
+            _stego_log_bind("process", process_event="failed").error(
+                "post_id={} error={}",
                 resolved_post_id,
                 result.get("error"),
             )

@@ -14,6 +14,8 @@ from flask import Blueprint, Response, current_app, request, stream_with_context
 from app.schemas.responses import fail, ok
 from infrastructure.config import METRICS_DIR, POSTS_DIRECTORY, REPO_ROOT, STEPS
 from infrastructure.json_logging import (
+    TAG_API,
+    TAG_HTTP,
     bind_trace_id,
     clear_api_log_file,
     get_api_log_file_stats,
@@ -45,8 +47,18 @@ from services.state_service import (
     write_json_file,
 )
 from services.workflow_run_tracker import end_run, iter_snapshot, register_run, track_workflow
+from pydantic import ValidationError
+
 from workflows.runner import WorkflowRunner
 from workflows.utils.protocol_utils import stable_hash, text_preview
+from workflows.utils.workflow_llm_prompts import (
+    WorkflowLlmPromptsDocument,
+    default_workflow_llm_prompts,
+    get_prompts,
+    reload_prompts,
+    save_workflow_llm_prompts_to_path,
+    workflow_llm_prompts_path,
+)
 
 bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 logger = logging.getLogger(__name__)
@@ -650,6 +662,120 @@ def state_fs_delete() -> tuple[Any, int]:
         return ok(delete_path(rel_path, recursive=recursive))
     except ValueError as exc:
         return fail(str(exc), status=400)
+
+
+def _workflow_llm_prompts_rel_path() -> str:
+    """Repo-relative path for API responses, or absolute if path is outside ``REPO_ROOT``."""
+    path = workflow_llm_prompts_path().resolve()
+    root = REPO_ROOT.resolve()
+    try:
+        return str(path.relative_to(root)).replace("\\", "/")
+    except ValueError:
+        display = str(path).replace("\\", "/")
+        logger.info(
+            "prompts_path_outside_repo_root",
+            extra={
+                "event": "prompts_path",
+                "tags": [TAG_API, TAG_HTTP],
+                "component": "api_v1",
+                "log_area": "workflow_llm_prompts",
+                "path_display": "absolute_outside_repo",
+                "resolved_path": display,
+                "repo_root": str(root).replace("\\", "/"),
+                "trace_id": get_trace_id(),
+                "detail": "prompts file not under REPO_ROOT (e.g. monkeypathed tests); response uses absolute path",
+            },
+        )
+        return display
+
+
+def _log_prompts_route(action: str, **fields: Any) -> None:
+    logger.info(
+        "prompts_workflow_llm_route",
+        extra={
+            "event": "prompts_workflow_llm",
+            "tags": [TAG_API, TAG_HTTP],
+            "component": "api_v1",
+            "log_area": "workflow_llm_prompts",
+            "route_action": action,
+            "trace_id": get_trace_id(),
+            **fields,
+        },
+    )
+
+
+@bp.route("/prompts/workflow-llm", methods=["GET"])
+def prompts_workflow_llm_get() -> tuple[Any, int]:
+    """Return workflow LLM prompt templates (reloads from disk before read)."""
+    _log_prompts_route("get")
+    reload_prompts()
+    doc = get_prompts()
+    _log_prompts_route("get_done", prompts_version=doc.version)
+    return ok(
+        {
+            "prompts": doc.model_dump(mode="json"),
+            "path": _workflow_llm_prompts_rel_path(),
+        }
+    )
+
+
+@bp.route("/prompts/workflow-llm", methods=["PUT"])
+def prompts_workflow_llm_put() -> tuple[Any, int]:
+    """Replace workflow LLM prompts JSON (validated); reloads in-process cache."""
+    _log_prompts_route("put")
+    body, err = _json_body()
+    if err:
+        return err
+    assert body is not None
+    raw = body.get("prompts")
+    if not isinstance(raw, dict):
+        return fail("'prompts' must be a JSON object", status=400)
+    try:
+        doc = WorkflowLlmPromptsDocument.model_validate(raw)
+    except ValidationError as exc:
+        logger.info(
+            "prompts_workflow_llm_validation_failed",
+            extra={
+                "event": "prompts_workflow_llm",
+                "tags": [TAG_API, TAG_HTTP],
+                "component": "api_v1",
+                "log_area": "workflow_llm_prompts",
+                "route_action": "put",
+                "outcome": "validation_error",
+                "trace_id": get_trace_id(),
+            },
+        )
+        return fail("Invalid prompts document", status=400, details=exc.errors())
+    save_workflow_llm_prompts_to_path(workflow_llm_prompts_path(), doc)
+    reload_prompts()
+    _log_prompts_route("put_done", prompts_version=doc.version)
+    return ok(
+        {
+            "path": _workflow_llm_prompts_rel_path(),
+            "written": True,
+        },
+        message="Workflow LLM prompts updated",
+        status=201,
+    )
+
+
+@bp.route("/prompts/workflow-llm/reset", methods=["POST"])
+def prompts_workflow_llm_reset() -> tuple[Any, int]:
+    """Restore baked-in default prompts and reload cache."""
+    _log_prompts_route("reset")
+    save_workflow_llm_prompts_to_path(
+        workflow_llm_prompts_path(),
+        default_workflow_llm_prompts(),
+    )
+    reload_prompts()
+    _log_prompts_route("reset_done", prompts_version=get_prompts().version)
+    return ok(
+        {
+            "path": _workflow_llm_prompts_rel_path(),
+            "reset": True,
+        },
+        message="Workflow LLM prompts reset to defaults",
+    )
 
 
 @bp.route("/artifacts/posts", methods=["GET"])

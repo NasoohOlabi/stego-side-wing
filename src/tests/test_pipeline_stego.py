@@ -28,6 +28,16 @@ def test_stego_helpers_cover_edge_cases():
     assert insufficient is True
 
 
+def test_stego_comment_strings_from_parsed_requires_three_strings() -> None:
+    assert stego._stego_comment_strings_from_parsed(["a", "b", "c"]) == ["a", "b", "c"]
+    assert stego._stego_comment_strings_from_parsed(["a", "b"]) is None
+    assert stego._stego_comment_strings_from_parsed(["a", "b", "c", "d"]) is None
+    assert stego._stego_comment_strings_from_parsed(
+        {"texts": ["x", "y", "z"]}
+    ) == ["x", "y", "z"]
+    assert stego._stego_comment_strings_from_parsed({"texts": ["x", "y"]}) is None
+
+
 def test_stego_flatten_and_eq_helpers():
     flat = stego._flatten_comments(
         [{"id": "a", "replies": [{"id": "b", "replies": [{"id": "c"}]}]}]

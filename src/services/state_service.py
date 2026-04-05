@@ -40,6 +40,7 @@ def get_paths_map() -> Dict[str, str]:
     paths["log.workflow_prompts_dir"] = str(resolve_path("./logs"))
     paths["log.workflow_prompts_glob"] = str(resolve_path("./logs/stego_prompts_*.log"))
     paths["metrics.dir"] = str(METRICS_DIR)
+    paths["prompts.workflow_llm"] = str(resolve_path("./config/workflow_llm_prompts.json"))
     return paths
 
 

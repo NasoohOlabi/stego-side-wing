@@ -12,6 +12,7 @@ from workflows.utils.text_utils import (
     flatten_comments,
     parse_json_array_response,
 )
+from workflows.utils.workflow_llm_prompts import get_prompts
 from pipelines.angles.angle_runner import angles_model_name
 from pipelines.angles.angle_runner import SYSTEM_PROMPT as ANGLES_SYSTEM_PROMPT
 from pipelines.angles.angle_runner import TEMPERATURE as ANGLES_TEMPERATURE
@@ -139,30 +140,10 @@ class GenAnglesPipeline:
         """Generate angles using LLM directly."""
         # Combine texts
         combined_text = "\n\n---\n\n".join(texts)
-        
-        prompt = f"""I have a block of texts from any domain — it could be educational, technical, journalistic, creative, or conversational. I want you to extract phrases or quotes that could spark commentary, opinions, or deeper exploration. For each quote, generate a structured JSON object with:
-- `"source_quote"`: A short phrase or sentence from the text that could inspire discussion.
-- `"tangent"`: A brief description of the idea, opinion, or deeper topic I could explore based on that quote.
-- `"category"`: A high-level theme that groups the tangent (e.g. "Politics", "Technology", "Education", "Philosophy", "Culture", "Business").
+        ga = get_prompts().gen_angles
+        prompt = ga.user_template.format(combined_text=combined_text)
+        system_message = ga.system_template
 
-Please give me at least 15 items. Return ONLY a JSON array, no markdown fences, no explanations.
-
-Texts:
-{combined_text}"""
-        
-        system_message = """You are a specialized Texts Analysis and Structuring Agent. Your sole function is to process input blocks of texts and extract key discussion points, formatting the entire output as a single, valid JSON array of objects.
-
-**CRITICAL OUTPUT DIRECTIVE:**
-The entire output **MUST** be the raw JSON array beginning with `[` and ending with `]`. **DO NOT** include any markdown fences (like ```json or ```), explanations, preambles, or postambles.
-
-**STRICT OUTPUT CONSTRAINTS:**
-1. **Format:** Your entire response **MUST** be a single JSON array (`[...]`). Do not include any preceding or trailing text, explanations, code fences, or commentary.
-2. **Minimum Count:** You **MUST** generate a minimum of 15 JSON objects in the array.
-3. **Schema:** Each object **MUST** adhere strictly to the following schema with exactly these three keys:
-   * `"source_quote"` (string): A short, compelling quote or phrase extracted directly from the input text.
-   * `"tangent"` (string): A brief, provocative description of the deeper topic, opinion, or line of inquiry inspired by the quote.
-   * `"category"` (string): A high-level thematic label (e.g., "Technology", "Philosophy", "Business", "Culture", "Science")."""
-        
         try:
             response = self.llm.call_llm(
                 prompt=prompt,

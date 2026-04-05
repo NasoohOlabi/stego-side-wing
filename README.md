@@ -32,7 +32,7 @@ uv run python src/API.py --dev --host 127.0.0.1 --port 5001
 
 You can also enable dev mode with `API_DEBUG=1`.
 
-HTTP contract for `/api/v1/*` (workflows, tools, metrics, state): **[docs/api-spec.md](docs/api-spec.md)**.
+HTTP contract for `/api/v1/*` (workflows, tools, metrics, state): **[docs/api-spec.md](docs/api-spec.md)**. Workflow LLM templates live in `config/workflow_llm_prompts.json` and are exposed at `GET` / `PUT` / `POST …/reset` under `/api/v1/prompts/workflow-llm` (see **Concepts → Workflow LLM prompts** and **State** in that doc).
 
 ## Run workflow CLI
 

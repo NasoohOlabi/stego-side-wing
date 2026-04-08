@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DataLoad pipeline — behavior and performance</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --accent: #5eb3f6;
+      --warn: #e6a23c;
+      --code-bg: #0d1117;
+      --border: #2d3a4f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      line-height: 1.55;
+      max-width: 52rem;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+      background: var(--bg);
+      color: var(--text);
+    }
+    h1 { font-size: 1.75rem; font-weight: 600; margin-top: 0; }
+    h2 { font-size: 1.2rem; color: var(--accent); margin-top: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.35rem; }
+    h3 { font-size: 1.05rem; margin-top: 1.5rem; color: #c5d4e8; }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); font-size: 0.92rem; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin: 1rem 0;
+    }
+    .warn { border-left: 4px solid var(--warn); padding-left: 1rem; margin: 1rem 0; }
+    code, pre {
+      font-family: ui-monospace, "Cascadia Code", monospace;
+      font-size: 0.85rem;
+    }
+    code { background: var(--code-bg); padding: 0.15em 0.4em; border-radius: 4px; }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      padding: 1rem;
+      overflow-x: auto;
+      border-radius: 6px;
+      line-height: 1.45;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.92rem; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.65rem; text-align: left; vertical-align: top; }
+    th { background: var(--panel); color: var(--accent); }
+    ul.tight li { margin: 0.35rem 0; }
+    a { color: var(--accent); }
+    .flow { white-space: pre; font-family: ui-monospace, monospace; font-size: 0.8rem; color: #b8c9dc; }
+    footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+
+  <h1>DataLoad pipeline report</h1>
+  <p class="muted">Module: <code>src/workflows/pipelines/data_load.py</code> — how it works and why wall-clock time is dominated by URL fetching, not Python iteration.</p>
+
+  <h2>1. Role in the system</h2>
+  <p><strong>DataLoadPipeline</strong> bridges “posts that only have a URL” to “posts whose article body is available as <code>selftext</code>.” It is the sender workflow stage that materializes page text before research and angle generation.</p>
+  <div class="panel">
+    <p><strong>Step contract (<code>filter-url-unresolved</code>)</strong> — from infrastructure config:</p>
+    <ul class="tight">
+      <li><strong>Reads</strong> post JSON from <code>datasets/news_cleaned</code> (source directory for the step).</li>
+      <li><strong>Writes</strong> enriched posts to <code>datasets/news_url_fetched</code> (destination directory).</li>
+    </ul>
+  </div>
+  <p>Downstream code (e.g. <code>WorkflowRunner.run_data_load</code>, receiver rebuild paths) calls this pipeline to ensure each post has fetched article text when needed.</p>
+
+  <h2>2. Dependencies (call graph)</h2>
+  <pre class="flow">DataLoadPipeline
+├── BackendAPIAdapter
+│   ├── posts_list  → services.posts_service.list_posts (discover filenames)
+│   ├── get_post_local  → read JSON from step <em>source</em> dir
+│   └── save_post_local → write JSON to step <em>dest</em> dir
+└── FetchUrlContentPipeline
+    └── ContentAdapter.fetch_url_content
+        ├── Optional: URL cache hit (read <code>url_cache_dir</code> JSON)
+        └── Miss / fallback: LocalContentClient → services.analysis_service.fetch_url_content_crawl4ai
+            ├── Jina Reader (network)
+            └── Fallback: crawl4ai + LLM extraction (async, heavy)</pre>
+
+  <h2>3. Public methods (summary)</h2>
+  <table>
+    <thead><tr><th>Method</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>process_posts</code></td>
+        <td>Batch job: list up to <code>count</code> files at <code>offset</code>, for each post read local JSON, fetch URL content, merge into <code>selftext</code>, save successes to <code>filter-url-unresolved</code> dest dir.</td>
+      </tr>
+      <tr>
+        <td><code>preview_post</code></td>
+        <td>In-memory post dict: fetch URL, return post copy + diagnostic report (used by receiver-style flows).</td>
+      </tr>
+      <tr>
+        <td><code>preview_post_id</code></td>
+        <td>Load one post by id from disk, fetch URL, optionally mutate loaded dict with <code>selftext</code> + report.</td>
+      </tr>
+      <tr>
+        <td><code>process_post_id</code></td>
+        <td><code>preview_post_id</code> then <code>save_post_local</code>; raises if fetch fails.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>4. Control flow: <code>process_posts</code></h2>
+  <ol class="tight">
+    <li><strong>List filenames</strong> — <code>posts_list(step, count, offset)</code> returns <code>fileNames</code> (unprocessed JSON names under the step’s source dir, sorted by file size descending).</li>
+    <li><strong>Outer batch loop</strong> — slices <code>file_names</code> into chunks of <code>batch_size</code> (default <strong>5</strong> from runner).</li>
+    <li><strong>Per file (sequential)</strong> — <code>get_post_local</code> → read <code>url</code> → <code>fetch_pipeline.fetch(url, use_cache=True)</code> → if success and non-empty text, append to <code>batch_results</code>.</li>
+    <li><strong>Per successful post (sequential)</strong> — <code>save_post_local(post, step="filter-url-unresolved")</code> writes to the destination directory.</li>
+  </ol>
+  <p class="muted">Note: <code>batch_size</code> does not parallelize network I/O; it only groups work for structure. Every URL fetch runs one after another inside each batch.</p>
+
+  <h2>5. Why it is slow (root causes)</h2>
+
+  <h3>5.1 Dominant cost: each URL is a full content pipeline</h3>
+  <p>Every post with a URL triggers <code>FetchUrlContentPipeline.fetch</code>, which delegates to <code>ContentAdapter.fetch_url_content</code>. On a cache miss, the implementation calls <code>fetch_url_content_crawl4ai</code>, which:</p>
+  <ul class="tight">
+    <li>Tries <strong>Jina Reader</strong> over the network.</li>
+    <li>On failure or unsuitable extraction, falls back to <strong>crawl4ai</strong> with <strong>structured LLM extraction</strong> (<code>extract_structured_data</code>, configured model in analysis service). That path launches async browser/LLM work and is orders of magnitude slower than reading a local file.</li>
+  </ul>
+  <p>Even with <code>use_cache=True</code>, the first visit to a URL pays this full price; subsequent runs can be much faster if both the adapter-level cache and <code>datasets/url_cache</code> layers contain a valid result.</p>
+
+  <h3>5.2 Validation retries multiply live fetches</h3>
+  <p><code>FetchUrlContentPipeline</code> runs a lightweight <strong>heuristic validation</strong> on fetched text (<code>ContentAdapter.validate_content</code>: error-page indicator strings). If the cached or first result fails validation, the code calls <code>_recover_with_fresh_fetches</code>, which performs up to <strong>three additional</strong> fetches with <code>use_cache=False</code>, bypassing disk cache reads — i.e. up to <strong>four</strong> full fetch attempts per URL in the worst case.</p>
+  <div class="warn">
+    <strong>Effect:</strong> “Bad” or noisy HTML (many error keywords) can turn one logical URL into several sequential Jina/crawl4ai round-trips, dramatically increasing latency for that post.
+  </div>
+
+  <h3>5.3 No concurrency</h3>
+  <p><code>process_posts</code> uses nested <code>for</code> loops with blocking calls. Wall time for <em>N</em> posts with cold cache is roughly <strong>sum of individual fetch latencies</strong>, not max or average. Throughput is limited to one in-flight URL fetch at a time.</p>
+
+  <h3>5.4 Listing posts can touch many files</h3>
+  <p><code>list_posts</code> builds the list of unprocessed files by comparing source vs destination directories (see <code>posts_service</code>). For very large datasets this adds filesystem overhead and sorts by size, but this is usually minor compared to Section 5.1–5.3.</p>
+
+  <h3>5.5 Disk writes per success</h3>
+  <p>Each successful enrichment triggers a full JSON rewrite (<code>save_post_local</code>). This is cheap relative to crawling but adds sequential I/O after each batch’s successful fetches.</p>
+
+  <h2>6. Scaling intuition</h2>
+  <table>
+    <thead><tr><th>Scenario</th><th>Typical behavior</th></tr></thead>
+    <tbody>
+      <tr><td>Warm URL cache, validation passes</td><td>Mostly local JSON read + cache read + write — fast per post.</td></tr>
+      <tr><td>Cold cache, Jina succeeds</td><td>One network round-trip per URL; still sequential.</td></tr>
+      <tr><td>Cold cache, crawl4ai + LLM</td><td>Very slow per URL; dominates batch runtime.</td></tr>
+      <tr><td>Validation failures</td><td>Up to 4× sequential fetches per URL.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>7. Where to look in code</h2>
+  <ul class="tight">
+    <li><code>src/workflows/pipelines/data_load.py</code> — orchestration and batching.</li>
+    <li><code>src/workflows/pipelines/fetch_url_content.py</code> — validation and recovery retries.</li>
+    <li><code>src/workflows/adapters/content.py</code> — cache layer and adapter normalization.</li>
+    <li><code>src/services/analysis_service.py</code> — <code>fetch_url_content_crawl4ai</code>, Jina vs crawl4ai fallback.</li>
+    <li><code>src/workflows/runner.py</code> — <code>run_data_load</code> defaults (<code>count=100</code>, <code>batch_size=5</code>).</li>
+  </ul>
+
+  <footer>
+    Generated as documentation for operators and developers. For behavior changes, keep sender/receiver tests and API contracts in sync (see project <code>AGENTS.md</code> and sender–receiver testing rules).
+  </footer>
+
+</body>
+</html>

@@ -1,13 +1,13 @@
 import json
 import os
-import sys  # Added import for sys.stderr
-from typing import Union  # Added import for cast
-from typing import List, Optional, TypedDict, cast
+from typing import List, Optional, TypedDict, Union, cast
 from urllib.parse import urlencode
 
 import dotenv
 import requests
-from icecream import ic
+from loguru import logger
+
+_LOG = logger.bind(component="NewsApi")
 
 # --- 1. Response Type Definitions (TypedDicts) ---
 
@@ -85,10 +85,7 @@ def fetch_everything(params: EverythingParams) -> NewsApiResponse:
         A dictionary matching the NewsApiResponse TypedDict structure.
     """
     if NEWS_API_KEY == "YOUR_NEWS_API_KEY":
-        print(
-            "ERROR: Please replace 'YOUR_NEWS_API_KEY' with your actual key.",
-            file=sys.stderr,
-        )
+        _LOG.error("news_api_key_placeholder_configured")
         # Return a structured error response for type safety
         return NewsApiErrorResponse(
             status="error",
@@ -102,10 +99,12 @@ def fetch_everything(params: EverythingParams) -> NewsApiResponse:
         # 'from' is a reserved keyword in Python, so the caller should use 'from_date'
         **{k if k != "from_date" else "from": v for k, v in params.items()},
     }
-    ic(query_params)
-    # Encode parameters and construct the final URL
+    _LOG.debug(
+        "news_api_request_params",
+        param_keys=list(query_params.keys()),
+    )
     url = f"{BASE_URL}?{urlencode(query_params)}"
-    ic(url)
+    _LOG.debug("news_api_request_url_host", base_url=BASE_URL)
     try:
         # Make the synchronous HTTP GET request
         response = requests.get(url)
@@ -115,7 +114,11 @@ def fetch_everything(params: EverythingParams) -> NewsApiResponse:
 
         # Parse the JSON response. Pylance treats this initially as a generic dict.
         data = response.json()
-        print("news API returned", data)
+        _LOG.debug(
+            "news_api_response_meta",
+            status_field=data.get("status"),
+            total_results=data.get("totalResults"),
+        )
         # The News API uses a 'status' field in the body to indicate API-level errors
         if data.get("status") == "error":
             # Explicitly construct the TypedDict from the generic dict data
@@ -131,10 +134,10 @@ def fetch_everything(params: EverythingParams) -> NewsApiResponse:
         return cast(NewsApiSuccessResponse, data)
 
     except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error occurred: {e}", file=sys.stderr)
+        _LOG.warning("news_api_http_error", error=str(e))
         return NewsApiErrorResponse(status="error", code="httpError", message=str(e))
     except Exception as e:
-        print(f"Fetch failed: {e}", file=sys.stderr)
+        _LOG.exception("news_api_fetch_failed")
         # Return a general error response for type safety
         return NewsApiErrorResponse(status="error", code="fetchError", message=str(e))
 
@@ -151,28 +154,30 @@ if __name__ == "__main__":
         # 'from_date': '2023-11-01',
     }
 
-    print(f"Fetching news for: {search_params['q']}")
+    _LOG.info("news_api_demo_fetch", query=search_params["q"])
 
     result = fetch_everything(search_params)
 
     if result["status"] == "ok":
-        # Use cast() to narrow the type for Pylance after the runtime check
         success_result = cast(NewsApiSuccessResponse, result)
-        print(f"\nSuccessfully retrieved {success_result['totalResults']} results.")
+        _LOG.info(
+            "news_api_demo_ok",
+            total_results=success_result["totalResults"],
+            article_count=len(success_result["articles"]),
+        )
         for index, article in enumerate(success_result["articles"]):
-            print(f"\nArticle {index + 1}:")
-            print(f"  Title: {article['title']}")
-            print(f"  Source: {article['source']['name']}")
-            print(f"  Published: {article['publishedAt']}")
-            print(f"  URL: {article['url']}")
+            _LOG.info(
+                "news_api_demo_article",
+                index=index + 1,
+                title=article["title"],
+                source=article["source"]["name"],
+                published_at=article["publishedAt"],
+                url=article["url"],
+            )
     else:
-        # Use cast() to narrow the type for Pylance after the runtime check
         error_result = cast(NewsApiErrorResponse, result)
-        print("\nAPI call failed.", file=sys.stderr)
-        print(f"Error Code: {error_result['code']}", file=sys.stderr)
-        print(f"Message: {error_result['message']}", file=sys.stderr)
-        # Use cast() to narrow the type for Pylance after the runtime check
-        error_result = cast(NewsApiErrorResponse, result)
-        print("\nAPI call failed.", file=sys.stderr)
-        print(f"Error Code: {error_result['code']}", file=sys.stderr)
-        print(f"Message: {error_result['message']}", file=sys.stderr)
+        _LOG.error(
+            "news_api_demo_failed",
+            code=error_result["code"],
+            message=error_result["message"],
+        )

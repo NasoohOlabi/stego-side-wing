@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Research pipeline — behavior &amp; performance</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --accent: #6cb3f7;
+      --warn: #e8b84a;
+      --bad: #f07178;
+      --ok: #7fd99a;
+      --border: #2d3a4d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+      max-width: 52rem;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+    }
+    h1 { font-size: 1.65rem; font-weight: 650; margin-top: 0; }
+    h2 { font-size: 1.2rem; color: var(--accent); margin-top: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.35rem; }
+    h3 { font-size: 1.05rem; margin-top: 1.25rem; }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); font-size: 0.92rem; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+      margin: 1rem 0;
+    }
+    pre {
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.85rem 1rem;
+      overflow-x: auto;
+      font-size: 0.78rem;
+      line-height: 1.4;
+    }
+    code { font-family: ui-monospace, monospace; font-size: 0.88em; background: #0a0e14; padding: 0.12em 0.35em; border-radius: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 1rem 0; }
+    th, td { border: 1px solid var(--border); padding: 0.5rem 0.65rem; text-align: left; vertical-align: top; }
+    th { background: var(--panel); color: var(--accent); }
+    .sev-high { color: var(--bad); font-weight: 600; }
+    .sev-med { color: var(--warn); font-weight: 600; }
+    .sev-low { color: var(--muted); }
+    ul.tight li { margin: 0.35rem 0; }
+    a { color: var(--accent); }
+    .file { color: var(--ok); }
+    footer { margin-top: 3rem; font-size: 0.85rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+
+<h1>Research pipeline report</h1>
+<p class="muted">Source: <span class="file">src/workflows/pipelines/research.py</span> · Generated for performance analysis.</p>
+
+<h2>1. Purpose</h2>
+<p>
+  <code>ResearchPipeline</code> enriches a post with web research: it generates search queries from the post, runs web search for each query, deduplicates and filters hits (skips PDFs and duplicate links), fetches page text for the selected URLs, and stores the concatenated fetched texts in <code>post["search_results"]</code>. It mirrors legacy n8n semantics for deciding whether a post is &ldquo;new&rdquo; (needs research) via <code>_is_new_post</code>.
+</p>
+
+<h2>2. High-level flow</h2>
+<div class="panel">
+<pre>
+preview_post / research_post
+    │
+    ├─► Skip if post already has non-empty search_results (unless force)
+    │
+    ├─► GenSearchTermsPipeline.preview_generation  →  LLM or SQLite cache
+    │
+    ├─► FOR each search term (sequential):
+    │       Google CSE (or Bing fallback on quota-style errors)
+    │       → up to 10 results/term, dedupe links, drop .pdf
+    │
+    └─► FOR each batch of 3 unique URLs (parallel within batch):
+            ThreadPoolExecutor(3) × per-URL _fetch_url_with_timeout_retries
+                → FetchUrlContentPipeline.fetch → ContentAdapter → crawl4ai/Jina stack
+</pre>
+</div>
+
+<h2>3. Public entry points</h2>
+<table>
+  <thead><tr><th>Method</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td><code>preview_post</code></td><td>Full protocol without persisting; returns <code>{"post", "report"}</code> with timings-friendly metadata.</td></tr>
+    <tr><td><code>research_post</code></td><td>Delegates to <code>preview_post</code> and returns only the enriched post.</td></tr>
+    <tr><td><code>process_post_objects</code></td><td>Sequential loop: <code>research_post</code> → <code>save_post_local</code> → optional <code>save_post</code> for new posts.</td></tr>
+    <tr><td><code>process_posts</code> / <code>process_post_id</code></td><td>Load from backend then <code>process_post_objects</code>.</td></tr>
+  </tbody>
+</table>
+
+<h2>4. Main dependencies</h2>
+<table>
+  <thead><tr><th>Component</th><th>Path</th><th>Why it matters for latency</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Search terms</td>
+      <td class="file">workflows/pipelines/gen_search_terms.py</td>
+      <td>On cache miss, calls <code>LLMAdapter</code> (network + model time). SQLite cache avoids repeat LLM work per <code>post_id</code>.</td>
+    </tr>
+    <tr>
+      <td>Web search</td>
+      <td class="file">services/search_service.py</td>
+      <td><code>search_google</code> via <code>BackendAPIAdapter.google_search</code>. HTTP to Google CSE; may try API keys sequentially; Bing fallback adds another round trip.</td>
+    </tr>
+    <tr>
+      <td>URL fetch</td>
+      <td class="file">fetch_url_content.py → content.py → analysis_service</td>
+      <td>Chain ends in <code>fetch_url_content_crawl4ai</code>: Jina Reader, then crawl4ai (and related analysis). Heavy I/O; disk cache mitigates repeats.</td>
+    </tr>
+    <tr>
+      <td>Validation recovery</td>
+      <td class="file">fetch_url_content.py</td>
+      <td>If content fails heuristic validation, up to 3 additional live fetches with <code>use_cache=False</code> per URL.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>5. Why it is slow (root causes)</h2>
+<p>The pipeline is I/O-bound and structured so wall-clock time grows with the number of terms, URLs, and worst-case fetch behavior.</p>
+
+<h3>5.1 Sequential web search per term</h3>
+<ul class="tight">
+  <li><span class="sev-high">High impact.</span> The loop over <code>search_terms</code> runs one <code>_web_search_google_or_bing</code> call after another. If you have <em>T</em> terms, search phase time is roughly the sum of <em>T</em> HTTP latencies (plus any key-rotation retries on Google), not the max.</li>
+  <li>Each call requests up to 10 results (<code>count=10</code>), increasing downstream URL count.</li>
+</ul>
+
+<h3>5.2 Bounded URL concurrency (batch size 3)</h3>
+<ul class="tight">
+  <li><span class="sev-high">High impact.</span> Unique selected links are fetched in batches of <strong>3</strong> (<code>batch_size = 3</code>). Total fetch-wall time scales about as <code>ceil(U/3) × (slowest fetch in each batch)</code> where <em>U</em> is unique URLs after deduplication.</li>
+  <li>Many distinct domains × slow pages makes this the dominant cost for research-heavy posts.</li>
+</ul>
+
+<h3>5.3 Per-URL timeout and retries</h3>
+<ul class="tight">
+  <li><span class="sev-med">Medium–high.</span> Default <code>RESEARCH_FETCH_TIMEOUT_SEC</code> is <strong>180</strong> seconds per attempt; <code>RESEARCH_FETCH_RETRIES</code> defaults to <strong>1</strong> (two attempts total). A stuck crawl can cost up to ~360s for that URL before failure.</li>
+  <li>Each attempt wraps <code>fetch</code> in a fresh <code>ThreadPoolExecutor(max_workers=1)</code> to enforce <code>future.result(timeout=…)</code>. That adds thread churn and does not make the underlying fetch faster.</li>
+</ul>
+
+<h3>5.4 Expensive fetch stack (Jina + crawl4ai)</h3>
+<ul class="tight">
+  <li><span class="sev-high">High impact.</span> <code>fetch_url_content_crawl4ai</code> is explicitly &ldquo;Jina Reader first, then crawl4ai + LLM&rdquo; in its docstring. Headless or crawler paths are inherently slower than a plain HTTP GET of static HTML.</li>
+  <li>Without a warm disk cache (<code>use_fetch_cache=False</code> or cold cache), every URL pays full external latency.</li>
+</ul>
+
+<h3>5.5 Validation-driven refetch storms</h3>
+<ul class="tight">
+  <li><span class="sev-med">Medium.</span> <code>FetchUrlContentPipeline.fetch</code> may perform up to <strong>3</strong> additional uncached fetches if the first body fails <code>validate_content</code>. A batch of 3 URLs could multiply into many sequential live fetches inside worker threads.</li>
+</ul>
+
+<h3>5.6 LLM cold start for terms</h3>
+<ul class="tight">
+  <li><span class="sev-med">Medium (first run per post).</span> Cache miss triggers <code>LLMAdapter.call_llm</code> (LM Studio path in metadata). Model load, queueing, and token generation add seconds to minutes depending on hardware and model size.</li>
+</ul>
+
+<h3>5.7 Multi-post processing is serial</h3>
+<ul class="tight">
+  <li><span class="sev-med">Medium at scale.</span> <code>process_post_objects</code> processes posts one after another. Throughput for N posts is N × (single-post research time), not parallelized at the pipeline level.</li>
+</ul>
+
+<h3>5.8 Google key fallback chain</h3>
+<ul class="tight">
+  <li><span class="sev-low">Variable.</span> <code>search_google</code> tries <code>GOOGLE_API_KEY_1</code> … <code>_5</code> sequentially on errors. Worst case adds multiple 20s timeouts (per key attempt) before success or Bing fallback.</li>
+</ul>
+
+<h2>6. Order-of-magnitude model (rough)</h2>
+<div class="panel">
+<p class="muted">Illustrative only — use logs (<code>research_google_query_done</code>, <code>research_fetch_batch_done</code>) for real numbers.</p>
+<pre>
+T_terms   = number of search terms
+U_urls    = unique non-PDF links after dedupe
+t_search  ≈ mean Google/Bing latency per term
+t_fetch   ≈ mean successful fetch time (dominated by Jina/crawl4ai)
+
+Time_search  ≈ T_terms × t_search          (sequential)
+Time_fetch   ≈ ceil(U_urls / 3) × t_fetch  (3-wide parallelism, batch barrier)
+
+Worst URL    ≈ (1 + RESEARCH_FETCH_RETRIES) × RESEARCH_FETCH_TIMEOUT_SEC
+               (+ validation refetches inside fetch pipeline)
+</pre>
+</div>
+
+<h2>7. Configuration knobs</h2>
+<table>
+  <thead><tr><th>Environment variable</th><th>Default</th><th>Effect on speed</th></tr></thead>
+  <tbody>
+    <tr><td><code>RESEARCH_FETCH_TIMEOUT_SEC</code></td><td>180</td><td>Caps wait per fetch attempt; lower fails faster but may drop slow legitimate pages.</td></tr>
+    <tr><td><code>RESEARCH_FETCH_RETRIES</code></td><td>1</td><td>Extra full attempts after timeout; increases worst-case time linearly.</td></tr>
+  </tbody>
+</table>
+<p class="muted">Caches: <code>use_terms_cache</code> / <code>use_fetch_cache</code> on <code>preview_post</code> reduce repeat LLM and URL work when enabled.</p>
+
+<h2>8. Code anchors (for navigation)</h2>
+<ul class="tight">
+  <li>Skip-if-already-researched: <code>preview_post</code> early return when <code>_is_new_post</code> is false.</li>
+  <li>Sequential search loop: lines ~236–297 in <span class="file">research.py</span>.</li>
+  <li>Batched fetches (<code>batch_size = 3</code>): ~299–390.</li>
+  <li>Per-URL timeout wrapper: <code>_fetch_url_with_timeout_retries</code> ~53–118.</li>
+  <li>Bing fallback: <code>_web_search_google_or_bing</code> ~130–155.</li>
+</ul>
+
+<footer>
+  This document describes implementation behavior as of the repository state when generated; re-run or diff against <span class="file">research.py</span> after changes.
+</footer>
+
+</body>
+</html>

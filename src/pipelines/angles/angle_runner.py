@@ -20,7 +20,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from infrastructure.cache import deterministic_hash_sha256
 from infrastructure.config import get_env, get_lm_studio_url
-from infrastructure.json_logging import TAG_WORKFLOW
+from infrastructure.json_logging import TAG_WORKFLOW, get_trace_id
 from workflows.cache_context import get_angles_cache_dir
 from workflows.utils.text_utils import chunk_text_equal_overlap
 
@@ -317,6 +317,30 @@ def _log_angles_llm_attempt_start(attempt_one_based: int, attempts_max: int) -> 
     )
 
 
+def _log_angles_http_round_trip(
+    *,
+    elapsed_ms: int,
+    outcome: str,
+    attempt: int,
+    attempts_max: int,
+    level: int = logging.INFO,
+) -> None:
+    _LOG.log(
+        level,
+        "angles_llm_http_round_trip",
+        extra={
+            "event": "angles.llm_http_round_trip",
+            "tags": [TAG_WORKFLOW],
+            "component": "angle_runner",
+            "elapsed_ms": elapsed_ms,
+            "outcome": outcome,
+            "attempt": attempt,
+            "attempts_max": attempts_max,
+            "trace_id": get_trace_id() or "",
+        },
+    )
+
+
 def _run_post_retry_loop(
     payload: dict[str, Any],
     headers: dict[str, str],
@@ -329,13 +353,22 @@ def _run_post_retry_loop(
     for attempt in range(1, attempts + 1):
         try:
             _log_angles_llm_attempt_start(attempt, attempts)
+            req_t0 = time.perf_counter()
             response = requests.post(
                 CHAT_ENDPOINT,
                 json=payload,
                 headers=headers,
                 timeout=timeout,
             )
+            round_trip_ms = int((time.perf_counter() - req_t0) * 1000)
             if response.status_code in _TRANSIENT_HTTP_STATUSES:
+                _log_angles_http_round_trip(
+                    elapsed_ms=round_trip_ms,
+                    outcome="transient_http_will_retry",
+                    attempt=attempt,
+                    attempts_max=attempts,
+                    level=logging.DEBUG,
+                )
                 retry_history.append(
                     {
                         "attempt": attempt,
@@ -362,6 +395,12 @@ def _run_post_retry_loop(
                 continue
             text = _assistant_from_chat_response(response)
             if text is not None:
+                _log_angles_http_round_trip(
+                    elapsed_ms=round_trip_ms,
+                    outcome="assistant_text",
+                    attempt=attempt,
+                    attempts_max=attempts,
+                )
                 return text
         except HTTPError as exc:
             last_err = exc
@@ -743,6 +782,7 @@ def _tag_source_document(
 def analyze_angles_from_texts(
     texts: List[str], *, use_cache: bool = True
 ) -> List[Dict[str, Any]]:
+    analyze_t0 = time.perf_counter()
     all_responses: List[Dict[str, Any]] = []
 
     cache_root = get_angles_cache_dir()
@@ -820,6 +860,20 @@ def analyze_angles_from_texts(
         finally:
             running += 1
 
+    total_ms = int((time.perf_counter() - analyze_t0) * 1000)
+    _LOG.info(
+        "angles_analyze_from_texts_complete",
+        extra={
+            "event": "angles.analyze_from_texts_complete",
+            "tags": [TAG_WORKFLOW],
+            "component": "angle_runner",
+            "elapsed_ms": total_ms,
+            "text_blocks_input": len(texts),
+            "angles_out": len(all_responses),
+            "use_cache": use_cache,
+            "trace_id": get_trace_id() or "",
+        },
+    )
     return all_responses
 
 

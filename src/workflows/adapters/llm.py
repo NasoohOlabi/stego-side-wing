@@ -19,6 +19,7 @@ from infrastructure.config import (
     get_lm_studio_url,
 )
 from services.workflow_run_tracker import get_run_id
+from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash
 from infrastructure.json_logging import get_trace_id
 
@@ -389,6 +390,22 @@ class LLMAdapter:
                 "prompt_hash": stable_hash(prompt),
                 "system_prompt_hash": stable_hash(system_message or ""),
             }
+            # region agent log
+            write_debug_probe(
+                run_id=str(get_run_id() or ""),
+                hypothesis_id="H1",
+                location="workflows/adapters/llm.py:_call_with_retry:begin",
+                message="llm attempt started",
+                data={
+                    "provider": provider,
+                    "model": model,
+                    "endpoint": endpoint,
+                    "attempt": attempt,
+                    "attempts_max": attempts,
+                    "retry_count": attempt - 1,
+                },
+            )
+            # endregion
             _LLM_ADAPTER_LOG.info("llm_request_begin", extra=_llm_attempt_log_fields(
                 provider=provider,
                 model=model,
@@ -404,6 +421,21 @@ class LLMAdapter:
                 text = request_fn()
                 elapsed_ms = int((time.perf_counter() - started_at) * 1000)
                 self.last_call_metadata.update({"elapsed_ms": elapsed_ms, "success": True})
+                # region agent log
+                write_debug_probe(
+                    run_id=str(get_run_id() or ""),
+                    hypothesis_id="H1",
+                    location="workflows/adapters/llm.py:_call_with_retry:success",
+                    message="llm attempt succeeded",
+                    data={
+                        "provider": provider,
+                        "model": model,
+                        "endpoint": endpoint,
+                        "attempt": attempt,
+                        "elapsed_ms": elapsed_ms,
+                    },
+                )
+                # endregion
                 return text
             except Exception as exc:
                 last_exc = exc
@@ -426,6 +458,25 @@ class LLMAdapter:
                         _llm_retry_backoff_sec(attempt - 1)
                     )
                     self.last_call_metadata["wait_sec"] = wait
+                    # region agent log
+                    write_debug_probe(
+                        run_id=str(get_run_id() or ""),
+                        hypothesis_id="H1",
+                        location="workflows/adapters/llm.py:_call_with_retry:retry",
+                        message="llm retry scheduled",
+                        data={
+                            "provider": provider,
+                            "model": model,
+                            "endpoint": endpoint,
+                            "attempt": attempt,
+                            "attempts_max": attempts,
+                            "http_status": status,
+                            "error_kind": type(exc).__name__,
+                            "retryable": retryable,
+                            "wait_sec": wait,
+                        },
+                    )
+                    # endregion
                     _LLM_ADAPTER_LOG.warning(
                         "llm_request_retry",
                         extra={
@@ -436,6 +487,25 @@ class LLMAdapter:
                     )
                     time.sleep(wait)
                     continue
+                # region agent log
+                write_debug_probe(
+                    run_id=str(get_run_id() or ""),
+                    hypothesis_id="H1",
+                    location="workflows/adapters/llm.py:_call_with_retry:failure",
+                    message="llm request failed",
+                    data={
+                        "provider": provider,
+                        "model": model,
+                        "endpoint": endpoint,
+                        "attempt": attempt,
+                        "attempts_max": attempts,
+                        "http_status": status,
+                        "error_kind": type(exc).__name__,
+                        "retryable": retryable,
+                        "response_snippet": snippet,
+                    },
+                )
+                # endregion
                 _LLM_ADAPTER_LOG.error(
                     "llm_request_failed",
                     extra={

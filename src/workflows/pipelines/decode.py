@@ -6,15 +6,14 @@ HTTP semantic_search with n=20, then G Decode agent with model gpt-oss-20b
 """
 
 import json
-import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
+
+from loguru import logger
 
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter, strip_redacted_thinking
 from workflows.utils.workflow_llm_prompts import get_prompts
-
-logger = logging.getLogger(__name__)
 
 # Must match ``gpt-oss`` node + stego encoder (``stego.STEGO_LLM_MODEL``).
 DECODE_LLM_MODEL = "openai/gpt-oss-20b"
@@ -29,12 +28,6 @@ _DECODE_LOG_BASE: dict[str, str] = {
     "log_domain": "stego",
     "log_op": "decode",
 }
-
-
-def _decode_log_extra(**fields: Any) -> dict[str, Any]:
-    merged: dict[str, Any] = dict(_DECODE_LOG_BASE)
-    merged.update(fields)
-    return merged
 # Allow room for inline thinking tags before idx: while still bounding decode length.
 _DECODE_MAX_TOKENS = 128
 
@@ -127,11 +120,12 @@ def _extract_decode_index(
 
 
 class DecodePipeline:
-    """Pipeline for decoding stego text to angle index."""
+    """Runs semantic shortlist + LLM decode to map stego text to a tangent index."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.backend = BackendAPIAdapter()
         self.llm = LLMAdapter()
+        self._log = logger.bind(**_DECODE_LOG_BASE)
 
     def _find_angle_index(
         self,
@@ -162,20 +156,20 @@ class DecodePipeline:
         """
         del base_url  # Kept for backward compatibility in callers/tests.
 
+        if not hasattr(self, "_log"):
+            object.__setattr__(self, "_log", logger.bind(**_DECODE_LOG_BASE))
+
         if not angles:
-            logger.warning(
-                "No angles provided; cannot decode",
-                extra=_decode_log_extra(log_area="input"),
-            )
+            self._log.warning("decode_no_angles", log_area="input")
             return None
 
         try:
-            logger.info(
-                "text_len=%s angles=%s few_shots=%s",
-                len(stego_text or ""),
-                len(angles),
-                len(few_shots or []),
-                extra=_decode_log_extra(log_area="start"),
+            self._log.info(
+                "decode_start",
+                log_area="start",
+                text_len=len(stego_text or ""),
+                angles_count=len(angles),
+                few_shots_count=len(few_shots or []),
             )
 
             search_result = self.backend.semantic_search(
@@ -186,9 +180,10 @@ class DecodePipeline:
 
             results = search_result.get("results", [])
             if not isinstance(results, list) or not results:
-                logger.warning(
-                    "No semantic matches returned",
-                    extra=_decode_log_extra(log_area="semantic", semantic_event="no_matches"),
+                self._log.warning(
+                    "decode_semantic_no_matches",
+                    log_area="semantic",
+                    semantic_event="no_matches",
                 )
                 return None
 
@@ -217,11 +212,10 @@ class DecodePipeline:
                 )
 
             if not top_candidates:
-                logger.warning(
-                    "No candidates mapped to source angles",
-                    extra=_decode_log_extra(
-                        log_area="semantic", semantic_event="no_candidate_map"
-                    ),
+                self._log.warning(
+                    "decode_semantic_no_candidate_map",
+                    log_area="semantic",
+                    semantic_event="no_candidate_map",
                 )
                 return None
 
@@ -244,19 +238,17 @@ class DecodePipeline:
             )
             allowed_indices = {c["index"] for c in top_candidates}
             allowed_sorted = ",".join(str(x) for x in sorted(allowed_indices))
-            logger.info(
+            self._log.info(
                 "decode_semantic_candidate_diagnostics",
-                extra=_decode_log_extra(
-                    log_area="semantic",
-                    semantic_event="candidate_diagnostics",
-                    results_returned=len(results),
-                    results_scanned=min(len(results), DECODE_SEMANTIC_TOP_N),
-                    top_candidates_count=len(top_candidates),
-                    unmapped_semantic_count=unmapped_semantic,
-                    labeled_for_prompt_count=len(labeled),
-                    allowed_indices=allowed_sorted,
-                    top1_index=top_candidates[0]["index"],
-                ),
+                log_area="semantic",
+                semantic_event="candidate_diagnostics",
+                results_returned=len(results),
+                results_scanned=min(len(results), DECODE_SEMANTIC_TOP_N),
+                top_candidates_count=len(top_candidates),
+                unmapped_semantic_count=unmapped_semantic,
+                labeled_for_prompt_count=len(labeled),
+                allowed_indices=allowed_sorted,
+                top1_index=top_candidates[0]["index"],
             )
 
             dec = get_prompts().stego_decode
@@ -268,15 +260,17 @@ class DecodePipeline:
                 angle_count=len(angles),
                 candidates_json=system_candidates_text,
             )
-            logger.info(
-                "%s",
-                system_message,
-                extra=_decode_log_extra(log_area="prompt", prompt_role="system"),
+            self._log.info(
+                "decode_prompt_system",
+                log_area="prompt",
+                prompt_role="system",
+                prompt_body=system_message,
             )
-            logger.info(
-                "%s",
-                prompt,
-                extra=_decode_log_extra(log_area="prompt", prompt_role="user"),
+            self._log.info(
+                "decode_prompt_user",
+                log_area="prompt",
+                prompt_role="user",
+                prompt_body=prompt,
             )
 
             response: Optional[str] = None
@@ -294,91 +288,85 @@ class DecodePipeline:
                     break
                 except Exception as exc:
                     last_exc = exc
-                    logger.warning(
-                        "attempt %s/%s failed: %s",
-                        attempt,
-                        DECODE_LLM_MAX_TRIES,
-                        exc,
-                        extra=_decode_log_extra(log_area="llm", llm_event="attempt_failed"),
+                    self._log.warning(
+                        "decode_llm_attempt_failed",
+                        log_area="llm",
+                        llm_event="attempt_failed",
+                        attempt=attempt,
+                        max_tries=DECODE_LLM_MAX_TRIES,
+                        error=str(exc),
                     )
             if response is None:
-                logger.error(
-                    "exhausted retries",
-                    exc_info=last_exc,
-                    extra=_decode_log_extra(log_area="llm", llm_event="exhausted"),
-                )
+                if last_exc is not None:
+                    self._log.opt(exception=last_exc).error(
+                        "decode_llm_retries_exhausted",
+                        log_area="llm",
+                        llm_event="exhausted",
+                    )
+                else:
+                    self._log.error(
+                        "decode_llm_retries_exhausted",
+                        log_area="llm",
+                        llm_event="exhausted",
+                    )
                 return None
 
-            logger.info(
-                "%s",
-                response.strip(),
-                extra=_decode_log_extra(log_area="llm", llm_stage="raw"),
+            self._log.info(
+                "decode_llm_raw_response",
+                log_area="llm",
+                llm_stage="raw",
+                response_body=response.strip() if response else "",
             )
 
             stripped_for_parse = strip_redacted_thinking(response or "")
-            logger.info(
+            self._log.info(
                 "decode_strip_probe",
-                extra=_decode_log_extra(
-                    log_area="llm",
-                    llm_event="strip_probe",
-                    response_chars=len(response or ""),
-                    stripped_chars=len(stripped_for_parse),
-                    decode_max_tokens=_DECODE_MAX_TOKENS,
-                ),
+                log_area="llm",
+                llm_event="strip_probe",
+                response_chars=len(response or ""),
+                stripped_chars=len(stripped_for_parse),
+                decode_max_tokens=_DECODE_MAX_TOKENS,
             )
             if (response or "").strip() and not stripped_for_parse.strip():
-                logger.warning(
+                self._log.warning(
                     "decode_strip_removed_all_parseable_content",
-                    extra=_decode_log_extra(
-                        log_area="llm",
-                        llm_event="strip_empty",
-                        response_chars=len(response or ""),
-                    ),
+                    log_area="llm",
+                    llm_event="strip_empty",
+                    response_chars=len(response or ""),
                 )
 
             picked, how = _extract_decode_index(
                 response, allowed_indices, top_candidates
             )
             if picked is not None and how != "rank_fallback":
-                logger.info(
-                    "index=%s via=%s",
-                    picked,
-                    how,
-                    extra=_decode_log_extra(
-                        log_area="llm",
-                        llm_event="index",
-                        extract_how=how,
-                    ),
+                self._log.info(
+                    "decode_index_resolved",
+                    log_area="llm",
+                    llm_event="index",
+                    decoded_index=picked,
+                    extract_how=how,
                 )
                 return picked
             if picked is not None and how == "rank_fallback":
-                logger.warning(
-                    "rank fallback -> index=%s",
-                    picked,
-                    extra=_decode_log_extra(
-                        log_area="llm",
-                        llm_event="rank_fallback",
-                        extract_how=how,
-                    ),
+                self._log.warning(
+                    "decode_rank_fallback",
+                    log_area="llm",
+                    llm_event="rank_fallback",
+                    decoded_index=picked,
+                    extract_how=how,
                 )
                 return picked
 
             semantic_fallback = top_candidates[0]["index"]
-            logger.warning(
-                "Unparsed LLM response '%s'; using top semantic index=%s",
-                response.strip(),
-                semantic_fallback,
-                extra=_decode_log_extra(
-                    log_area="fallback",
-                    extract_how=how,
-                    semantic_fallback_index=semantic_fallback,
-                ),
+            self._log.warning(
+                "decode_unparsed_llm_fallback",
+                log_area="fallback",
+                extract_how=how,
+                semantic_fallback_index=semantic_fallback,
+                response_preview=(response or "").strip()[:500],
             )
             return semantic_fallback
 
         except Exception:
-            logger.exception(
-                "Failed to decode stego text",
-                extra=_decode_log_extra(log_area="error"),
-            )
+            self._log.exception("decode_failed", log_area="error")
             return None

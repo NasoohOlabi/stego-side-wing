@@ -3,11 +3,13 @@ import json
 import os
 import threading
 import time
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional, Type, cast
 
 from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig, LLMConfig
 from crawl4ai.extraction_strategy import LLMExtractionStrategy
+from loguru import logger
 from pydantic import BaseModel
+
 from infrastructure.config import get_lm_studio_url
 
 # --- Configuration Constants ---
@@ -36,14 +38,15 @@ JS_CONSENT_CLICK = """
 
 
 class Crawl4AITracker:
-    """Thread-safe tracker for concurrent crawl4ai requests."""
-    
-    def __init__(self):
+    """Thread-safe tracker for concurrent crawl4ai requests; logs concurrency metrics."""
+
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._active = 0
         self._peak = 0
         self._total = 0
-    
+        self._log = logger.bind(component="Crawl4AITracker")
+
     def start(self, url: str) -> float:
         """Record the start of a crawl4ai request and return start time."""
         with self._lock:
@@ -53,21 +56,32 @@ class Crawl4AITracker:
             active = self._active
             peak = self._peak
             total = self._total
-        print(f"CRAWL4AI START | Active: {active} | Peak: {peak} | Total: {total} | URL: {url[:80]}")
+        self._log.debug(
+            "crawl4ai_start",
+            active=active,
+            peak=peak,
+            total=total,
+            url_preview=url[:80],
+        )
         return time.time()
-    
+
     def end(self, url: str, start_time: float, success: bool) -> None:
         """Record the end of a crawl4ai request."""
         duration = time.time() - start_time
-        status = "OK" if success else "FAIL"
         with self._lock:
             self._active -= 1
             active = self._active
-        print(f"{status} CRAWL4AI END   | Active: {active} | Duration: {duration:.2f}s | URL: {url[:80]}")
+        self._log.debug(
+            "crawl4ai_end",
+            success=success,
+            active=active,
+            duration_s=round(duration, 2),
+            url_preview=url[:80],
+        )
 
 
-# Global tracker instance
 _tracker = Crawl4AITracker()
+_SCRAPER_LOG = logger.bind(component="Crawl4AIScraper")
 
 
 def _page_text_fallback(crawl_result: Any) -> str:
@@ -98,7 +112,7 @@ async def extract_structured_data(
     # Track request start
     start_time = _tracker.start(url)
 
-    print(f"\n[1/4] Initializing LLM Config for: {model_name}")
+    _SCRAPER_LOG.info("crawl4ai_step_llm_config", model_name=model_name)
 
     # 1. Configure LLM (Using 'openai/' provider allows generic local URL usage)
     llm_config = LLMConfig(
@@ -128,7 +142,7 @@ async def extract_structured_data(
         page_timeout=60000,  # 60s page load timeout
     )
 
-    print(f"[2/4] Visiting URL: {url}")
+    _SCRAPER_LOG.info("crawl4ai_step_visit", url=url)
 
     try:
         # verbose=False: crawl4ai logs use Unicode symbols that break on Windows cp1252 consoles.
@@ -137,11 +151,15 @@ async def extract_structured_data(
             result: Any = await crawler.arun(url=url, config=run_config)
 
             if not result.success:
-                print(f"[ERROR] Crawl Failed: {result.error_message}")
+                _SCRAPER_LOG.error(
+                    "crawl4ai_crawl_failed",
+                    url=url,
+                    error_message=result.error_message,
+                )
                 _tracker.end(url, start_time, success=False)
                 return None
 
-            print("[3/4] Extraction complete. Parsing results...")
+            _SCRAPER_LOG.info("crawl4ai_step_parse", url=url)
 
             # 4. Parse and Return Data
             try:
@@ -149,8 +167,10 @@ async def extract_structured_data(
                 if not (isinstance(extracted, str) and extracted.strip()):
                     fb = _page_text_fallback(result)
                     if fb:
-                        print(
-                            "[WARNING] No LLM extracted_content; using page markdown/HTML fallback."
+                        _SCRAPER_LOG.warning(
+                            "crawl4ai_fallback_markdown",
+                            reason="no_llm_extracted_content",
+                            url=url,
                         )
                         _tracker.end(url, start_time, success=True)
                         return {"raw_content": fb}
@@ -161,19 +181,22 @@ async def extract_structured_data(
                 if data is None or (isinstance(data, list) and len(data) == 0):
                     fb = _page_text_fallback(result)
                     if fb:
-                        print(
-                            "[WARNING] LLM JSON empty; using page markdown/HTML fallback."
+                        _SCRAPER_LOG.warning(
+                            "crawl4ai_fallback_markdown",
+                            reason="llm_json_empty",
+                            url=url,
                         )
                         _tracker.end(url, start_time, success=True)
                         return {"raw_content": fb}
                     _tracker.end(url, start_time, success=False)
                     return None
-                print("[4/4] Success!")
+                _SCRAPER_LOG.info("crawl4ai_success", url=url)
                 _tracker.end(url, start_time, success=True)
-                return data
+                return cast(Dict[str, Any], data)
             except json.JSONDecodeError:
-                print(
-                    "[WARNING] LLM returned raw text, not valid JSON. Returning raw content."
+                _SCRAPER_LOG.warning(
+                    "crawl4ai_llm_raw_text_not_json",
+                    url=url,
                 )
                 raw = result.extracted_content
                 if isinstance(raw, str) and raw.strip():
@@ -186,15 +209,20 @@ async def extract_structured_data(
                 _tracker.end(url, start_time, success=False)
                 return None
             except Exception as e:
-                print(f"[ERROR] processing content: {e}")
+                _SCRAPER_LOG.exception("crawl4ai_content_processing_error", url=url)
                 fb = _page_text_fallback(result)
                 if fb:
-                    print("[WARNING] Using page markdown/HTML fallback after parse error.")
+                    _SCRAPER_LOG.warning(
+                        "crawl4ai_fallback_markdown",
+                        reason="after_parse_error",
+                        url=url,
+                        error=str(e),
+                    )
                     _tracker.end(url, start_time, success=True)
                     return {"raw_content": fb}
                 _tracker.end(url, start_time, success=False)
                 return None
-    except Exception as e:
-        print(f"[ERROR] Unexpected error during crawl: {e}")
+    except Exception:
+        _SCRAPER_LOG.exception("crawl4ai_unexpected_error", url=url)
         _tracker.end(url, start_time, success=False)
         raise

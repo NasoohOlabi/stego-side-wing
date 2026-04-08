@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
 import httpx
+from loguru import logger
 from pydantic import validate_call
 
 from infrastructure.config import get_env
 
-logger = logging.getLogger(__name__)
+_LOG = logger.bind(component="JinaReader")
 
 
 def _reader_base() -> str:
@@ -19,11 +19,15 @@ def _reader_base() -> str:
 
 
 def _build_reader_url(target_url: str) -> str:
-    print(f"Target URL: {target_url}")
-    print(f"Reader base: {_reader_base()}")
-    print(f"Quote: {quote(target_url, safe='')}")
-    print(f"Reader URL: {f'{_reader_base()}/{quote(target_url, safe="")}'}")
-    return f"{_reader_base()}/{quote(target_url, safe='')}"
+    base = _reader_base()
+    quoted = quote(target_url, safe="")
+    reader_url = f"{base}/{quoted}"
+    _LOG.debug(
+        "jina_reader_url_built",
+        target_url=target_url,
+        reader_base=base,
+    )
+    return reader_url
 
 
 def _request_headers() -> dict[str, str]:
@@ -45,39 +49,24 @@ def fetch_jina_reader_markdown(target_url: str) -> Optional[str]:
         with httpx.Client(timeout=60.0, follow_redirects=True) as client:
             response = client.get(reader_url, headers=_request_headers())
     except httpx.HTTPError as exc:
-        logger.warning(
+        _LOG.warning(
             "jina_reader_http_error",
-            extra={
-                "event": "analysis",
-                "action": "jina_reader_fetch",
-                "url": target_url,
-                "error": str(exc),
-            },
+            target_url=target_url,
+            error=str(exc),
         )
         return None
 
     if response.status_code != 200:
-        logger.warning(
+        _LOG.warning(
             "jina_reader_bad_status",
-            extra={
-                "event": "analysis",
-                "action": "jina_reader_fetch",
-                "url": target_url,
-                "status_code": response.status_code,
-            },
+            target_url=target_url,
+            status_code=response.status_code,
         )
         return None
 
     text = response.text.strip()
     if not text:
-        logger.warning(
-            "jina_reader_empty_body",
-            extra={
-                "event": "analysis",
-                "action": "jina_reader_fetch",
-                "url": target_url,
-            },
-        )
+        _LOG.warning("jina_reader_empty_body", target_url=target_url)
         return None
     return text
 

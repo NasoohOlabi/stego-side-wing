@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GenAngles pipeline — behavior &amp; performance</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #6cb3ff;
+      --warn: #e8b84a;
+      --bad: #f07178;
+      --ok: #7fd962;
+      --code-bg: #0d1117;
+      --border: #2d3a4d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      line-height: 1.55;
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+      background: var(--bg);
+      color: var(--text);
+    }
+    h1 { font-size: 1.65rem; font-weight: 650; margin-top: 0; }
+    h2 { font-size: 1.2rem; color: var(--accent); margin-top: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.35rem; }
+    h3 { font-size: 1.05rem; color: var(--muted); margin-top: 1.25rem; }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); font-size: 0.92rem; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+      margin: 1rem 0;
+    }
+    code, .path {
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 0.88em;
+      background: var(--code-bg);
+      padding: 0.12em 0.35em;
+      border-radius: 4px;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      overflow-x: auto;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin: 1rem 0;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.65rem;
+      text-align: left;
+    }
+    th { background: var(--panel); color: var(--accent); }
+    .tag-slow { color: var(--warn); font-weight: 600; }
+    .tag-seq { color: var(--bad); }
+    ul.tight li { margin: 0.35rem 0; }
+    .callout {
+      border-left: 4px solid var(--warn);
+      padding-left: 1rem;
+      margin: 1.25rem 0;
+    }
+    footer { margin-top: 3rem; font-size: 0.85rem; color: var(--muted); }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<h1><code>GenAnglesPipeline</code> — what it does and why it is slow</h1>
+<p class="muted">Report for <span class="path">src/workflows/pipelines/gen_angles.py</span> and its primary dependency chain (angles service → angle runner → LM Studio HTTP).</p>
+
+<h2>1. Role in the system</h2>
+<p><strong>GenAnglesPipeline</strong> enriches a post with <em>angles</em>: structured items with <code>source_quote</code>, <code>tangent</code>, <code>category</code>, and optionally <code>source_document</code> (index into the text dictionary). It is used by the workflow runner, receiver pipeline, API routes, and CLI.</p>
+<p>Stateful responsibility: holds <code>BackendAPIAdapter</code>, <code>LLMAdapter</code>, workflow config, and <code>_last_batch_summary</code> for batch runs.</p>
+
+<h2>2. Entry points (same core, different I/O)</h2>
+<table>
+  <thead><tr><th>Method</th><th>Behavior</th></tr></thead>
+  <tbody>
+    <tr><td><code>preview_post</code></td><td>Build dictionary → analyze (or fallback LLM) → return post + report; no persistence.</td></tr>
+    <tr><td><code>generate_angles</code></td><td>Thin wrapper: returns <code>preview_post[...]["angles"]</code>.</td></tr>
+    <tr><td><code>process_post</code></td><td>Same as preview’s post half (angles on post dict).</td></tr>
+    <tr><td><code>process_post_objects</code></td><td>Sequential loop: <code>process_post</code> then <code>save_post_local</code> per post.</td></tr>
+    <tr><td><code>process_posts</code></td><td>List/load posts from backend, then <code>process_post_objects</code>.</td></tr>
+    <tr><td><code>process_post_id</code></td><td>Load one file, process, persist.</td></tr>
+  </tbody>
+</table>
+
+<h2>3. Data flow (happy path)</h2>
+<pre>
+post dict
+    │
+    ▼
+build_post_text_dictionary(post)
+  • selftext (or text)
+  • each search_results entry (string or dict text/snippet)
+  • each comment body (flattened tree)
+    │
+    ▼
+List[str]  &nbsp;— one string per &quot;document&quot; (often hundreds or thousands on busy threads)
+    │
+    ▼
+BackendAPIAdapter.analyze_angles(texts)
+    │
+    ▼
+services.angles_service.analyze_angles
+    │
+    ▼
+pipelines.angles.angle_runner.analyze_angles_from_texts  ◀── bulk of latency lives here
+    │
+    ▼
+List[angle dicts] merged + source_document tags
+    │
+    ▼
+gen_angles filters: keeps items with non-empty source_quote, tangent, category
+</pre>
+
+<h2>4. Fallback path (when primary analysis fails)</h2>
+<p>If <code>analyze_angles</code> raises and <code>allow_fallback=True</code>, <code>_generate_angles_llm</code> joins <strong>all</strong> dictionary strings with <code>\n\n---\n\n</code> into one prompt and calls <code>LLMAdapter.call_llm</code> once. That single call can be extremely large and slow (or hit context limits), and <code>source_document</code> is set to <code>0</code> for all items.</p>
+
+<h2>5. Why the primary path is slow (detailed)</h2>
+<p>The bottleneck is not Python CPU work; it is <strong>sequential remote/local LLM inference</strong> over HTTP, scaled by how many text blocks and batches a post produces.</p>
+
+<h3>5.1 Outer loop: one iteration per dictionary string</h3>
+<p>In <span class="path">angle_runner.analyze_angles_from_texts</span>, the code walks <code>texts</code> in order. For a Reddit-style post with <strong>many comments</strong>, <code>build_post_text_dictionary</code> produces <strong>one entry per comment body</strong> (plus selftext and search snippets). Example: <strong>1,800+ strings</strong> means <strong>1,800+ sequential passes</strong> through the loop body (minus empty strings).</p>
+<p class="callout"><span class="tag-seq">Critical:</span> There is <strong>no parallelism</strong> across comments or search results. Wall time grows roughly linearly with the number of dictionary entries (times LLM latency per entry).</p>
+
+<h3>5.2 Per string: chunking and batching → multiple LLM calls per string</h3>
+<ul class="tight">
+  <li>Long text is split with <code>_chunk_text_at_boundaries</code> (max <code>MAX_CHARS_PER_TEXT</code> = 30,000).</li>
+  <li>Segments are grouped into batches capped by <code>_effective_max_chars_per_prompt()</code> (default <strong>80,000</strong> characters unless <code>ANGLES_MAX_CHARS_PER_PROMPT</code> is set).</li>
+  <li><strong>Each batch</strong> triggers <code>_run_angle_llm_on_batch</code> → HTTP POST to LM Studio chat completions.</li>
+</ul>
+<p>So one very long comment can still become multiple LLM requests; many short comments still mean <strong>one request per comment</strong> (each batch often holds one segment).</p>
+
+<h3>5.3 Each LLM call: retries, logging, and failure expansion</h3>
+<ul class="tight">
+  <li><span class="tag-slow">Retries:</span> <code>ANGLES_LLM_MAX_ATTEMPTS</code> defaults to <strong>6</strong>. Transient HTTP statuses (429, 5xx) and some connection errors trigger exponential backoff (<code>ANGLES_LLM_RETRY_BACKOFF_BASE_SEC</code> default 1.5s, cap 60s) via <code>time.sleep</code>.</li>
+  <li><span class="tag-slow">Timeout:</span> If <code>ANGLES_LLM_REQUEST_TIMEOUT</code> is unset, <code>requests.post</code> uses <code>timeout=None</code> — a stuck server can block indefinitely.</li>
+  <li><span class="tag-slow">Context errors:</span> On responses that look like context/token limits, the runner splits the combined batch into <code>CONTEXT_RETRY_NUM_CHUNKS</code> (default <strong>3</strong>) overlapping parts and runs the LLM <strong>once per part</strong> — multiplying work.</li>
+  <li><span class="tag-slow">Transport splitting:</span> On certain request errors, batches are bisected recursively (depth up to <code>ANGLES_TRANSPORT_SPLIT_MAX_DEPTH</code>, default 24), each sub-batch invoking the LLM again.</li>
+  <li><span class="tag-slow">JSON repair:</span> Invalid JSON or schema issues trigger additional LLM calls (<code>_repair_json</code>) with a separate system prompt.</li>
+  <li>Every batch appends the full user prompt to <span class="path">prompts.log</span> on disk.</li>
+</ul>
+
+<h3>5.4 Cache behavior (helps repeat runs, not first run)</h3>
+<p>Cache key is <code>SHA256(text)</code> per dictionary string. A <strong>cache hit</strong> skips LLM work for that string; a <strong>miss</strong> runs all batches. First-time processing of a large thread remains slow.</p>
+
+<h3>5.5 Batch workflows</h3>
+<p><code>process_post_objects</code> processes posts strictly one after another (each including LLM work + <code>save_post_local</code>). Batch wall time is the sum of per-post times.</p>
+
+<h2>6. Complexity summary</h2>
+<table>
+  <thead><tr><th>Factor</th><th>Effect on latency</th></tr></thead>
+  <tbody>
+    <tr><td>Number of dictionary entries (comments + snippets + body)</td><td class="tag-seq">Linear — sequential LLM work per entry (with caching)</td></tr>
+    <tr><td>Length of each entry</td><td>More segments/batches → more sequential calls</td></tr>
+    <tr><td>LM Studio / model speed</td><td>Larger prompts (up to ~80k chars) → slower generation</td></tr>
+    <tr><td>Retries + backoff</td><td>Multiplies wall time on flaky endpoints</td></tr>
+    <tr><td>Context / transport split paths</td><td>Can multiply calls per batch when errors occur</td></tr>
+    <tr><td>Fallback single prompt</td><td>One huge request; can be slow or fail</td></tr>
+  </tbody>
+</table>
+
+<h2>7. Environment knobs (angle runner)</h2>
+<p>Relevant variables from <span class="path">src/pipelines/angles/angle_runner.py</span> (defaults in parentheses):</p>
+<ul class="tight">
+  <li><code>ANGLES_MODEL</code> / <code>MODEL</code> — which model LM Studio loads (inference speed varies).</li>
+  <li><code>ANGLES_MAX_CHARS_PER_PROMPT</code> (80_000) — larger batches = fewer calls but heavier each call.</li>
+  <li><code>ANGLES_LLM_MAX_ATTEMPTS</code> (6), <code>ANGLES_LLM_RETRY_BACKOFF_*</code> — retry aggressiveness.</li>
+  <li><code>ANGLES_LLM_REQUEST_TIMEOUT</code> — unset = no timeout.</li>
+  <li><code>ANGLES_CONTEXT_RETRY_CHUNKS</code> (3), <code>ANGLES_CONTEXT_RETRY_OVERLAP_CHARS</code> (5000).</li>
+  <li><code>ANGLES_TRANSPORT_SPLIT_MAX_DEPTH</code> (24), <code>ANGLES_MIN_SEGMENT_SPLIT_CHARS</code> (4000).</li>
+</ul>
+
+<h2>8. Practical takeaways</h2>
+<ol>
+  <li><strong>Many comments ⇒ many sequential LLM round-trips</strong> — this is the dominant structural reason gen_angles feels slow on large threads.</li>
+  <li><strong>First run</strong> pays full cost; <strong>cache</strong> only helps when identical text blocks reappear.</li>
+  <li><strong>Operational issues</strong> (5xx, context limits, malformed JSON) trigger extra calls and sleeps, stretching runs further.</li>
+  <li><strong>Fallback mode</strong> avoids per-comment HTTP fan-out but sends one enormous prompt — often worse for latency and reliability.</li>
+</ol>
+
+<h2>9. Source references</h2>
+<ul class="tight muted">
+  <li><span class="path">src/workflows/pipelines/gen_angles.py</span> — orchestration, dictionary build, result filtering, fallback.</li>
+  <li><span class="path">src/workflows/utils/text_utils.py</span> — <code>build_post_text_dictionary</code>, <code>flatten_comments</code>.</li>
+  <li><span class="path">src/services/angles_service.py</span> — thin wrapper to angle runner.</li>
+  <li><span class="path">src/pipelines/angles/angle_runner.py</span> — batching, HTTP, retries, cache, splits, repair.</li>
+  <li><span class="path">src/workflows/adapters/backend_api.py</span> — <code>analyze_angles</code> delegation.</li>
+</ul>
+
+<footer>
+  Generated as documentation for operators and developers. For API surface, see <span class="path">docs/api-spec.md</span> (gen_angles / angles-step).
+</footer>
+
+</body>
+</html>

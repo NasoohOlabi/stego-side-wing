@@ -10,9 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, NamedTuple, cast
 
+from loguru import logger
+
 from infrastructure.config import REPO_ROOT
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
+
+_METRICS_CLI_LOG = logger.bind(component="StegoMetricsCLI")
 
 
 class EvalStats(NamedTuple):
@@ -45,16 +49,27 @@ def _maybe_progress(
 
 
 def metrics_cli_progress(label: str, current: int, total: int) -> None:
-    """Terminal progress bar for CLI scripts."""
+    """Structured progress for CLI scripts (no raw stdout); use DEBUG for each tick."""
     if total <= 0:
         return
     width = 28
     filled = int((current / total) * width)
-    bar = "#" * filled + "-" * (width - filled)
     pct = (current / total) * 100
-    print(f"\r{label}: [{bar}] {current}/{total} ({pct:5.1f}%)", end="", flush=True)
+    _METRICS_CLI_LOG.debug(
+        "metrics_cli_progress",
+        label=label,
+        current=current,
+        total=total,
+        pct_rounded=round(pct, 1),
+        bar_filled=filled,
+        bar_width=width,
+    )
     if current == total:
-        print()
+        _METRICS_CLI_LOG.info(
+            "metrics_cli_progress_complete",
+            label=label,
+            total=total,
+        )
 
 
 def save_perplexity_report(metrics_dir: Path, report: dict[str, Any]) -> Path:

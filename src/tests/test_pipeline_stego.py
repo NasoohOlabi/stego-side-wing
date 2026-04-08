@@ -77,7 +77,9 @@ def test_encode_returns_success_with_mocked_stages():
         [{"category": "c", "source_quote": "q", "tangent": "t"}],
         [{"category": "c", "source_quote": "q", "tangent": "t"}],
     )
-    pipeline._generate_stego_texts = lambda sample, comment_embedding: ["candidate text"]
+    pipeline._generate_stego_texts = lambda sample, comment_embedding, **kwargs: [
+        "candidate text"
+    ]
     pipeline._cross_validate = lambda **kwargs: {
         "succeeded": True,
         "stegoText": "candidate text",

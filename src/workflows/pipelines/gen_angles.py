@@ -1,10 +1,14 @@
 """Generate angles from post content."""
-import logging
+import time
 from typing import Any, Dict, List
 
+from loguru import logger
+
+from infrastructure.json_logging import get_trace_id
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
+from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.text_utils import (
     build_post_text_dictionary,
@@ -17,22 +21,42 @@ from pipelines.angles.angle_runner import SYSTEM_PROMPT as ANGLES_SYSTEM_PROMPT
 from pipelines.angles.angle_runner import TEMPERATURE as ANGLES_TEMPERATURE
 from pipelines.angles.angle_runner import USER_PROMPT_TEMPLATE as ANGLES_USER_PROMPT_TEMPLATE
 
-logger = logging.getLogger(__name__)
+_LOG = logger.bind(component="GenAnglesPipeline")
+
+
+def _gen_angles_bind_log():
+    tid = get_trace_id()
+    return _LOG.bind(trace_id=tid if tid else "")
+
+
+def _elapsed_ms(since: float) -> int:
+    return int((time.perf_counter() - since) * 1000)
+
+
+def _probe_llm_run_id(pipeline: Any) -> str:
+    llm = getattr(pipeline, "llm", None)
+    if llm is None:
+        return ""
+    meta = getattr(llm, "last_call_metadata", {}) or {}
+    return str(meta.get("run_id") or "")
 
 
 class GenAnglesPipeline:
-    """Pipeline for generating angles from posts."""
-    
+    """
+    Stateful orchestration for angle generation: owns backend and LLM adapters, workflow
+    config, and the last batch processing summary for observability and CLI/API callers.
+    """
+
     def __init__(self):
         self.backend = BackendAPIAdapter()
         self.llm = LLMAdapter()
         self.config = get_config()
         self._last_batch_summary: Dict[str, Any] = {}
-    
+
     def _flatten_comments(self, comments: List[Dict]) -> List[Dict]:
         """Flatten nested comment structure."""
         return flatten_comments(comments)
-    
+
     def _build_dictionary(self, post: Dict) -> List[str]:
         """Build dictionary of texts from post."""
         return build_post_text_dictionary(post)
@@ -49,6 +73,7 @@ class GenAnglesPipeline:
         """Generate angles without mutating or saving artifacts."""
         post_id = str(post.get("id") or "<unknown>")
         dictionary = self._build_dictionary(post)
+        t_preview = time.perf_counter()
         report = {
             "post_id": post_id,
             "input_count": len(dictionary),
@@ -69,12 +94,34 @@ class GenAnglesPipeline:
             "user_prompt_template_hash": stable_hash(ANGLES_USER_PROMPT_TEMPLATE),
             "used_fallback": False,
         }
+        write_debug_probe(
+            run_id=None,
+            hypothesis_id="H3",
+            location="workflows/pipelines/gen_angles.py:preview_post:begin",
+            message="angle preview started",
+            data={
+                "post_id": post_id,
+                "input_count": len(dictionary),
+                "allow_fallback": allow_fallback,
+                "input_hash": report["input_hash"],
+            },
+        )
         if not dictionary:
             report.update({"angles": [], "angles_hash": stable_hash([]), "options_count": 0})
+            _gen_angles_bind_log().info(
+                "gen_angles_preview_complete",
+                path="empty_dictionary",
+                post_id=post_id,
+                elapsed_ms_total=_elapsed_ms(t_preview),
+                input_count=0,
+                angles_count=0,
+            )
             return {"post": dict(post, angles=[], options_count=0), "report": report}
 
+        t_an = time.perf_counter()
         try:
             response = self.backend.analyze_angles(dictionary)
+            analyze_ms = _elapsed_ms(t_an)
             results = response.get("results", [])
             angles = []
             for result in results:
@@ -99,29 +146,76 @@ class GenAnglesPipeline:
                     "options_count": len(angles),
                 }
             )
-            logger.info(
-                "angles preview post_id=%s input_count=%s angles=%s hash=%s",
-                post_id,
-                len(dictionary),
-                len(angles),
-                report["angles_hash"],
+            write_debug_probe(
+                run_id=_probe_llm_run_id(self),
+                hypothesis_id="H3",
+                location="workflows/pipelines/gen_angles.py:preview_post:success",
+                message="angle preview succeeded",
+                data={
+                    "post_id": post_id,
+                    "input_count": len(dictionary),
+                    "angles_count": len(angles),
+                    "allow_fallback": allow_fallback,
+                },
+            )
+            _gen_angles_bind_log().info(
+                "gen_angles_preview_complete",
+                path="analyze_angles",
+                post_id=post_id,
+                elapsed_ms_total=_elapsed_ms(t_preview),
+                elapsed_ms_analyze_angles=analyze_ms,
+                input_count=len(dictionary),
+                angles_count=len(angles),
+                angles_hash=report["angles_hash"],
             )
             return {"post": processed_post, "report": report}
         except Exception as e:
+            primary_ms = _elapsed_ms(t_an)
+            write_debug_probe(
+                run_id=_probe_llm_run_id(self),
+                hypothesis_id="H3",
+                location="workflows/pipelines/gen_angles.py:preview_post:failure",
+                message="angle preview primary path failed",
+                data={
+                    "post_id": post_id,
+                    "input_count": len(dictionary),
+                    "allow_fallback": allow_fallback,
+                    "error_kind": type(e).__name__,
+                },
+            )
             if not allow_fallback:
-                logger.exception(
-                    "angles generation failed post_id=%s",
-                    post_id,
-                    extra={
-                        "event": "gen_angles",
-                        "post_id": post_id,
-                        "input_count": len(dictionary),
-                        "error_kind": type(e).__name__,
-                    },
+                _gen_angles_bind_log().opt(exception=True).error(
+                    "gen_angles_preview_failed",
+                    path="analyze_angles",
+                    post_id=post_id,
+                    elapsed_ms_total=_elapsed_ms(t_preview),
+                    elapsed_ms_primary_path=primary_ms,
+                    input_count=len(dictionary),
+                    error_kind=type(e).__name__,
                 )
                 raise
-            logger.exception("angles api failed; using fallback for post_id=%s", post_id)
+            _gen_angles_bind_log().opt(exception=True).warning(
+                "gen_angles_primary_failed_using_fallback",
+                post_id=post_id,
+                elapsed_ms_primary_path=primary_ms,
+                input_count=len(dictionary),
+                error_kind=type(e).__name__,
+            )
+            write_debug_probe(
+                run_id=_probe_llm_run_id(self),
+                hypothesis_id="H3",
+                location="workflows/pipelines/gen_angles.py:preview_post:fallback",
+                message="angle preview falling back to llm-generated angles",
+                data={
+                    "post_id": post_id,
+                    "input_count": len(dictionary),
+                    "allow_fallback": allow_fallback,
+                    "error_kind": type(e).__name__,
+                },
+            )
+            t_fb = time.perf_counter()
             angles = self._generate_angles_llm(dictionary)
+            fallback_ms = _elapsed_ms(t_fb)
             for a in angles:
                 a.setdefault("source_document", 0)
             processed_post = dict(post)
@@ -136,23 +230,33 @@ class GenAnglesPipeline:
                     "fallback_error": str(e),
                 }
             )
+            _gen_angles_bind_log().info(
+                "gen_angles_preview_complete",
+                path="fallback_llm",
+                post_id=post_id,
+                elapsed_ms_total=_elapsed_ms(t_preview),
+                elapsed_ms_primary_failed_path=primary_ms,
+                elapsed_ms_fallback_llm=fallback_ms,
+                input_count=len(dictionary),
+                angles_count=len(angles),
+                angles_hash=report["angles_hash"],
+            )
             return {"post": processed_post, "report": report}
-    
+
     def generate_angles(self, post: Dict, allow_fallback: bool = False) -> List[Dict[str, Any]]:
         """
         Generate angles from post content.
-        
+
         Args:
             post: Post dictionary with content, search_results, comments
-        
+
         Returns:
             List of angle dictionaries
         """
         return list(self.preview_post(post, allow_fallback=allow_fallback)["report"]["angles"])
-    
+
     def _generate_angles_llm(self, texts: List[str]) -> List[Dict[str, Any]]:
         """Generate angles using LLM directly."""
-        # Combine texts
         combined_text = "\n\n---\n\n".join(texts)
         ga = get_prompts().gen_angles
         prompt = ga.user_template.format(combined_text=combined_text)
@@ -166,9 +270,8 @@ class GenAnglesPipeline:
                 provider="lm_studio",
                 temperature=0.0,
             )
-            
+
             parsed_items = parse_json_array_response(response)
-            # Single combined prompt: no reliable per-chunk index; use 0 (see analyze_angles_from_texts).
             fallback_doc = 0
             return [
                 {
@@ -180,11 +283,14 @@ class GenAnglesPipeline:
                 for a in parsed_items
                 if isinstance(a, dict)
             ]
-            
+
         except Exception:
-            logger.exception("angles fallback llm failed")
+            _gen_angles_bind_log().opt(exception=True).error(
+                "gen_angles_fallback_llm_failed",
+                combined_chars=len(combined_text),
+            )
             return []
-    
+
     def process_post(
         self,
         post: Dict,
@@ -193,16 +299,16 @@ class GenAnglesPipeline:
     ) -> Dict:
         """
         Process a post to generate angles.
-        
+
         Args:
             post: Post dictionary
             step: Workflow step name
-        
+
         Returns:
             Post dictionary with angles added
         """
         return self.preview_post(post, allow_fallback=allow_fallback)["post"]
-    
+
     def process_posts(
         self,
         step: str = "angles-step",
@@ -211,16 +317,16 @@ class GenAnglesPipeline:
     ) -> List[Dict]:
         """
         Process multiple posts to generate angles.
-        
+
         Args:
             step: Workflow step name
             count: Number of posts to process
             offset: Offset for pagination
-        
+
         Returns:
             List of posts with angles added
         """
-        # Get list of post filenames
+        t_batch = time.perf_counter()
         posts_list = self.backend.posts_list(step=step, count=count, offset=offset)
         file_names = posts_list.get("fileNames", [])
         load_failed_count = 0
@@ -234,6 +340,14 @@ class GenAnglesPipeline:
                 "processed_count": 0,
                 "failed_count": 0,
             }
+            _gen_angles_bind_log().info(
+                "gen_angles_batch_complete",
+                step=step,
+                elapsed_ms_total=_elapsed_ms(t_batch),
+                listed_count=0,
+                loaded_count=0,
+                processed_count=0,
+            )
             return []
 
         posts: List[Dict[str, Any]] = []
@@ -241,7 +355,11 @@ class GenAnglesPipeline:
             try:
                 posts.append(self.backend.get_post_local(file_name, step))
             except Exception:
-                logger.exception("angles load failed file=%s", file_name)
+                _gen_angles_bind_log().opt(exception=True).error(
+                    "gen_angles_load_failed",
+                    file_name=file_name,
+                    step=step,
+                )
                 load_failed_count += 1
         processed_posts = self.process_post_objects(posts=posts, step=step)
         processing_summary = dict(getattr(self, "_last_batch_summary", {}))
@@ -257,15 +375,30 @@ class GenAnglesPipeline:
             "failed_count": load_failed_count + processing_failed,
             "allow_fallback": bool(processing_summary.get("allow_fallback", False)),
         }
+        _gen_angles_bind_log().info(
+            "gen_angles_batch_complete",
+            step=step,
+            elapsed_ms_total=_elapsed_ms(t_batch),
+            listed_count=len(file_names),
+            loaded_count=len(posts),
+            processed_count=len(processed_posts),
+            load_failed_count=load_failed_count,
+            processing_failed_count=processing_failed,
+            failed_count=self._last_batch_summary["failed_count"],
+        )
         if self._last_batch_summary["failed_count"] > 0:
-            logger.warning(
-                "angles batch summary step=%s requested=%s loaded=%s processed=%s failed=%s",
-                step,
-                self._last_batch_summary["requested_count"],
-                self._last_batch_summary["loaded_count"],
-                self._last_batch_summary["processed_count"],
-                self._last_batch_summary["failed_count"],
-                extra={"event": "angles_batch", **self._last_batch_summary},
+            summ = self._last_batch_summary
+            _gen_angles_bind_log().warning(
+                "gen_angles_batch_degraded",
+                angles_step=summ.get("step"),
+                requested_count=summ.get("requested_count"),
+                listed_count=summ.get("listed_count"),
+                loaded_count=summ.get("loaded_count"),
+                load_failed_count=summ.get("load_failed_count"),
+                processed_count=summ.get("processed_count"),
+                processing_failed_count=summ.get("processing_failed_count"),
+                failed_count=summ.get("failed_count"),
+                allow_fallback=summ.get("allow_fallback"),
             )
         return processed_posts
 
@@ -279,12 +412,25 @@ class GenAnglesPipeline:
         processed_posts: List[Dict[str, Any]] = []
         for post in posts:
             post_id = post.get("id", "<unknown>")
+            t_post = time.perf_counter()
             try:
                 processed = self.process_post(post, step, allow_fallback=allow_fallback)
                 self.backend.save_post_local(processed, step=step)
                 processed_posts.append(processed)
+                _gen_angles_bind_log().info(
+                    "gen_angles_post_persisted",
+                    post_id=post_id,
+                    step=step,
+                    elapsed_ms_total=_elapsed_ms(t_post),
+                    options_count=processed.get("options_count"),
+                )
             except Exception:
-                logger.exception("angles process failed post_id=%s", post_id)
+                _gen_angles_bind_log().opt(exception=True).error(
+                    "gen_angles_post_failed",
+                    post_id=post_id,
+                    step=step,
+                    elapsed_ms_until_failure=_elapsed_ms(t_post),
+                )
         self._last_batch_summary = {
             "step": step,
             "input_count": len(posts),

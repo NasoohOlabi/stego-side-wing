@@ -1,7 +1,9 @@
 """Steganographic encoding pipeline with n8n parity logic."""
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
@@ -39,6 +41,10 @@ STEGO_ENCODE_MAX_TOKENS = 1536
 _STEGO_LOG = logger.bind(component="StegoPipeline")
 
 
+def _elapsed_ms_since(t0: float) -> int:
+    return int((time.perf_counter() - t0) * 1000)
+
+
 def _stego_log_bind(
     log_area: str,
     *,
@@ -46,6 +52,7 @@ def _stego_log_bind(
     prompt_role: Optional[str] = None,
     llm_stage: Optional[str] = None,
     process_event: Optional[str] = None,
+    timing_phase: Optional[str] = None,
 ) -> Any:
     """Structured stego log context (log_domain / log_area / log_op); message stays prefix-free."""
     fields: Dict[str, Any] = {
@@ -59,6 +66,8 @@ def _stego_log_bind(
         fields["llm_stage"] = llm_stage
     if process_event is not None:
         fields["process_event"] = process_event
+    if timing_phase is not None:
+        fields["timing_phase"] = timing_phase
     return _STEGO_LOG.bind(**fields)
 
 
@@ -114,6 +123,37 @@ def _text_preview(text: Any, max_len: int = 180) -> str:
         return ""
     stripped = " ".join(text.split())
     return stripped if len(stripped) <= max_len else f"{stripped[:max_len]}..."
+
+
+def _log_encode_timing_complete(
+    *,
+    encode_run_id: str,
+    post_id: Any,
+    augment_ms: int,
+    build_samples_ms: int,
+    encode_total_ms: int,
+    succeeded: bool,
+    retry_count: int,
+    timing_outcome: str,
+) -> None:
+    _stego_log_bind("timing", timing_phase="encode_complete").bind(
+        stego_encode_run_id=encode_run_id,
+        augment_ms=augment_ms,
+        build_samples_ms=build_samples_ms,
+        encode_total_ms=encode_total_ms,
+        succeeded=succeeded,
+        retry_count=retry_count,
+        timing_outcome=timing_outcome,
+    ).info(
+        "post_id={} encode_total_ms={} augment_ms={} build_samples_ms={} succeeded={} retry_count={} outcome={}",
+        post_id,
+        encode_total_ms,
+        augment_ms,
+        build_samples_ms,
+        succeeded,
+        retry_count,
+        timing_outcome,
+    )
 
 
 class StegoPipeline:
@@ -296,6 +336,9 @@ class StegoPipeline:
         self,
         sample: Dict[str, Any],
         comment_embedding: Dict[str, Any],
+        *,
+        sample_index: int = 0,
+        encode_run_id: str = "",
     ) -> List[str]:
         def _extract_json_block(raw: str) -> str:
             stripped = raw.strip()
@@ -315,6 +358,7 @@ class StegoPipeline:
         )
         _stego_log_bind("prompt", prompt_role="system").info("{}", system_message)
         _stego_log_bind("prompt", prompt_role="user").info("{}", prompt)
+        t_llm = time.perf_counter()
         response = self.llm.call_llm(
             prompt=prompt,
             system_message=system_message,
@@ -323,6 +367,9 @@ class StegoPipeline:
             temperature=0.7,
             max_tokens=STEGO_ENCODE_MAX_TOKENS,
         )
+        llm_wall_ms = _elapsed_ms_since(t_llm)
+        meta = self.llm.last_call_metadata or {}
+        llm_adapter_ms = meta.get("elapsed_ms")
         text = response.strip()
         _stego_log_bind("llm", llm_stage="raw").info("{}", text)
 
@@ -341,8 +388,34 @@ class StegoPipeline:
                     "extracted={} mode=json_contract",
                     len(strings),
                 )
+                tb = _stego_log_bind("timing", timing_phase="encode_llm_sample").bind(
+                    stego_encode_run_id=encode_run_id,
+                    sample_index=sample_index,
+                    llm_wall_ms=llm_wall_ms,
+                    llm_adapter_reported_ms=llm_adapter_ms,
+                )
+                tb.info(
+                    "category={} ok={} llm_wall_ms={} llm_adapter_reported_ms={}",
+                    sample.get("category"),
+                    True,
+                    llm_wall_ms,
+                    llm_adapter_ms,
+                )
                 return strings
 
+        tb = _stego_log_bind("timing", timing_phase="encode_llm_sample").bind(
+            stego_encode_run_id=encode_run_id,
+            sample_index=sample_index,
+            llm_wall_ms=llm_wall_ms,
+            llm_adapter_reported_ms=llm_adapter_ms,
+        )
+        tb.warning(
+            "category={} ok={} llm_wall_ms={} llm_adapter_reported_ms={}",
+            sample.get("category"),
+            False,
+            llm_wall_ms,
+            llm_adapter_ms,
+        )
         _stego_log_bind("llm", llm_stage="parse").error(
             "Strict JSON contract failed tangent={} preview={}",
             _text_preview(sample.get("tangent", ""), max_len=120),
@@ -361,14 +434,30 @@ class StegoPipeline:
         few_shots: List[Dict[str, Any]],
         tangents_db: List[Dict[str, Any]],
         selected_angle: Dict[str, Any],
+        *,
+        encode_run_id: str = "",
     ) -> Dict[str, Any]:
+        t_cv = time.perf_counter()
         decoded_indices: List[Optional[int]] = []
         decodeds: List[Optional[Dict[str, Any]]] = []
-        for text in candidate_texts:
+        for idx, text in enumerate(candidate_texts):
+            t_dec = time.perf_counter()
             decoded_idx = self.decode_pipeline.decode(
                 stego_text=text,
                 angles=tangents_db,
                 few_shots=few_shots,
+            )
+            dec_ms = _elapsed_ms_since(t_dec)
+            db = _stego_log_bind("timing", timing_phase="decode_candidate").bind(
+                stego_encode_run_id=encode_run_id,
+                candidate_index=idx,
+                elapsed_ms=dec_ms,
+            )
+            db.debug(
+                "candidate_index={} elapsed_ms={} decoded_idx={}",
+                idx,
+                dec_ms,
+                decoded_idx,
             )
             decoded_indices.append(decoded_idx)
             if isinstance(decoded_idx, int) and 0 <= decoded_idx < len(tangents_db):
@@ -398,6 +487,19 @@ class StegoPipeline:
             if _eq_angle(decoded_obj, selected_angle) and _is_non_empty_string(candidate_text):
                 success_idx = idx
                 break
+
+        cv_ms = _elapsed_ms_since(t_cv)
+        _stego_log_bind("timing", timing_phase="cross_validate").bind(
+            stego_encode_run_id=encode_run_id,
+            elapsed_ms=cv_ms,
+            candidate_count=len(candidate_texts),
+            succeeded=success_idx != -1,
+        ).info(
+            "elapsed_ms={} candidate_count={} succeeded={}",
+            cv_ms,
+            len(candidate_texts),
+            success_idx != -1,
+        )
 
         if success_idx != -1:
             return {
@@ -445,19 +547,51 @@ class StegoPipeline:
             raise ValueError("Post must have angles")
 
         post_id = post.get("id")
-        _stego_log_bind("start").info(
+        encode_run_id = uuid4().hex
+        t_encode = time.perf_counter()
+        _stego_log_bind("start").bind(stego_encode_run_id=encode_run_id).info(
             "post_id={} payload_len={} max_retries={}",
             post_id,
             len(payload),
             max_retries,
         )
 
+        t_aug = time.perf_counter()
         post_augmentation = self._augment_post(payload, post)
+        augment_ms = _elapsed_ms_since(t_aug)
+        _stego_log_bind("timing", timing_phase="augment_post").bind(
+            stego_encode_run_id=encode_run_id,
+            elapsed_ms=augment_ms,
+        ).info("post_id={} elapsed_ms={}", post_id, augment_ms)
+
+        t_samp = time.perf_counter()
         samples, tangents_db = self._build_samples(post_augmentation, post)
+        build_samples_ms = _elapsed_ms_since(t_samp)
+        _stego_log_bind("timing", timing_phase="build_samples").bind(
+            stego_encode_run_id=encode_run_id,
+            elapsed_ms=build_samples_ms,
+            samples_count=len(samples),
+        ).info(
+            "post_id={} elapsed_ms={} samples_count={}",
+            post_id,
+            build_samples_ms,
+            len(samples),
+        )
+
         if not samples:
             _stego_log_bind("prep").error(
                 "No samples generated from angle embedding for post_id={}",
                 post_id,
+            )
+            _log_encode_timing_complete(
+                encode_run_id=encode_run_id,
+                post_id=post_id,
+                augment_ms=augment_ms,
+                build_samples_ms=build_samples_ms,
+                encode_total_ms=_elapsed_ms_since(t_encode),
+                succeeded=False,
+                retry_count=0,
+                timing_outcome="no_samples",
             )
             return {
                 "stego_text": "",
@@ -482,6 +616,7 @@ class StegoPipeline:
 
         while retry_count <= max_retries:
             try:
+                t_attempt = time.perf_counter()
                 _stego_log_bind("attempt").info(
                     "post_id={} attempt={}/{} selected_idx={}",
                     post_id,
@@ -490,10 +625,13 @@ class StegoPipeline:
                     selected_idx,
                 )
                 encoded_results: List[Dict[str, Any]] = []
-                for sample in samples:
+                t_gen = time.perf_counter()
+                for sidx, sample in enumerate(samples):
                     texts = self._generate_stego_texts(
                         sample=sample,
                         comment_embedding=post_augmentation["commentEmbedding"],
+                        sample_index=sidx,
+                        encode_run_id=encode_run_id,
                     )
                     encoded_results.append(
                         {
@@ -503,6 +641,7 @@ class StegoPipeline:
                             "texts": texts,
                         }
                     )
+                generate_ms = _elapsed_ms_since(t_gen)
 
                 primary_texts = encoded_results[0].get("texts", []) if encoded_results else []
                 few_shots = encoded_results[1:]
@@ -516,12 +655,32 @@ class StegoPipeline:
                     len(primary_texts),
                     len(few_shots),
                 )
+                t_val = time.perf_counter()
                 validation = self._cross_validate(
                     candidate_texts=primary_texts,
                     few_shots=few_shots,
                     tangents_db=tangents_db,
                     selected_angle=selected_angle,
+                    encode_run_id=encode_run_id,
                 )
+                validate_ms = _elapsed_ms_since(t_val)
+                attempt_ms = _elapsed_ms_since(t_attempt)
+                _stego_log_bind("timing", timing_phase="encode_attempt").bind(
+                    stego_encode_run_id=encode_run_id,
+                    attempt_index=retry_count + 1,
+                    generate_ms=generate_ms,
+                    validate_ms=validate_ms,
+                    attempt_total_ms=attempt_ms,
+                    samples_count=len(samples),
+                ).info(
+                    "post_id={} attempt={} generate_ms={} validate_ms={} attempt_total_ms={}",
+                    post_id,
+                    retry_count + 1,
+                    generate_ms,
+                    validate_ms,
+                    attempt_ms,
+                )
+
                 if validation.get("succeeded"):
                     stego_text = validation.get("stegoText")
                     if not _is_non_empty_string(stego_text):
@@ -534,6 +693,16 @@ class StegoPipeline:
                         retry_count + 1,
                         validation.get("successIdx"),
                         validation.get("decodedIndices", []),
+                    )
+                    _log_encode_timing_complete(
+                        encode_run_id=encode_run_id,
+                        post_id=post_id,
+                        augment_ms=augment_ms,
+                        build_samples_ms=build_samples_ms,
+                        encode_total_ms=_elapsed_ms_since(t_encode),
+                        succeeded=True,
+                        retry_count=retry_count,
+                        timing_outcome="success",
                     )
                     return {
                         "stego_text": stego_text,
@@ -572,6 +741,16 @@ class StegoPipeline:
                         post_id,
                         error_details["reason"],
                     )
+                    _log_encode_timing_complete(
+                        encode_run_id=encode_run_id,
+                        post_id=post_id,
+                        augment_ms=augment_ms,
+                        build_samples_ms=build_samples_ms,
+                        encode_total_ms=_elapsed_ms_since(t_encode),
+                        succeeded=False,
+                        retry_count=retry_count,
+                        timing_outcome="validation_exhausted",
+                    )
                     return {
                         "stego_text": primary_texts[0] if primary_texts else "",
                         "post": post,
@@ -596,6 +775,16 @@ class StegoPipeline:
                     type(exc).__name__,
                 )
                 if retry_count >= max_retries:
+                    _log_encode_timing_complete(
+                        encode_run_id=encode_run_id,
+                        post_id=post_id,
+                        augment_ms=augment_ms,
+                        build_samples_ms=build_samples_ms,
+                        encode_total_ms=_elapsed_ms_since(t_encode),
+                        succeeded=False,
+                        retry_count=retry_count,
+                        timing_outcome="exception",
+                    )
                     return {
                         "stego_text": "",
                         "post": post,
@@ -652,7 +841,11 @@ class StegoPipeline:
             )
             return next_post_id
 
-        _stego_log_bind("process", process_event="start").info(
+        process_run_id = uuid4().hex
+        t_process = time.perf_counter()
+        _stego_log_bind("process", process_event="start").bind(
+            stego_process_run_id=process_run_id,
+        ).info(
             "post_id={} list_offset={}",
             post_id,
             list_offset,
@@ -736,4 +929,15 @@ class StegoPipeline:
                 resolved_post_id,
                 result.get("error"),
             )
+        proc_ms = _elapsed_ms_since(t_process)
+        _stego_log_bind("timing", timing_phase="process_post_complete", log_op="process").bind(
+            stego_process_run_id=process_run_id,
+            elapsed_ms=proc_ms,
+            succeeded=bool(result.get("succeeded")),
+        ).info(
+            "post_id={} elapsed_ms={} succeeded={}",
+            str(post.get("id") or resolved_post_id),
+            proc_ms,
+            bool(result.get("succeeded")),
+        )
         return result

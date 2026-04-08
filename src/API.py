@@ -10,6 +10,8 @@ import argparse
 import logging
 import os
 
+from loguru import logger
+
 from app.app_factory import create_app
 from infrastructure.json_logging import log_process_start
 
@@ -54,18 +56,15 @@ def main() -> None:
         enable_file_log=not args.no_log_file,
     )
     dev_mode = args.dev or _is_truthy(os.environ.get("API_DEBUG"))
-    print("--------------------------------")
-    print("--------------------------------")
-    print("--------------------------------")
-    print("--------------------------------")
-    print("--------------------------------")
-    print(f"Args: {args}")
-    print(f"Dev mode: {dev_mode}")
-    print("--------------------------------")
-    print("--------------------------------")
-    print("--------------------------------")
-    print("--------------------------------")
-    print("--------------------------------")
+    logger.bind(component="APIEntry").info(
+        "api_cli_startup",
+        dev_mode=dev_mode,
+        host=args.host,
+        port=args.port,
+        log_level_set=bool(args.log_level),
+        log_file_set=bool(args.log_file),
+        file_logging_enabled=not args.no_log_file,
+    )
     log_process_start(
         logging.getLogger("app"),
         "api_server",

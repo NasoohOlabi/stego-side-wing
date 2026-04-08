@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StegoPipeline (stego.py) — architecture &amp; performance</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --accent: #5eb3f6;
+      --warn: #e6a23c;
+      --bad: #f56c6c;
+      --ok: #67c23a;
+      --border: #2d3a4d;
+      --code-bg: #121820;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      line-height: 1.55;
+      color: var(--text);
+      background: var(--bg);
+      margin: 0;
+      padding: 2rem clamp(1rem, 4vw, 3rem);
+      max-width: 52rem;
+      margin-inline: auto;
+    }
+    h1 { font-size: 1.65rem; font-weight: 650; margin-top: 0; }
+    h2 { font-size: 1.2rem; color: var(--accent); margin-top: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.35rem; }
+    h3 { font-size: 1.05rem; margin-top: 1.25rem; }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); font-size: 0.92rem; }
+    .path { font-family: ui-monospace, monospace; font-size: 0.88em; color: var(--accent); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+      margin: 1rem 0;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.65rem;
+      text-align: left;
+    }
+    th { background: var(--panel); }
+    tr:nth-child(even) td { background: rgba(26, 35, 50, 0.45); }
+    code, pre {
+      font-family: ui-monospace, "Cascadia Code", monospace;
+      font-size: 0.86em;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      padding: 1rem;
+      overflow-x: auto;
+      border-radius: 6px;
+    }
+    .callout {
+      border-left: 4px solid var(--warn);
+      background: var(--panel);
+      padding: 0.85rem 1rem;
+      margin: 1rem 0;
+      border-radius: 0 6px 6px 0;
+    }
+    .callout.bad { border-left-color: var(--bad); }
+    .callout.ok { border-left-color: var(--ok); }
+    ul.compact li { margin: 0.35rem 0; }
+    footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.85rem; color: var(--muted); }
+    .tag { display: inline-block; padding: 0.15rem 0.45rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .tag-net { background: #2a4a6a; color: #9fd4ff; }
+    .tag-llm { background: #4a2a6a; color: #e0b0ff; }
+    .tag-cpu { background: #2a5a3a; color: #a8f0c0; }
+  </style>
+</head>
+<body>
+
+<h1>StegoPipeline — <span class="path">src/workflows/pipelines/stego.py</span></h1>
+<p class="muted">Report generated for code review: what this module does, how it fits the workflow, and <strong>why wall-clock time is dominated by remote work</strong> (LLM + HTTP), not by the bit-stego codec.</p>
+
+<h2>1. Role in the system</h2>
+<p><strong>StegoPipeline</strong> is the <em>sender-side</em> orchestrator: it embeds a secret payload into Reddit-style post data so the output looks like ordinary comments and angle metadata, while remaining decodable by <span class="path">DecodePipeline</span> in <span class="path">src/workflows/pipelines/decode.py</span>. It intentionally mirrors the legacy n8n workflow <span class="path">workflows/27rZrYtywu3k9e7Q.json</span> (workflow id <code>STEGO_WORKFLOW_ID</code>).</p>
+<p>Stateful dependencies (injected in <code>__init__</code>):</p>
+<ul class="compact">
+  <li><span class="path">BackendAPIAdapter</span> — posts I/O, <code>needle_finder_batch</code>, artifact save</li>
+  <li><span class="path">LLMAdapter</span> — OpenAI-compatible chat to LM Studio (<code>provider="lm_studio"</code>)</li>
+  <li><span class="path">DecodePipeline</span> — used only for <strong>cross-validation</strong> during encode (not for the final user-facing decode path)</li>
+</ul>
+
+<h2>2. Main entry points</h2>
+<h3><code>encode(payload, post, tag, max_retries=4)</code></h3>
+<p>Core algorithm (comments in source at <span class="path">stego.py</span> ~427–441):</p>
+<ol>
+  <li><strong>Post augmentation</strong> — pure codec: compress payload, choose comment chain and angle indices, produce <code>commentEmbedding</code> / <code>angleEmbedding</code> (<span class="path">workflows.utils.stego_codec.augment_post</span>).</li>
+  <li><strong>Sample construction</strong> — up to four candidate angles get <code>best_match</code> text via <code>needle_finder_batch</code> over <code>post["search_results"]</code>.</li>
+  <li><strong>Candidate generation</strong> — for <em>each</em> sample, call the LLM to emit exactly three JSON strings (stego comment texts).</li>
+  <li><strong>Validation</strong> — treat the <em>first</em> sample’s three strings as primary candidates; remaining samples supply few-shot context. For <em>each</em> primary string, run <code>DecodePipeline.decode</code>; success if decoded angle matches the selected angle.</li>
+  <li><strong>Retry loop</strong> — on failure, repeat up to <code>max_retries + 1</code> attempts (default 5 total attempts).</li>
+</ol>
+
+<h3><code>process_post(...)</code></h3>
+<p>CLI/API-style wrapper: resolves payload (or reads default from workflow JSON <code>SetSecretData</code>), optionally picks the next unprocessed post id, loads post JSON from disk, calls <code>encode</code>, then on success writes an n8n-shaped artifact via <code>save_object_local</code>.</p>
+
+<h2>3. Data flow (high level)</h2>
+<pre>
+post + payload
+    → augment_post (codec, local CPU)
+    → needle_finder_batch (HTTP or local semantic match × up to 4 needles)
+    → FOR each sample (1..4): LLM encode (sequential)
+    → FOR each of 3 primary strings: decode() = semantic_search + LLM (× up to 5 tries)
+    → retry entire attempt if validation fails
+</pre>
+
+<h2>4. Why it is slow</h2>
+<p>Latency is not from the steganographic bit packing (dictionary build, compression, comment/angle embedding). Those run in-process and are typically small compared to the following.</p>
+
+<div class="callout bad">
+  <strong>Primary bottleneck: many sequential LLM round-trips</strong> per successful encode, each subject to model speed, context length, and <span class="path">LLMAdapter</span> retries/backoff (<code>LLM_MAX_ATTEMPTS</code>, exponential backoff + jitter).
+</div>
+
+<h3>4.1 Encode-phase LLM calls scale with sample count</h3>
+<p>In <code>encode</code>, the loop at <span class="path">stego.py</span> ~493–505 calls <code>_generate_stego_texts</code> for <strong>every</strong> entry in <code>samples</code>. Samples are built from up to four angles (<code>totalAnglesSelectedFirst[:4]</code> in <code>_build_samples</code>). Each iteration:</p>
+<ul class="compact">
+  <li><span class="tag tag-llm">LLM</span> <code>call_llm</code> with <code>max_tokens=STEGO_ENCODE_MAX_TOKENS</code> (1536) — large headroom for models that emit “thinking” before JSON.</li>
+  <li><code>temperature=0.7</code> — more variance and often longer generations than greedy decoding.</li>
+</ul>
+<p>So <strong>one encode attempt</strong> issues <strong>1 × (number of samples)</strong> full chat completions, with samples ≤ 4 → <strong>up to 4 encode LLM calls per attempt</strong>.</p>
+
+<h3>4.2 Validation multiplies cost: 3 × full decode pipelines per attempt</h3>
+<p><code>_cross_validate</code> loops over the three primary candidate strings and calls <code>self.decode_pipeline.decode(...)</code> for each. Each <code>decode</code> (<span class="path">decode.py</span> ~144–377):</p>
+<ul class="compact">
+  <li><span class="tag tag-net">NET</span> <code>backend.semantic_search</code> with <code>n=DECODE_SEMANTIC_TOP_N</code> (20) over the full <code>tangents_db</code> / angles list.</li>
+  <li><span class="tag tag-llm">LLM</span> Up to <code>DECODE_LLM_MAX_TRIES</code> (5) completion calls on failure before giving up.</li>
+</ul>
+<p>Per encode attempt, that is roughly <strong>3 × (1 semantic search + 1–5 LLM calls)</strong> in the worst case.</p>
+
+<h3>4.3 Outer retry loop</h3>
+<p><code>max_retries=4</code> means the whole block (all sample encodes + all cross-validations) can run <strong>up to 5 times</strong> when validation fails or exceptions occur. Failed attempts still paid for LLM and search work.</p>
+
+<h3>4.4 Needle finder batch</h3>
+<p><code>_build_samples</code> calls <code>needle_finder_batch</code> once per attempt with up to four needles. Via HTTP, the client uses a <strong>60s timeout</strong> (<span class="path">backend_api.py</span>). Locally, the adapter runs <code>find_best_match</code> <strong>sequentially per needle</strong> — still potentially expensive if each match embeds or scores against a large haystack.</p>
+
+<h3>4.5 Logging volume</h3>
+<p>The pipeline logs full system and user prompts and raw LLM output at INFO. That does not usually dominate latency but increases I/O and log size during long runs.</p>
+
+<h2>5. Rough operation budget (single encode attempt)</h2>
+<p>Let <em>S</em> = number of samples (1–4), <em>R</em> = decode LLM tries (1–5 per candidate). Order-of-magnitude:</p>
+<table>
+  <thead>
+    <tr><th>Step</th><th>Calls (typical)</th><th>Kind</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>augment_post</code></td><td>1</td><td><span class="tag tag-cpu">CPU</span> in-process</td></tr>
+    <tr><td><code>needle_finder_batch</code></td><td>1</td><td><span class="tag tag-net">NET</span> or CPU × needles</td></tr>
+    <tr><td><code>_generate_stego_texts</code></td><td><em>S</em></td><td><span class="tag tag-llm">LLM</span> sequential</td></tr>
+    <tr><td><code>decode</code> (per primary string)</td><td>3</td><td>each: semantic + LLM (× <em>R</em>)</td></tr>
+  </tbody>
+</table>
+<p class="muted">Example with <em>S</em>=4 and three decode paths each needing 2 LLM tries: 4 encode + 3 semantic + 6 decode LLM calls — before any outer retry. Multiply by up to 5 for the retry loop.</p>
+
+<div class="callout ok">
+  <strong>Takeaway:</strong> To make encode faster, reduce sequential LLM work (fewer samples, smaller <code>max_tokens</code>, parallel encode where safe), reduce decode work during validation (cheaper model, fewer retries, or skip decode for dev), or shrink the retry surface — the codec path is already the cheap part.
+</div>
+
+<h2>6. Related modules</h2>
+<ul class="compact">
+  <li><span class="path">src/workflows/utils/stego_codec.py</span> — <code>augment_post</code>, embedding, compression (shared sender/receiver contract).</li>
+  <li><span class="path">src/workflows/pipelines/decode.py</span> — semantic shortlist + decode LLM (<code>DECODE_LLM_MODEL</code> aligned with encode).</li>
+  <li><span class="path">src/workflows/adapters/llm.py</span> — timeouts, retries, LM Studio endpoint.</li>
+  <li><span class="path">src/workflows/runner.py</span> — constructs <code>StegoPipeline()</code> for workflow runs.</li>
+</ul>
+
+<footer>
+  <p>Source: repository snapshot · Module: <code>workflows.pipelines.stego</code> · Report is descriptive; timings depend on hardware, model, and network.</p>
+</footer>
+
+</body>
+</html>

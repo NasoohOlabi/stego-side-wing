@@ -1,9 +1,16 @@
 from types import SimpleNamespace
 
 import pytest
+from loguru import logger
 
 from workflows.contracts import FetchUrlResult
 from workflows.pipelines.research import ResearchPipeline
+
+
+def _research_pipeline_stub() -> ResearchPipeline:
+    p = ResearchPipeline.__new__(ResearchPipeline)
+    p._log = logger.bind(component="ResearchPipeline")
+    return p
 
 
 @pytest.mark.parametrize(
@@ -21,14 +28,14 @@ def test_is_new_post_variants(post, expected):
 
 
 def test_research_post_requires_id():
-    pipeline = ResearchPipeline.__new__(ResearchPipeline)
+    pipeline = _research_pipeline_stub()
     with pytest.raises(ValueError, match="must have 'id' field"):
         pipeline.research_post({})
 
 
 def test_research_post_skips_when_already_researched():
     post = {"id": "p1", "search_results": ["exists"]}
-    pipeline = ResearchPipeline.__new__(ResearchPipeline)
+    pipeline = _research_pipeline_stub()
     pipeline.gen_terms = SimpleNamespace(generate=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("should not run")))
     pipeline.backend = SimpleNamespace()
     pipeline.fetch_content = SimpleNamespace()
@@ -37,7 +44,7 @@ def test_research_post_skips_when_already_researched():
 
 
 def test_research_post_builds_deduped_non_pdf_results():
-    pipeline = ResearchPipeline.__new__(ResearchPipeline)
+    pipeline = _research_pipeline_stub()
     pipeline.gen_terms = SimpleNamespace(
         preview_generation=lambda **kwargs: {"terms": ["term1", "term2"]}
     )
@@ -67,6 +74,13 @@ def test_research_post_builds_deduped_non_pdf_results():
         "text:https://a.com/page",
         "text:https://b.com/page",
     ]
+    preview = pipeline.preview_post(post)
+    timing = preview["report"]["timing"]
+    assert timing["trace_id"]
+    assert timing["preview_total_ms"] >= 0
+    assert timing["terms_phase_ms"] >= 0
+    assert timing["search_phase_ms"] >= 0
+    assert timing["fetch_phase_ms"] >= 0
 
 
 def test_process_posts_saves_local_for_all_and_remote_for_new_only():
@@ -77,7 +91,7 @@ def test_process_posts_saves_local_for_all_and_remote_for_new_only():
         "old.json": {"id": "old", "search_results": ["existing"]},
     }
 
-    pipeline = ResearchPipeline.__new__(ResearchPipeline)
+    pipeline = _research_pipeline_stub()
     pipeline.backend = SimpleNamespace(
         posts_list=lambda step, count, offset: {"fileNames": ["new.json", "old.json"]},
         get_post_local=lambda file_name, step: dict(posts[file_name]),

@@ -1,12 +1,12 @@
 import json
 import os
 import time
-import traceback
 from typing import Any, Optional
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
+from loguru import logger
 from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -51,10 +51,12 @@ def normalize_url(url: str) -> str:
 
 
 class WebAnalyzer:
+    """Fetches page text with HTTP-first then Selenium; persists results under url_cache."""
+
     def __init__(self, max_cache_files: Optional[int] = 10000):
         """
         Initialize WebAnalyzer.
-        
+
         Args:
             max_cache_files: Maximum number of cache files to keep. When exceeded, oldest files are deleted.
                              Set to None to disable cache rotation.
@@ -62,6 +64,7 @@ class WebAnalyzer:
         self.driver = None
         self._auto_close = True  # Default: auto-close after each process_url (backward compat)
         self.max_cache_files = max_cache_files
+        self._log = logger.bind(component="WebAnalyzer")
 
     def __enter__(self) -> "WebAnalyzer":
         """Context manager entry."""
@@ -113,12 +116,15 @@ class WebAnalyzer:
         from infrastructure.cache import read_json_cache
         cached_result = read_json_cache(filename)
         if cached_result:
-            print(f"📂 Cache HIT for {url}")
             elapsed = time.time() - start_time
-            print(f"⏱️  Cache retrieval took {elapsed:.2f}s")
+            self._log.debug(
+                "url_cache_hit",
+                url=url,
+                retrieval_s=round(elapsed, 2),
+            )
             return cached_result
 
-        print(f"📂 Cache MISS for {url}")
+        self._log.debug("url_cache_miss", url=url)
 
         result = {
             "url": url,
@@ -134,13 +140,17 @@ class WebAnalyzer:
             # Try fast HTTP path first (for simple pages)
             text = self._try_fast_http_fetch(normalized_url, min_len=100)
             if text:
-                print(f"✅ Fast HTTP fetch succeeded: {len(text)} chars")
+                self._log.info(
+                    "fast_http_fetch_ok",
+                    url=url,
+                    char_count=len(text),
+                )
                 result["text"] = text
                 result["success"] = True
             else:
                 # Fall back to Selenium for JS-heavy pages
                 self._initialize_browser_cleaned()
-                print(f"🌐 Processing with Selenium: {url}")
+                self._log.info("selenium_fetch_start", url=url)
                 text = self._extract_text_content(normalized_url, timeout=timeout)
                 result["text"] = text
                 result["success"] = True
@@ -153,7 +163,7 @@ class WebAnalyzer:
             }
             from infrastructure.cache import write_json_cache
             write_json_cache(filename, cache_data)
-            print(f"✅ Saved to cache: {filename}")
+            self._log.debug("url_cache_saved", cache_file=filename)
             
             # Optional: Rotate cache if it's too large
             if self.max_cache_files is not None:
@@ -161,15 +171,19 @@ class WebAnalyzer:
 
         except Exception as e:
             result["error"] = str(e)
-            print(f"❌ Error processing {url}: {e}")
-            traceback.print_exc()
+            self._log.exception("process_url_failed", url=url)
         finally:
             # Only close if auto_close is enabled
             if should_close:
                 self._close_driver()
         
         elapsed = time.time() - start_time
-        print(f"⏱️  Total processing time: {elapsed:.2f}s")
+        self._log.debug(
+            "process_url_complete",
+            url=url,
+            total_s=round(elapsed, 2),
+            success=result["success"],
+        )
         return result
 
     def _initialize_browser_cleaned(self):
@@ -246,7 +260,7 @@ class WebAnalyzer:
             try:
                 self.driver.quit()
             except Exception as e:
-                print(f"⚠️ Warning: Error closing driver: {e}")
+                self._log.warning("driver_quit_failed", error=str(e))
             finally:
                 self.driver = None
 
@@ -343,7 +357,7 @@ class WebAnalyzer:
             self.driver.get(url)
             self._wait_for_stable_content(timeout=min(10, timeout - 2))
         except Exception:
-            print("⚠️ Navigation timeout, attempting extraction anyway...")
+            self._log.warning("navigation_timeout_extract_anyway", url=url)
             self._stop_js()
 
         # Check overall timeout
@@ -398,7 +412,12 @@ class WebAnalyzer:
                     best_text = text
 
                 if len(text) >= min_len:
-                    print(f"✅ Extracted {len(text)} chars using {name} strategy")
+                    self._log.info(
+                        "extraction_strategy_ok",
+                        strategy=name,
+                        char_count=len(text),
+                        url=url,
+                    )
                     return text
             except Exception:
                 continue
@@ -456,9 +475,13 @@ class WebAnalyzer:
                     os.remove(filepath)
                     deleted += 1
                 except Exception as e:
-                    print(f"⚠️ Warning: Could not delete cache file {filepath}: {e}")
-            
+                    self._log.warning(
+                        "cache_rotation_delete_failed",
+                        filepath=filepath,
+                        error=str(e),
+                    )
+
             if deleted > 0:
-                print(f"🗑️  Cache rotation: Deleted {deleted} oldest cache files")
+                self._log.info("cache_rotation_deleted", deleted_count=deleted)
         except Exception as e:
-            print(f"⚠️ Warning: Error during cache rotation: {e}")
+            self._log.warning("cache_rotation_failed", error=str(e))

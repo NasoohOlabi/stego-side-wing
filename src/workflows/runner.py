@@ -9,6 +9,7 @@ from uuid import uuid4
 from loguru import logger
 
 from infrastructure.config import REPO_ROOT, get_env, resolve_path
+from infrastructure.json_logging import get_trace_id
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.config import WorkflowConfig, isolated_workflow_config
 from workflows.pipelines.data_load import DataLoadPipeline
@@ -18,7 +19,9 @@ from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline
 from workflows.pipelines.receiver import ReceiverPipeline
 from workflows.pipelines.research import ResearchPipeline, is_likely_google_quota_error
 from workflows.pipelines.stego import StegoPipeline
+from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash
+from services.workflow_run_tracker import get_run_id
 
 _LOG = logger.bind(component="WorkflowRunner")
 
@@ -402,8 +405,18 @@ class WorkflowRunner:
             "stage_start",
             {"stage": "data-load", "count": count, "offset": offset, "batch_size": batch_size},
         )
+        t0 = time.perf_counter()
         results = self.data_load.process_posts(
             step="filter-url-unresolved",
+            count=count,
+            offset=offset,
+            batch_size=batch_size,
+        )
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        _LOG.bind(trace_id=get_trace_id()).info(
+            "workflow_data_load_complete",
+            elapsed_ms=elapsed_ms,
+            processed_count=len(results),
             count=count,
             offset=offset,
             batch_size=batch_size,
@@ -411,7 +424,11 @@ class WorkflowRunner:
         self._emit(
             on_progress,
             "stage_done",
-            {"stage": "data-load", "processed_count": len(results)},
+            {
+                "stage": "data-load",
+                "processed_count": len(results),
+                "elapsed_ms": elapsed_ms,
+            },
         )
         return results
     
@@ -422,6 +439,15 @@ class WorkflowRunner:
         on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     ) -> List[Dict]:
         """Run Research pipeline."""
+        trace_id = str(uuid4())
+        rid = _LOG.bind(trace_id=trace_id)
+        t0 = time.perf_counter()
+        rid.info(
+            "workflow_research_run_begin",
+            event="research_timing",
+            count=count,
+            offset=offset,
+        )
         self._emit(
             on_progress,
             "stage_start",
@@ -432,10 +458,21 @@ class WorkflowRunner:
             count=count,
             offset=offset,
         )
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        rid.info(
+            "workflow_research_run_complete",
+            event="research_timing",
+            elapsed_ms=elapsed_ms,
+            processed_count=len(results),
+        )
         self._emit(
             on_progress,
             "stage_done",
-            {"stage": "research", "processed_count": len(results)},
+            {
+                "stage": "research",
+                "processed_count": len(results),
+                "elapsed_ms": elapsed_ms,
+            },
         )
         return results
     
@@ -451,18 +488,34 @@ class WorkflowRunner:
             "stage_start",
             {"stage": "gen-angles", "count": count, "offset": offset},
         )
+        t0 = time.perf_counter()
         results = self.gen_angles.process_posts(
             step="angles-step",
             count=count,
             offset=offset,
         )
+        batch_ms = int((time.perf_counter() - t0) * 1000)
         summary = dict(getattr(self.gen_angles, "_last_batch_summary", {}) or {})
+        tid = get_trace_id()
+        _LOG.bind(trace_id=tid if tid else "").info(
+            "workflow_gen_angles_batch_timing",
+            elapsed_ms=batch_ms,
+            processed_count=len(results),
+            requested_count=summary.get("requested_count"),
+            listed_count=summary.get("listed_count"),
+            loaded_count=summary.get("loaded_count"),
+            load_failed_count=summary.get("load_failed_count"),
+            processing_failed_count=summary.get("processing_failed_count"),
+            failed_count=summary.get("failed_count"),
+            degraded=bool(summary.get("failed_count", 0)),
+        )
         self._emit(
             on_progress,
             "stage_done",
             {
                 "stage": "gen-angles",
                 "processed_count": len(results),
+                "elapsed_ms": batch_ms,
                 "requested_count": summary.get("requested_count"),
                 "listed_count": summary.get("listed_count"),
                 "loaded_count": summary.get("loaded_count"),
@@ -504,12 +557,14 @@ class WorkflowRunner:
             },
         )
         if not run_all:
+            t0 = time.perf_counter()
             result = self.stego.process_post(
                 post_id=post_id,
                 payload=payload,
                 tag=tag,
                 list_offset=list_offset,
             )
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
             self._emit(
                 on_progress,
                 "stage_done",
@@ -517,6 +572,7 @@ class WorkflowRunner:
                     "stage": "stego",
                     "succeeded": bool(result.get("succeeded")),
                     "retry_count": int(result.get("retry_count", 0)),
+                    "elapsed_ms": elapsed_ms,
                 },
             )
             return result
@@ -526,6 +582,7 @@ class WorkflowRunner:
         failure_count = 0
         seen_failed_post_ids: set[str] = set()
         stop_reason = "no_unprocessed_posts"
+        t_run_all = time.perf_counter()
 
         while True:
             if max_posts_cap is not None and len(results) >= max_posts_cap:
@@ -589,6 +646,7 @@ class WorkflowRunner:
             "stopped_reason": stop_reason,
             "results": results,
         }
+        run_all_elapsed_ms = int((time.perf_counter() - t_run_all) * 1000)
         self._emit(
             on_progress,
             "stage_done",
@@ -599,6 +657,7 @@ class WorkflowRunner:
                 "succeeded_count": success_count,
                 "failed_count": failure_count,
                 "stopped_reason": stop_reason,
+                "elapsed_ms": run_all_elapsed_ms,
             },
         )
         return result
@@ -1322,6 +1381,15 @@ class WorkflowRunner:
                 "allow_angles_fallback": allow_angles_fallback,
             },
         )
+        # region agent log
+        write_debug_probe(
+            run_id=str(get_run_id() or ""),
+            hypothesis_id="H4",
+            location="workflows/runner.py:run_double_process_new_post:start",
+            message="double-process workflow started",
+            data={"allow_angles_fallback": allow_angles_fallback},
+        )
+        # endregion
         post_id, file_name = self._select_next_new_post()
         self._emit(
             on_progress,
@@ -1343,6 +1411,15 @@ class WorkflowRunner:
                 "post_id": post_id,
             },
         )
+        # region agent log
+        write_debug_probe(
+            run_id=str(get_run_id() or ""),
+            hypothesis_id="H4",
+            location="workflows/runner.py:run_double_process_new_post:pass1_start",
+            message="double-process pass 1 started",
+            data={"post_id": post_id, "cache_mode": "main"},
+        )
+        # endregion
         t_pass1 = time.perf_counter()
         while True:
             try:
@@ -1382,6 +1459,15 @@ class WorkflowRunner:
                 time.sleep(1.0)
 
         pass1_total_ms = int((time.perf_counter() - t_pass1) * 1000)
+        # region agent log
+        write_debug_probe(
+            run_id=str(get_run_id() or ""),
+            hypothesis_id="H4",
+            location="workflows/runner.py:run_double_process_new_post:pass1_end",
+            message="double-process pass 1 finished",
+            data={"post_id": post_id, "elapsed_ms": pass1_total_ms},
+        )
+        # endregion
         self._emit(
             on_progress,
             "stage_progress",
@@ -1409,6 +1495,15 @@ class WorkflowRunner:
                 "post_id": post_id,
             },
         )
+        # region agent log
+        write_debug_probe(
+            run_id=str(get_run_id() or ""),
+            hypothesis_id="H4",
+            location="workflows/runner.py:run_double_process_new_post:pass2_start",
+            message="double-process pass 2 started",
+            data={"post_id": post_id, "cache_mode": "validation"},
+        )
+        # endregion
         t_pass2 = time.perf_counter()
         validation_cfg = _double_process_validation_workflow_config()
         while True:
@@ -1449,6 +1544,15 @@ class WorkflowRunner:
                 time.sleep(1.0)
 
         pass2_total_ms = int((time.perf_counter() - t_pass2) * 1000)
+        # region agent log
+        write_debug_probe(
+            run_id=str(get_run_id() or ""),
+            hypothesis_id="H4",
+            location="workflows/runner.py:run_double_process_new_post:pass2_end",
+            message="double-process pass 2 finished",
+            data={"post_id": post_id, "elapsed_ms": pass2_total_ms},
+        )
+        # endregion
         self._emit(
             on_progress,
             "stage_progress",
@@ -1481,6 +1585,15 @@ class WorkflowRunner:
             },
             "stage_hash_match": comparison,
         }
+        # region agent log
+        write_debug_probe(
+            run_id=str(get_run_id() or ""),
+            hypothesis_id="H4",
+            location="workflows/runner.py:run_double_process_new_post:compare",
+            message="double-process stage comparison computed",
+            data={"post_id": post_id, **comparison},
+        )
+        # endregion
         _LOG.info(
             "double_process_new_post post_id={} data_load_match={} research_match={} gen_angles_match={}",
             post_id,

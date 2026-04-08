@@ -1,17 +1,23 @@
 """Research pipeline: generate search terms, search, and fetch content."""
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-import logging
 import os
 import time
 from typing import Any, Dict, List
+from uuid import uuid4
+
+from loguru import logger
 
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.contracts import FetchUrlResult
 from workflows.pipelines.fetch_url_content import FetchUrlContentPipeline
 from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline
 from workflows.utils.protocol_utils import stable_hash, text_preview
-
-logger = logging.getLogger(__name__)
+from workflows.utils.research_relevance_debug import (
+    research_debug_log_dir,
+    tokenize,
+    write_research_results_debug,
+    write_research_terms_debug,
+)
 
 # Per-URL fetch in research; avoids indefinite hang if crawl/browser stalls.
 _RESEARCH_FETCH_TIMEOUT_SEC = float(os.environ.get("RESEARCH_FETCH_TIMEOUT_SEC", "180"))
@@ -26,6 +32,10 @@ def _term_preview(term: str, max_len: int = 160) -> str:
 
 def _fetch_attempts_total() -> int:
     return 1 + _RESEARCH_FETCH_RETRIES
+
+
+def _elapsed_ms(since: float) -> int:
+    return int((time.perf_counter() - since) * 1000)
 
 
 def is_likely_google_quota_error(exc: BaseException) -> bool:
@@ -43,9 +53,10 @@ def is_likely_google_quota_error(exc: BaseException) -> bool:
 
 
 class ResearchPipeline:
-    """Pipeline for researching posts."""
-    
-    def __init__(self):
+    """Owns backend, term generation, and URL fetch adapters; orchestrates research I/O."""
+
+    def __init__(self) -> None:
+        self._log = logger.bind(component="ResearchPipeline")
         self.backend = BackendAPIAdapter()
         self.gen_terms = GenSearchTermsPipeline()
         self.fetch_content = FetchUrlContentPipeline()
@@ -61,16 +72,14 @@ class ResearchPipeline:
         ts = _RESEARCH_FETCH_TIMEOUT_SEC
         for attempt in range(1, attempts + 1):
             if attempt > 1:
-                logger.info(
+                self._log.info(
                     "research_fetch_retry",
-                    extra={
-                        "event": "research",
-                        "post_id": post_id,
-                        "url": url,
-                        "attempt": attempt,
-                        "attempts_total": attempts,
-                        "timeout_sec": ts,
-                    },
+                    event="research",
+                    post_id=post_id,
+                    url=url,
+                    attempt=attempt,
+                    attempts_total=attempts,
+                    timeout_sec=ts,
                 )
             ex = ThreadPoolExecutor(max_workers=1)
             fut = ex.submit(self.fetch_content.fetch, url, use_fetch_cache)
@@ -78,36 +87,32 @@ class ResearchPipeline:
                 out = fut.result(timeout=ts)
             except FutureTimeoutError:
                 ex.shutdown(wait=False)
-                logger.warning(
+                self._log.warning(
                     "research_fetch_timed_out",
-                    extra={
-                        "event": "research",
-                        "post_id": post_id,
-                        "url": url,
-                        "attempt": attempt,
-                        "attempts_total": attempts,
-                        "timeout_sec": ts,
-                        "will_retry": attempt < attempts,
-                    },
+                    event="research",
+                    post_id=post_id,
+                    url=url,
+                    attempt=attempt,
+                    attempts_total=attempts,
+                    timeout_sec=ts,
+                    will_retry=attempt < attempts,
                 )
                 if attempt >= attempts:
                     err = f"Timed out after {attempts} attempt(s) ({ts}s each)"
-                    logger.error(
+                    self._log.error(
                         "research_fetch_timed_out_exhausted",
-                        extra={
-                            "event": "research",
-                            "post_id": post_id,
-                            "url": url,
-                            "attempts_total": attempts,
-                            "timeout_sec": ts,
-                        },
+                        event="research",
+                        post_id=post_id,
+                        url=url,
+                        attempts_total=attempts,
+                        timeout_sec=ts,
                     )
                     return FetchUrlResult(url=url, success=False, error=err)
                 continue
             except Exception as e:
                 ex.shutdown(wait=False)
-                logger.exception(
-                    "research_fetch_failed post_id=%s url=%s attempt=%s",
+                self._log.exception(
+                    "research_fetch_failed post_id={} url={} attempt={}",
                     post_id,
                     url,
                     attempt,
@@ -138,13 +143,11 @@ class ResearchPipeline:
         except Exception as e:
             if not is_likely_google_quota_error(e):
                 raise
-            logger.warning(
+            self._log.warning(
                 "research_google_bing_fallback",
-                extra={
-                    "event": "research",
-                    "post_id": post_id,
-                    "term_preview": _term_preview(query),
-                },
+                event="research",
+                post_id=post_id,
+                term_preview=_term_preview(query),
             )
             try:
                 return search_bing(query=query, first=first, count=count)
@@ -168,7 +171,27 @@ class ResearchPipeline:
         if not post_id:
             raise ValueError("Post must have 'id' field")
 
+        trace_id = str(uuid4())
+        log = self._log.bind(trace_id=trace_id)
+        t_preview0 = time.perf_counter()
+        log.info(
+            "research_preview_begin",
+            event="research_timing",
+            post_id=post_id,
+            force=force,
+            use_terms_cache=use_terms_cache,
+            use_fetch_cache=use_fetch_cache,
+        )
+
         if not force and not self._is_new_post(post):
+            preview_total_ms = _elapsed_ms(t_preview0)
+            log.info(
+                "research_preview_skipped",
+                event="research_timing",
+                post_id=post_id,
+                preview_total_ms=preview_total_ms,
+                reason="post_already_researched",
+            )
             return {
                 "post": post,
                 "report": {
@@ -184,6 +207,11 @@ class ResearchPipeline:
                     "search_results": post.get("search_results", []),
                     "search_results_hash": stable_hash(post.get("search_results", [])),
                     "search_results_count": len(post.get("search_results", []) or []),
+                    "timing": {
+                        "trace_id": trace_id,
+                        "preview_total_ms": preview_total_ms,
+                        "skipped": True,
+                    },
                 },
             }
 
@@ -196,7 +224,30 @@ class ResearchPipeline:
             persist_cache=persist_terms_cache,
         )
         search_terms = list(terms_report.get("terms", []))
+        t_after_terms = time.perf_counter()
+        terms_phase_ms = int((t_after_terms - t_preview0) * 1000)
+        _dbg_dir = research_debug_log_dir()
+        _post_title = post.get("title")
+        _post_text = post.get("selftext") or post.get("text")
+        if _dbg_dir:
+            write_research_terms_debug(
+                log_dir=_dbg_dir,
+                trace_id=trace_id,
+                post_id=post_id,
+                search_terms=search_terms,
+                terms_report=terms_report,
+                post_title=_post_title,
+                post_text=_post_text,
+            )
         if not search_terms:
+            preview_total_ms = _elapsed_ms(t_preview0)
+            timing = {
+                "trace_id": trace_id,
+                "preview_total_ms": preview_total_ms,
+                "terms_phase_ms": terms_phase_ms,
+                "search_phase_ms": 0,
+                "fetch_phase_ms": 0,
+            }
             report = {
                 "post_id": post_id,
                 "step": step,
@@ -210,11 +261,15 @@ class ResearchPipeline:
                 "search_results_hash": stable_hash([]),
                 "search_results_count": 0,
                 "error": terms_report.get("error"),
+                "timing": timing,
             }
-            logger.warning(
-                "research preview has no terms post_id=%s error=%s",
-                post_id,
-                terms_report.get("error"),
+            log.warning(
+                "research_preview_no_terms",
+                event="research_timing",
+                post_id=post_id,
+                preview_total_ms=preview_total_ms,
+                terms_phase_ms=terms_phase_ms,
+                error=terms_report.get("error"),
             )
             post_copy = dict(post)
             post_copy["search_results"] = []
@@ -222,49 +277,46 @@ class ResearchPipeline:
 
         all_search_results: List[Dict[str, Any]] = []
         search_events: List[Dict[str, Any]] = []
+        raw_results_by_term: List[List[Dict[str, Any]]] = []
         seen_links: set[str] = set()
         n_terms = len(search_terms)
-        logger.info(
+        t_search_phase0 = time.perf_counter()
+        log.info(
             "research_google_phase_begin",
-            extra={
-                "event": "research",
-                "post_id": post_id,
-                "search_term_count": n_terms,
-            },
+            event="research",
+            post_id=post_id,
+            search_term_count=n_terms,
         )
 
         for idx, term in enumerate(search_terms, start=1):
             t_search = time.perf_counter()
-            logger.info(
+            log.info(
                 "research_google_query_begin",
-                extra={
-                    "event": "research",
-                    "post_id": post_id,
-                    "term_index": idx,
-                    "term_total": n_terms,
-                    "term_preview": _term_preview(term),
-                },
+                event="research",
+                post_id=post_id,
+                term_index=idx,
+                term_total=n_terms,
+                term_preview=_term_preview(term),
             )
             try:
                 search_response = self._web_search_google_or_bing(
                     query=term, first=1, count=10, post_id=str(post_id)
                 )
                 raw_results = search_response.get("results", [])
+                raw_results_by_term.append(list(raw_results))
             except Exception as e:
-                logger.exception("web search failed post_id=%s term=%s", post_id, term)
+                log.exception("web search failed post_id={} term={}", post_id, term)
                 raise RuntimeError(
                     f"Web search failed for post {post_id} and term '{term}': {e}"
                 ) from e
-            logger.info(
+            log.info(
                 "research_google_query_done",
-                extra={
-                    "event": "research",
-                    "post_id": post_id,
-                    "term_index": idx,
-                    "term_total": n_terms,
-                    "elapsed_ms": int((time.perf_counter() - t_search) * 1000),
-                    "raw_hits": len(raw_results),
-                },
+                event="research",
+                post_id=post_id,
+                term_index=idx,
+                term_total=n_terms,
+                elapsed_ms=_elapsed_ms(t_search),
+                raw_hits=len(raw_results),
             )
 
             selected_for_term: List[Dict[str, Any]] = []
@@ -296,24 +348,46 @@ class ResearchPipeline:
                 }
             )
 
+        t_after_search = time.perf_counter()
+        search_phase_ms = int((t_after_search - t_search_phase0) * 1000)
+        log.info(
+            "research_google_phase_done",
+            event="research_timing",
+            post_id=post_id,
+            elapsed_ms=search_phase_ms,
+            search_term_count=n_terms,
+            unique_links_selected=len(all_search_results),
+        )
+        if _dbg_dir:
+            _corpus = f"{_post_title or ''}\n{_post_text or ''}"
+            write_research_results_debug(
+                log_dir=_dbg_dir,
+                trace_id=trace_id,
+                post_id=post_id,
+                search_terms=search_terms,
+                raw_results_by_term=raw_results_by_term,
+                corpus_tokens=tokenize(_corpus),
+                raw_hits_total=sum(len(x) for x in raw_results_by_term),
+                selected_unique_urls=len(all_search_results),
+            )
+
         fetched_texts: List[str] = []
         fetched_pages: List[Dict[str, Any]] = []
         batch_size = 3
         total_urls = len(all_search_results)
         n_batches = (total_urls + batch_size - 1) // batch_size if total_urls else 0
-        logger.info(
+        t_fetch_phase0 = time.perf_counter()
+        log.info(
             "research_url_fetch_phase_begin",
-            extra={
-                "event": "research",
-                "post_id": post_id,
-                "unique_result_links": len(all_search_results),
-                "urls_to_fetch": total_urls,
-                "batch_size": batch_size,
-                "batch_count": n_batches,
-                "fetch_timeout_sec": _RESEARCH_FETCH_TIMEOUT_SEC,
-                "fetch_retries": _RESEARCH_FETCH_RETRIES,
-                "fetch_attempts_total": _fetch_attempts_total(),
-            },
+            event="research",
+            post_id=post_id,
+            unique_result_links=len(all_search_results),
+            urls_to_fetch=total_urls,
+            batch_size=batch_size,
+            batch_count=n_batches,
+            fetch_timeout_sec=_RESEARCH_FETCH_TIMEOUT_SEC,
+            fetch_retries=_RESEARCH_FETCH_RETRIES,
+            fetch_attempts_total=_fetch_attempts_total(),
         )
 
         batch_num = 0
@@ -326,15 +400,13 @@ class ResearchPipeline:
                 continue
             batch_num += 1
             t_batch = time.perf_counter()
-            logger.info(
+            log.info(
                 "research_fetch_batch_begin",
-                extra={
-                    "event": "research",
-                    "post_id": post_id,
-                    "batch_index": batch_num,
-                    "batch_url_count": len(urls),
-                    "urls": urls[:5],
-                },
+                event="research",
+                post_id=post_id,
+                batch_index=batch_num,
+                batch_url_count=len(urls),
+                urls=urls[:5],
             )
             with ThreadPoolExecutor(max_workers=batch_size) as pool:
                 future_items = [
@@ -370,7 +442,7 @@ class ResearchPipeline:
                             )
                         fetched_pages.append(page_report)
                     except Exception as e:
-                        logger.exception("content fetch failed post_id=%s url=%s", post_id, url)
+                        log.exception("content fetch failed post_id={} url={}", post_id, url)
                         fetched_pages.append(
                             {
                                 "url": url,
@@ -379,18 +451,36 @@ class ResearchPipeline:
                                 "use_cache": use_fetch_cache,
                             }
                         )
-            logger.info(
+            log.info(
                 "research_fetch_batch_done",
-                extra={
-                    "event": "research",
-                    "post_id": post_id,
-                    "batch_index": batch_num,
-                    "elapsed_ms": int((time.perf_counter() - t_batch) * 1000),
-                },
+                event="research",
+                post_id=post_id,
+                batch_index=batch_num,
+                elapsed_ms=_elapsed_ms(t_batch),
             )
+
+        t_after_fetch = time.perf_counter()
+        fetch_phase_ms = int((t_after_fetch - t_fetch_phase0) * 1000)
+        preview_total_ms = _elapsed_ms(t_preview0)
+        log.info(
+            "research_fetch_phase_done",
+            event="research_timing",
+            post_id=post_id,
+            elapsed_ms=fetch_phase_ms,
+            urls_to_fetch=total_urls,
+            batch_count=n_batches,
+            pages_recorded=len(fetched_pages),
+        )
 
         post_copy = dict(post)
         post_copy["search_results"] = fetched_texts
+        timing = {
+            "trace_id": trace_id,
+            "preview_total_ms": preview_total_ms,
+            "terms_phase_ms": terms_phase_ms,
+            "search_phase_ms": search_phase_ms,
+            "fetch_phase_ms": fetch_phase_ms,
+        }
         report = {
             "post_id": post_id,
             "step": step,
@@ -405,14 +495,20 @@ class ResearchPipeline:
             "search_results": fetched_texts,
             "search_results_hash": stable_hash(fetched_texts),
             "search_results_count": len(fetched_texts),
+            "timing": timing,
         }
-        logger.info(
-            "research preview post_id=%s terms=%s selected_links=%s fetched=%s hash=%s",
-            post_id,
-            len(search_terms),
-            len(all_search_results),
-            len(fetched_texts),
-            report["search_results_hash"],
+        log.info(
+            "research_preview_complete",
+            event="research_timing",
+            post_id=post_id,
+            preview_total_ms=preview_total_ms,
+            terms_phase_ms=terms_phase_ms,
+            search_phase_ms=search_phase_ms,
+            fetch_phase_ms=fetch_phase_ms,
+            search_term_count=len(search_terms),
+            selected_links=len(all_search_results),
+            fetched_texts=len(fetched_texts),
+            search_results_hash=report["search_results_hash"],
         )
         return {"post": post_copy, "report": report}
 
@@ -487,20 +583,44 @@ class ResearchPipeline:
         Returns:
             List of researched post dictionaries
         """
-        # Get list of post filenames
+        trace_id = str(uuid4())
+        log = self._log.bind(trace_id=trace_id)
+        t_batch0 = time.perf_counter()
+        log.info(
+            "research_process_posts_begin",
+            event="research_timing",
+            step=step,
+            count=count,
+            offset=offset,
+        )
         posts_list = self.backend.posts_list(step=step, count=count, offset=offset)
         file_names = posts_list.get("fileNames", [])
-        
+
         if not file_names:
+            log.info(
+                "research_process_posts_complete",
+                event="research_timing",
+                elapsed_ms=_elapsed_ms(t_batch0),
+                post_count=0,
+                reason="no_file_names",
+            )
             return []
-        
+
         posts: List[Dict[str, Any]] = []
         for file_name in file_names:
             try:
                 posts.append(self.backend.get_post_local(file_name, step))
             except Exception:
-                logger.exception("research load failed for file=%s", file_name)
-        return self.process_post_objects(posts=posts, step=step)
+                self._log.exception("research load failed for file={}", file_name)
+        results = self.process_post_objects(posts=posts, step=step)
+        log.info(
+            "research_process_posts_complete",
+            event="research_timing",
+            elapsed_ms=_elapsed_ms(t_batch0),
+            post_count=len(results),
+            step=step,
+        )
+        return results
 
     def process_post_objects(
         self,
@@ -515,6 +635,9 @@ class ResearchPipeline:
         researched_posts: List[Dict[str, Any]] = []
         for post in posts:
             post_id = post.get("id", "<unknown>")
+            trace_id = str(uuid4())
+            log = self._log.bind(trace_id=trace_id)
+            t_one = time.perf_counter()
             try:
                 was_new = self._is_new_post(post)
                 researched = self.research_post(
@@ -529,10 +652,26 @@ class ResearchPipeline:
                 if was_new:
                     try:
                         self.backend.save_post(researched, step=step)
-                    except Exception as e:
-                        logger.exception("research backend save failed for post_id=%s", post_id)
+                    except Exception:
+                        self._log.exception(
+                            "research backend save failed for post_id={}", post_id
+                        )
                 researched_posts.append(researched)
+                log.info(
+                    "research_post_object_complete",
+                    event="research_timing",
+                    post_id=post_id,
+                    elapsed_ms=_elapsed_ms(t_one),
+                    was_new=was_new,
+                    step=step,
+                )
             except Exception as e:
+                log.exception(
+                    "research_post_object_failed post_id={} elapsed_ms={}",
+                    post_id,
+                    _elapsed_ms(t_one),
+                    event="research_timing",
+                )
                 raise RuntimeError(f"Error processing post {post_id}: {e}") from e
         return researched_posts
 

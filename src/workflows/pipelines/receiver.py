@@ -1,8 +1,9 @@
 """Receiver pipeline: rebuild post context and recover stego payload."""
 from __future__ import annotations
 
-import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from loguru import logger
 
 from workflows.pipelines.data_load import DataLoadPipeline
 from workflows.pipelines.decode import DecodePipeline
@@ -17,7 +18,7 @@ from workflows.utils.stego_codec import (
 )
 from workflows.utils.text_utils import flatten_comments
 
-logger = logging.getLogger(__name__)
+_RECEIVER_LOG = logger.bind(component="ReceiverPipeline")
 
 ProgressCb = Optional[Callable[[str, Dict[str, Any]], None]]
 
@@ -58,10 +59,10 @@ def locate_sender_stego_comment(
     if not matches:
         return None
     if len(matches) > 1:
-        logger.warning(
-            "receiver multiple sender comments post_id=%s count=%s using first",
-            post.get("id"),
-            len(matches),
+        _RECEIVER_LOG.warning(
+            "receiver_multiple_sender_comments",
+            post_id=post.get("id"),
+            match_count=len(matches),
         )
     return matches[0]
 
@@ -106,9 +107,10 @@ def nested_angles_from_post(post: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
 
 
 class ReceiverPipeline:
-    """Decode stego payload from a post + agreed sender user id."""
+    """Orchestrates data-load, research, angles, and decode to recover a stego payload."""
 
     def __init__(self) -> None:
+        self._log = logger.bind(component="ReceiverPipeline")
         self.data_load = DataLoadPipeline()
         self.research = ResearchPipeline()
         self.gen_angles = GenAnglesPipeline()

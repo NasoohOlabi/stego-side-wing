@@ -1,8 +1,11 @@
 """Fetch and process URL content."""
+import time
 from typing import Optional
+from urllib.parse import urlparse
 
 from loguru import logger
 
+from infrastructure.json_logging import get_trace_id
 from workflows.adapters.content import ContentAdapter
 from workflows.contracts import FetchUrlResult
 
@@ -11,8 +14,15 @@ _MAX_FRESH_ATTEMPTS_AFTER_VALIDATION_FAILURE = 3
 _LOG = logger.bind(component="FetchUrlContentPipeline")
 
 
+def _url_host(url: str) -> Optional[str]:
+    try:
+        return urlparse(url.strip()).netloc or None
+    except Exception:
+        return None
+
+
 class FetchUrlContentPipeline:
-    """Pipeline for fetching URL content."""
+    """Runs URL fetches via ContentAdapter, validates text, and retries without cache when needed."""
 
     def __init__(self) -> None:
         self.content_adapter = ContentAdapter()
@@ -67,6 +77,19 @@ class FetchUrlContentPipeline:
             f"Search logs for fetch_url_content_validation_failed."
         )
 
+    def _run_fetch_core(
+        self,
+        url: str,
+        use_cache: bool,
+        summarize: bool,
+    ) -> FetchUrlResult:
+        result = self._fetch_raw(url, use_cache)
+        if not result.success or not result.text:
+            return result
+        if self._passes_validation(result):
+            return self._finalize(result, summarize)
+        return self._recover_with_fresh_fetches(url, summarize, result)
+
     def fetch(
         self,
         url: str,
@@ -80,9 +103,24 @@ class FetchUrlContentPipeline:
         ``use_cache=False`` (skips adapter and analysis disk cache; live Jina/crawl4ai).
         Raises ``RuntimeError`` if validation still fails.
         """
-        result = self._fetch_raw(url, use_cache)
-        if not result.success or not result.text:
+        t0 = time.perf_counter()
+        result: Optional[FetchUrlResult] = None
+        exc_out: Optional[BaseException] = None
+        try:
+            result = self._run_fetch_core(url, use_cache, summarize)
             return result
-        if self._passes_validation(result):
-            return self._finalize(result, summarize)
-        return self._recover_with_fresh_fetches(url, summarize, result)
+        except BaseException as exc:
+            exc_out = exc
+            raise
+        finally:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            r = result
+            _LOG.bind(trace_id=get_trace_id()).info(
+                "fetch_url_content_timing",
+                elapsed_ms=elapsed_ms,
+                url_host=_url_host(url),
+                use_cache=use_cache,
+                raised=exc_out is not None,
+                fetch_success=bool(r and r.success),
+                text_chars=len(r.text) if r and r.text else 0,
+            )

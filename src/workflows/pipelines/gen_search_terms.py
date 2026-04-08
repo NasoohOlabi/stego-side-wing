@@ -1,28 +1,29 @@
 """Generate search terms from post content."""
 import json
-import logging
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from loguru import logger
+
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
+from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash, unique_preserve_order
 from workflows.utils.text_utils import parse_json_array_response
 from workflows.utils.workflow_llm_prompts import format_gen_search_terms_user_prompt, get_prompts
 
-logger = logging.getLogger(__name__)
-
 
 class GenSearchTermsPipeline:
-    """Pipeline for generating search terms from posts."""
-    
-    def __init__(self):
+    """Generates and SQLite-caches LLM search terms per post for research."""
+
+    def __init__(self) -> None:
         self.config = get_config()
         self.llm = LLMAdapter()
         self._last_cache_error: Optional[str] = None
         self._last_parse_mode: Optional[str] = None
+        self._log = logger.bind(component="GenSearchTermsPipeline")
         self._init_cache_db()
     
     def _init_cache_db(self):
@@ -44,6 +45,10 @@ class GenSearchTermsPipeline:
     
     def _get_cached_terms(self, post_id: str) -> Optional[List[str]]:
         """Get cached search terms for a post."""
+        if not hasattr(self, "_log"):
+            object.__setattr__(
+                self, "_log", logger.bind(component="GenSearchTermsPipeline")
+            )
         self._last_cache_error = None
         try:
             conn = sqlite3.connect(self.cache_db_path)
@@ -56,10 +61,11 @@ class GenSearchTermsPipeline:
                 conn.close()
         except Exception as exc:
             self._last_cache_error = str(exc)
-            logger.exception(
-                "search terms cache read failed post_id=%s",
-                post_id,
-                extra={"event": "gen_search_terms_cache", "cache_action": "read", "post_id": post_id},
+            self._log.exception(
+                "gen_search_terms_cache_read_failed",
+                event="gen_search_terms_cache",
+                cache_action="read",
+                post_id=post_id,
             )
             return None
 
@@ -70,34 +76,32 @@ class GenSearchTermsPipeline:
             cached = json.loads(row[0])
             if not isinstance(cached, list):
                 self._last_cache_error = "cache root must be array"
-                logger.warning(
-                    "search terms cache corrupt post_id=%s",
-                    post_id,
-                    extra={
-                        "event": "gen_search_terms_cache",
-                        "cache_action": "corrupt",
-                        "post_id": post_id,
-                        "cache_error": self._last_cache_error,
-                    },
+                self._log.warning(
+                    "gen_search_terms_cache_corrupt",
+                    event="gen_search_terms_cache",
+                    cache_action="corrupt",
+                    post_id=post_id,
+                    cache_error=self._last_cache_error,
                 )
                 return None
             return cached
         except json.JSONDecodeError as exc:
             self._last_cache_error = str(exc)
-            logger.warning(
-                "search terms cache corrupt post_id=%s",
-                post_id,
-                extra={
-                    "event": "gen_search_terms_cache",
-                    "cache_action": "corrupt",
-                    "post_id": post_id,
-                    "cache_error": self._last_cache_error,
-                },
+            self._log.warning(
+                "gen_search_terms_cache_corrupt",
+                event="gen_search_terms_cache",
+                cache_action="corrupt",
+                post_id=post_id,
+                cache_error=self._last_cache_error,
             )
             return None
     
     def _cache_terms(self, post_id: str, terms: List[str]) -> None:
         """Cache search terms for a post."""
+        if not hasattr(self, "_log"):
+            object.__setattr__(
+                self, "_log", logger.bind(component="GenSearchTermsPipeline")
+            )
         try:
             conn = sqlite3.connect(self.cache_db_path)
             try:
@@ -109,14 +113,11 @@ class GenSearchTermsPipeline:
             finally:
                 conn.close()
         except Exception:
-            logger.exception(
-                "search terms cache write failed post_id=%s",
-                post_id,
-                extra={
-                    "event": "gen_search_terms_cache",
-                    "cache_action": "write",
-                    "post_id": post_id,
-                },
+            self._log.exception(
+                "gen_search_terms_cache_write_failed",
+                event="gen_search_terms_cache",
+                cache_action="write",
+                post_id=post_id,
             )
 
     @staticmethod
@@ -145,6 +146,10 @@ class GenSearchTermsPipeline:
         persist_cache: bool = True,
     ) -> Dict[str, Any]:
         """Generate search terms and return protocol metadata."""
+        if not hasattr(self, "_log"):
+            object.__setattr__(
+                self, "_log", logger.bind(component="GenSearchTermsPipeline")
+            )
         t_start = time.perf_counter()
         prompt = self._build_prompt(
             post_title=post_title,
@@ -156,6 +161,21 @@ class GenSearchTermsPipeline:
         cache_error = None
         cached_terms: Optional[List[str]] = None
         cache_db_path = str(getattr(self, "cache_db_path", "") or "") or None
+        # region agent log
+        write_debug_probe(
+            run_id=None,
+            hypothesis_id="H2",
+            location="workflows/pipelines/gen_search_terms.py:preview_generation:begin",
+            message="search-term preview started",
+            data={
+                "post_id": post_id,
+                "use_cache": use_cache,
+                "persist_cache": persist_cache,
+                "prompt_hash": stable_hash(prompt),
+                "system_prompt_hash": stable_hash(system_message),
+            },
+        )
+        # endregion
 
         if use_cache:
             cached_terms = self._get_cached_terms(post_id)
@@ -164,19 +184,16 @@ class GenSearchTermsPipeline:
         if cached_terms is not None:
             normalized_cached_terms = self._normalize_terms(cached_terms)
             elapsed_ms = int((time.perf_counter() - t_start) * 1000)
-            logger.info(
-                "search terms cache hit post_id=%s count=%s hash=%s",
-                post_id,
-                len(normalized_cached_terms),
-                stable_hash(normalized_cached_terms),
-                extra={
-                    "event": "gen_search_terms",
-                    "post_id": post_id,
-                    "cache_hit": True,
-                    "cache_error": cache_error,
-                    "parse_mode": "cache",
-                    "elapsed_ms": elapsed_ms,
-                },
+            self._log.info(
+                "gen_search_terms_cache_hit",
+                event="gen_search_terms",
+                post_id=post_id,
+                cache_hit=True,
+                cache_error=cache_error,
+                parse_mode="cache",
+                elapsed_ms=elapsed_ms,
+                terms_count=len(normalized_cached_terms),
+                terms_hash=stable_hash(normalized_cached_terms),
             )
             return {
                 "post_id": post_id,
@@ -197,14 +214,25 @@ class GenSearchTermsPipeline:
             }
 
         try:
-            logger.info(
-                "gen_search_terms_llm_begin",
-                extra={
-                    "event": "gen_search_terms",
+            # region agent log
+            write_debug_probe(
+                run_id=None,
+                hypothesis_id="H2",
+                location="workflows/pipelines/gen_search_terms.py:preview_generation:llm_begin",
+                message="search-term llm call starting",
+                data={
                     "post_id": post_id,
                     "provider": "lm_studio",
                     "model": self.config.model,
                 },
+            )
+            # endregion
+            self._log.info(
+                "gen_search_terms_llm_begin",
+                event="gen_search_terms",
+                post_id=post_id,
+                provider="lm_studio",
+                model=self.config.model,
             )
             t_llm = time.perf_counter()
             response = self.llm.call_llm(
@@ -220,24 +248,35 @@ class GenSearchTermsPipeline:
             if persist_cache:
                 self._cache_terms(post_id, terms)
             total_ms = int((time.perf_counter() - t_start) * 1000)
-            logger.info(
-                "generated search terms post_id=%s count=%s hash=%s use_cache=%s persist_cache=%s llm_elapsed_ms=%s",
-                post_id,
-                len(terms),
-                stable_hash(terms),
-                use_cache,
-                persist_cache,
-                llm_ms,
-                extra={
-                    "event": "gen_search_terms",
+            # region agent log
+            write_debug_probe(
+                run_id=str(llm_meta.get("run_id") or ""),
+                hypothesis_id="H2",
+                location="workflows/pipelines/gen_search_terms.py:preview_generation:success",
+                message="search-term generation succeeded",
+                data={
                     "post_id": post_id,
-                    "cache_hit": cache_hit,
-                    "cache_error": cache_error,
+                    "terms_count": len(terms),
                     "parse_mode": getattr(self, "_last_parse_mode", None),
-                    "elapsed_ms": total_ms,
-                    "llm_elapsed_ms": llm_ms,
                     "retry_count": int(llm_meta.get("retry_count", 0) or 0),
+                    "elapsed_ms": total_ms,
                 },
+            )
+            # endregion
+            self._log.info(
+                "gen_search_terms_generated",
+                event="gen_search_terms",
+                post_id=post_id,
+                cache_hit=cache_hit,
+                cache_error=cache_error,
+                parse_mode=getattr(self, "_last_parse_mode", None),
+                elapsed_ms=total_ms,
+                llm_elapsed_ms=llm_ms,
+                retry_count=int(llm_meta.get("retry_count", 0) or 0),
+                terms_count=len(terms),
+                terms_hash=stable_hash(terms),
+                use_cache=use_cache,
+                persist_cache=persist_cache,
             )
             return {
                 "post_id": post_id,
@@ -260,21 +299,36 @@ class GenSearchTermsPipeline:
         except Exception as e:
             llm_meta = dict(getattr(self.llm, "last_call_metadata", {}) or {})
             elapsed_ms = int((time.perf_counter() - t_start) * 1000)
-            logger.exception(
-                "search term generation failed for post_id=%s",
-                post_id,
-                extra={
-                    "event": "gen_search_terms",
+            # region agent log
+            write_debug_probe(
+                run_id=str(llm_meta.get("run_id") or ""),
+                hypothesis_id="H2",
+                location="workflows/pipelines/gen_search_terms.py:preview_generation:failure",
+                message="search-term generation failed",
+                data={
                     "post_id": post_id,
                     "cache_hit": cache_hit,
                     "cache_error": cache_error,
                     "parse_mode": getattr(self, "_last_parse_mode", None),
-                    "elapsed_ms": elapsed_ms,
-                    "retry_count": int(llm_meta.get("retry_count", 0) or 0),
+                    "error_kind": type(e).__name__,
                     "http_status": llm_meta.get("http_status"),
-                    "error_kind": llm_meta.get("error_kind") or type(e).__name__,
+                    "retry_count": int(llm_meta.get("retry_count", 0) or 0),
                     "response_snippet": llm_meta.get("response_snippet"),
                 },
+            )
+            # endregion
+            self._log.exception(
+                "gen_search_terms_generation_failed",
+                event="gen_search_terms",
+                post_id=post_id,
+                cache_hit=cache_hit,
+                cache_error=cache_error,
+                parse_mode=getattr(self, "_last_parse_mode", None),
+                elapsed_ms=elapsed_ms,
+                retry_count=int(llm_meta.get("retry_count", 0) or 0),
+                http_status=llm_meta.get("http_status"),
+                error_kind=llm_meta.get("error_kind") or type(e).__name__,
+                response_snippet=llm_meta.get("response_snippet"),
             )
             return {
                 "post_id": post_id,

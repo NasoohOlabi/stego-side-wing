@@ -14,6 +14,7 @@ from loguru import logger
 from infrastructure.config import resolve_workflow_llm_provider_and_model
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter, strip_redacted_thinking
+from workflows.llm_temperatures import STEGO_CYCLE_LLM_TEMPERATURE
 from workflows.utils.workflow_llm_prompts import get_prompts
 
 # Must match ``gpt-oss`` node + stego encoder (``stego.STEGO_LLM_MODEL``).
@@ -284,7 +285,7 @@ class DecodePipeline:
                         system_message=system_message,
                         model=model,
                         provider=provider,
-                        temperature=0.0,
+                        temperature=STEGO_CYCLE_LLM_TEMPERATURE,
                         max_tokens=_DECODE_MAX_TOKENS,
                     )
                     break

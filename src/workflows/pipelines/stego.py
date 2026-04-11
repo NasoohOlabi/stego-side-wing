@@ -9,6 +9,7 @@ from infrastructure.config import resolve_workflow_llm_provider_and_model
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
+from workflows.llm_temperatures import STEGO_CYCLE_LLM_TEMPERATURE
 from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
 from loguru import logger
 
@@ -366,7 +367,7 @@ class StegoPipeline:
             system_message=system_message,
             model=model,
             provider=provider,
-            temperature=0.7,
+            temperature=STEGO_CYCLE_LLM_TEMPERATURE,
             max_tokens=STEGO_ENCODE_MAX_TOKENS,
         )
         llm_wall_ms = _elapsed_ms_since(t_llm)

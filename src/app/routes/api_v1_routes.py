@@ -956,6 +956,9 @@ def wf_research() -> Any:
         parsed_offset = int(offset)
     except (TypeError, ValueError):
         return fail("'count' and 'offset' must be integers", status=400)
+    include_breakdown, inc_err = _body_bool(body, "include_breakdown", default=False)
+    if inc_err:
+        return inc_err
 
     if _wants_workflow_stream(body):
         return _stream_workflow(
@@ -963,6 +966,7 @@ def wf_research() -> Any:
             lambda emit: runner.run_research(
                 count=parsed_count,
                 offset=parsed_offset,
+                include_breakdown=include_breakdown,
                 on_progress=lambda event, payload: emit(
                     "progress",
                     {"event": event, **payload},
@@ -977,6 +981,7 @@ def wf_research() -> Any:
             lambda: runner.run_research(
                 count=parsed_count,
                 offset=parsed_offset,
+                include_breakdown=include_breakdown,
             ),
         )
         return ok(data)
@@ -1596,9 +1601,17 @@ def wf_run() -> Any:
         if err:
             return err
         assert count is not None and offset is not None
+        include_breakdown, inc_err = _body_bool(body, "include_breakdown", default=False)
+        if inc_err:
+            return inc_err
 
         def execute(progress_cb: Optional[Callable[[str, dict[str, Any]], None]]) -> Any:
-            return runner.run_research(count=count, offset=offset, on_progress=progress_cb)
+            return runner.run_research(
+                count=count,
+                offset=offset,
+                on_progress=progress_cb,
+                include_breakdown=include_breakdown,
+            )
 
     elif command == "gen-angles":
         count, err = _body_int(body, "count", 1)

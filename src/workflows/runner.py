@@ -26,6 +26,44 @@ from services.workflow_run_tracker import get_run_id
 _LOG = logger.bind(component="WorkflowRunner")
 
 
+def _sum_research_preview_total_ms(entries: List[Dict[str, Any]]) -> int:
+    total = 0
+    for item in entries:
+        rep = item.get("report")
+        if not isinstance(rep, dict):
+            continue
+        timing = rep.get("timing")
+        if not isinstance(timing, dict):
+            continue
+        v = timing.get("preview_total_ms")
+        if isinstance(v, int):
+            total += v
+    return total
+
+
+def _research_run_with_breakdown(
+    *,
+    posts: List[Dict[str, Any]],
+    breakdown_entries: List[Dict[str, Any]],
+    batch_elapsed_ms: int,
+    requested_count: int,
+    offset: int,
+    runner_trace_id: str,
+) -> Dict[str, Any]:
+    batch = {
+        "elapsed_ms": batch_elapsed_ms,
+        "processed_count": len(posts),
+        "requested_count": requested_count,
+        "offset": offset,
+        "runner_trace_id": runner_trace_id,
+        "preview_total_ms_sum": _sum_research_preview_total_ms(breakdown_entries),
+    }
+    return {
+        "posts": posts,
+        "breakdown": {"batch": batch, "posts": breakdown_entries},
+    }
+
+
 def _isolated_workflow_config_for_side(base: Path, side: str) -> WorkflowConfig:
     root = (base / side).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -437,7 +475,8 @@ class WorkflowRunner:
         count: int = 1,
         offset: int = 0,
         on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> List[Dict]:
+        include_breakdown: bool = False,
+    ) -> Any:
         """Run Research pipeline."""
         trace_id = str(uuid4())
         rid = _LOG.bind(trace_id=trace_id)
@@ -447,6 +486,7 @@ class WorkflowRunner:
             event="research_timing",
             count=count,
             offset=offset,
+            include_breakdown=include_breakdown,
         )
         self._emit(
             on_progress,
@@ -457,24 +497,47 @@ class WorkflowRunner:
             step="filter-researched",
             count=count,
             offset=offset,
+            include_breakdown=include_breakdown,
         )
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        processed_count = len(results)
         rid.info(
             "workflow_research_run_complete",
             event="research_timing",
             elapsed_ms=elapsed_ms,
-            processed_count=len(results),
+            processed_count=processed_count,
+            include_breakdown=include_breakdown,
         )
+        payload_out: Any = results
+        if include_breakdown:
+            entries = list(self.research.last_research_breakdown_posts)
+            payload_out = _research_run_with_breakdown(
+                posts=results,
+                breakdown_entries=entries,
+                batch_elapsed_ms=elapsed_ms,
+                requested_count=count,
+                offset=offset,
+                runner_trace_id=trace_id,
+            )
+            rid.info(
+                "research_breakdown_batch",
+                event="research_breakdown_batch",
+                batch_elapsed_ms=elapsed_ms,
+                processed_count=processed_count,
+                preview_total_ms_sum=payload_out["breakdown"]["batch"]["preview_total_ms_sum"],
+                requested_count=count,
+                offset=offset,
+            )
         self._emit(
             on_progress,
             "stage_done",
             {
                 "stage": "research",
-                "processed_count": len(results),
+                "processed_count": processed_count,
                 "elapsed_ms": elapsed_ms,
             },
         )
-        return results
+        return payload_out
     
     def run_gen_angles(
         self,

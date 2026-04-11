@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from infrastructure.config import resolve_workflow_llm_provider_and_model
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
 from workflows.utils.debug_probe import write_debug_probe
@@ -157,6 +158,9 @@ class GenSearchTermsPipeline:
             post_url=post_url,
         )
         system_message = get_prompts().gen_search_terms.system_template
+        llm_provider, llm_model = resolve_workflow_llm_provider_and_model(
+            self.config.model or "mistral-nemo-instruct-2407-abliterated"
+        )
         cache_hit = False
         cache_error = None
         cached_terms: Optional[List[str]] = None
@@ -197,8 +201,8 @@ class GenSearchTermsPipeline:
             )
             return {
                 "post_id": post_id,
-                "provider": "lm_studio",
-                "model": self.config.model,
+                "provider": llm_provider,
+                "model": llm_model,
                 "temperature": 0.0,
                 "used_cache": True,
                 "cache_hit": True,
@@ -222,8 +226,8 @@ class GenSearchTermsPipeline:
                 message="search-term llm call starting",
                 data={
                     "post_id": post_id,
-                    "provider": "lm_studio",
-                    "model": self.config.model,
+                    "provider": llm_provider,
+                    "model": llm_model,
                 },
             )
             # endregion
@@ -231,15 +235,15 @@ class GenSearchTermsPipeline:
                 "gen_search_terms_llm_begin",
                 event="gen_search_terms",
                 post_id=post_id,
-                provider="lm_studio",
-                model=self.config.model,
+                provider=llm_provider,
+                model=llm_model,
             )
             t_llm = time.perf_counter()
             response = self.llm.call_llm(
                 prompt=prompt,
                 system_message=system_message,
-                model=self.config.model,
-                provider="lm_studio",
+                model=llm_model,
+                provider=llm_provider,
                 temperature=0.0,
             )
             llm_ms = int((time.perf_counter() - t_llm) * 1000)
@@ -280,8 +284,8 @@ class GenSearchTermsPipeline:
             )
             return {
                 "post_id": post_id,
-                "provider": "lm_studio",
-                "model": self.config.model,
+                "provider": llm_provider,
+                "model": llm_model,
                 "temperature": 0.0,
                 "used_cache": False,
                 "cache_hit": False,
@@ -332,8 +336,8 @@ class GenSearchTermsPipeline:
             )
             return {
                 "post_id": post_id,
-                "provider": "lm_studio",
-                "model": self.config.model,
+                "provider": llm_provider,
+                "model": llm_model,
                 "temperature": 0.0,
                 "used_cache": False,
                 "cache_hit": cache_hit,

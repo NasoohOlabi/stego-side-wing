@@ -5,18 +5,24 @@ import re
 import random
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 import openai
 import requests
+from google import genai
+from google.genai import types as genai_types
+from google.genai.errors import APIError as GoogleGenaiAPIError
 from loguru import logger
 
 from infrastructure.config import (
     REPO_ROOT,
     get_env,
+    get_google_generative_language_api_key,
+    get_google_generative_language_api_keys,
     get_lm_studio_request_timeout_seconds,
     get_lm_studio_url,
+    get_workflow_llm_backend,
 )
 from services.workflow_run_tracker import get_run_id
 from workflows.utils.debug_probe import write_debug_probe
@@ -49,6 +55,10 @@ def _llm_retry_jitter_sec(wait_sec: float) -> float:
 
 
 def _exception_status_code(exc: BaseException) -> Optional[int]:
+    if isinstance(exc, GoogleGenaiAPIError):
+        code = getattr(exc, "code", None)
+        if isinstance(code, int):
+            return code
     response = getattr(exc, "response", None)
     if response is not None and hasattr(response, "status_code"):
         status = getattr(response, "status_code", None)
@@ -61,6 +71,9 @@ def _exception_status_code(exc: BaseException) -> Optional[int]:
 
 
 def _exception_snippet(exc: BaseException, limit: int = 400) -> str:
+    if isinstance(exc, GoogleGenaiAPIError):
+        msg = getattr(exc, "message", None) or str(exc)
+        return msg[:limit] + ("..." if len(msg) > limit else "")
     response = getattr(exc, "response", None)
     if response is not None:
         for attr in ("text", "content"):
@@ -73,12 +86,70 @@ def _exception_snippet(exc: BaseException, limit: int = 400) -> str:
     return text[:limit] + ("..." if len(text) > limit else "")
 
 
+def _gemini_response_text(response: Any) -> str:
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        raise RuntimeError("No candidates in Gemini response")
+    content = getattr(candidates[0], "content", None)
+    parts = getattr(content, "parts", None) if content is not None else None
+    if not parts:
+        raise RuntimeError("No candidates in Gemini response")
+    part0 = parts[0]
+    raw = getattr(part0, "text", None) if part0 is not None else None
+    if isinstance(raw, str) and raw:
+        return raw
+    raise RuntimeError("No candidates in Gemini response")
+
+
+def _genai_generate_text(
+    *,
+    api_key: str,
+    model_name: str,
+    user_text: str,
+    system_message: Optional[str],
+    temperature: float,
+    max_tokens: Optional[int],
+) -> str:
+    client = genai.Client(api_key=api_key)
+    config = genai_types.GenerateContentConfig(
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+        system_instruction=system_message or None,
+    )
+    resp = client.models.generate_content(
+        model=model_name,
+        contents=user_text,
+        config=config,
+    )
+    return _gemini_response_text(resp)
+
+
 def _is_retryable_llm_error(exc: BaseException) -> bool:
     status = _exception_status_code(exc)
     if status is not None:
         return status in _RETRYABLE_HTTP_STATUSES
     name = type(exc).__name__.lower()
     return any(token in name for token in ("timeout", "connection", "connect", "chunked"))
+
+
+def _should_try_next_gemini_api_key(exc: BaseException) -> bool:
+    """After retries, rotate to another API key for auth/quota-style failures."""
+    status = _exception_status_code(exc)
+    if status in (401, 403, 429):
+        return True
+    low = _exception_snippet(exc).lower()
+    return any(
+        token in low
+        for token in (
+            "api_key_service_blocked",
+            "permission_denied",
+            "invalid api key",
+            "invalid_api_key",
+        )
+    )
 
 
 def _provider_endpoint(provider: str, *, lm_studio_url: str | None = None, model: str | None = None) -> str:
@@ -285,7 +356,10 @@ class LLMAdapter:
 
     def __init__(self):
         self.openai_api_key = get_env("OPENAI_API_KEY")
-        self.google_palm_api_key = get_env("GOOGLE_PALM_API_KEY")
+        self.google_generative_language_api_keys: List[str] = (
+            get_google_generative_language_api_keys()
+        )
+        self.google_palm_api_key = get_google_generative_language_api_key()
         self.groq_api_key = get_env("GROQ_API_KEY")
         self.lm_studio_url = get_lm_studio_url()
         self.lm_studio_api_token = get_env("LM_STUDIO_API_TOKEN", "lm-studio")
@@ -567,16 +641,22 @@ class LLMAdapter:
 
     def _select_provider(self) -> str:
         """Select available provider."""
+        if get_workflow_llm_backend() == "google":
+            if self.google_palm_api_key:
+                return "gemini"
+            raise RuntimeError(
+                "WORKFLOW_LLM_BACKEND selects Google AI Studio but GOOGLE_PALM_API_KEY, "
+                "GOOGLE_AI_API_KEYS, and GOOGLE_AI_API_KEY are unset"
+            )
         if self.lm_studio_url:
             return "lm_studio"
-        elif self.openai_api_key:
+        if self.openai_api_key:
             return "openai"
-        elif self.google_palm_api_key:
+        if self.google_palm_api_key:
             return "gemini"
-        elif self.groq_api_key:
+        if self.groq_api_key:
             return "groq"
-        else:
-            raise RuntimeError("No LLM provider configured")
+        raise RuntimeError("No LLM provider configured")
 
     def _call_openai(
         self,
@@ -646,56 +726,68 @@ class LLMAdapter:
         temperature: float,
         max_tokens: Optional[int],
     ) -> str:
-        """Call Google Gemini API."""
-        if not self.google_palm_api_key:
+        """Call Google Gemini API, rotating through configured API keys on auth/quota errors."""
+        if not self.google_generative_language_api_keys:
             raise RuntimeError("Google Gemini API key not configured")
         model_name = model or "gemini-pro"
         endpoint = _provider_endpoint("gemini", model=model_name)
+        keys = self.google_generative_language_api_keys
+        last_exc: Optional[BaseException] = None
+        for key_index, api_key in enumerate(keys):
 
-        def _request() -> str:
-            full_prompt = prompt
-            if system_message:
-                full_prompt = f"{system_message}\n\n{prompt}"
-            payload: Dict[str, Any] = {
-                "contents": [{"parts": [{"text": full_prompt}]}],
-                "generationConfig": {"temperature": temperature},
-            }
-            if max_tokens:
-                payload["generationConfig"]["maxOutputTokens"] = max_tokens
-            response = requests.post(
-                endpoint,
-                params={"key": self.google_palm_api_key},
-                json=payload,
-                timeout=120,
-            )
-            response.raise_for_status()
-            data = response.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                raise RuntimeError("No candidates in Gemini response")
-            raw = candidates[0]["content"]["parts"][0]["text"]
-            text = _strip_redacted_thinking(raw)
-            self._log_workflow_llm_turn(
-                provider="gemini",
-                model=model_name,
-                prompt=prompt,
-                system_message=system_message,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                assistant_response_raw=raw,
-            )
-            return text
+            def _make_request(resolved_key: str) -> Callable[[], str]:
+                def _request() -> str:
+                    raw = _genai_generate_text(
+                        api_key=resolved_key,
+                        model_name=model_name,
+                        user_text=prompt,
+                        system_message=system_message,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    text = _strip_redacted_thinking(raw)
+                    self._log_workflow_llm_turn(
+                        provider="gemini",
+                        model=model_name,
+                        prompt=prompt,
+                        system_message=system_message,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        assistant_response_raw=raw,
+                    )
+                    return text
 
-        return self._call_with_retry(
-            provider="gemini",
-            model=model_name,
-            endpoint=endpoint,
-            prompt=prompt,
-            system_message=system_message,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            request_fn=_request,
-        )
+                return _request
+
+            try:
+                return self._call_with_retry(
+                    provider="gemini",
+                    model=model_name,
+                    endpoint=endpoint,
+                    prompt=prompt,
+                    system_message=system_message,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    request_fn=_make_request(api_key),
+                )
+            except BaseException as exc:
+                last_exc = exc
+                if key_index + 1 < len(keys) and _should_try_next_gemini_api_key(exc):
+                    tid = str(uuid4())
+                    _LLM_ADAPTER_LOG.bind(
+                        trace_id=tid,
+                        log_domain="workflow_llm",
+                        provider="gemini",
+                        key_index=key_index,
+                        keys_tried=key_index + 1,
+                        keys_total=len(keys),
+                        http_status=_exception_status_code(exc),
+                    ).info("gemini_try_next_api_key")
+                    continue
+                raise
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("Gemini request failed without an exception")
 
     def _call_groq(
         self,

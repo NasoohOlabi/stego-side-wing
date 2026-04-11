@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from infrastructure.config import resolve_workflow_llm_provider_and_model
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter, strip_redacted_thinking
 from workflows.utils.workflow_llm_prompts import get_prompts
@@ -275,13 +276,14 @@ class DecodePipeline:
 
             response: Optional[str] = None
             last_exc: Optional[BaseException] = None
+            provider, model = resolve_workflow_llm_provider_and_model(DECODE_LLM_MODEL)
             for attempt in range(1, DECODE_LLM_MAX_TRIES + 1):
                 try:
                     response = self.llm.call_llm(
                         prompt=prompt,
                         system_message=system_message,
-                        model=DECODE_LLM_MODEL,
-                        provider="lm_studio",
+                        model=model,
+                        provider=provider,
                         temperature=0.0,
                         max_tokens=_DECODE_MAX_TOKENS,
                     )

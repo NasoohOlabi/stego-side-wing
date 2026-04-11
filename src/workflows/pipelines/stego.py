@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from infrastructure.config import resolve_workflow_llm_provider_and_model
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
@@ -359,11 +360,12 @@ class StegoPipeline:
         _stego_log_bind("prompt", prompt_role="system").info("{}", system_message)
         _stego_log_bind("prompt", prompt_role="user").info("{}", prompt)
         t_llm = time.perf_counter()
+        provider, model = resolve_workflow_llm_provider_and_model(STEGO_LLM_MODEL)
         response = self.llm.call_llm(
             prompt=prompt,
             system_message=system_message,
-            model=STEGO_LLM_MODEL,
-            provider="lm_studio",
+            model=model,
+            provider=provider,
             temperature=0.7,
             max_tokens=STEGO_ENCODE_MAX_TOKENS,
         )

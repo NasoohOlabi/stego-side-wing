@@ -60,6 +60,7 @@ class ResearchPipeline:
         self.backend = BackendAPIAdapter()
         self.gen_terms = GenSearchTermsPipeline()
         self.fetch_content = FetchUrlContentPipeline()
+        self.last_research_breakdown_posts: List[Dict[str, Any]] = []
 
     def _fetch_url_with_timeout_retries(
         self,
@@ -537,6 +538,25 @@ class ResearchPipeline:
 
         return False
     
+    def _research_post_pair(
+        self,
+        post: Dict,
+        step: str = "filter-researched",
+        force: bool = False,
+        use_terms_cache: bool = True,
+        persist_terms_cache: bool = True,
+        use_fetch_cache: bool = True,
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        preview = self.preview_post(
+            post=post,
+            step=step,
+            force=force,
+            use_terms_cache=use_terms_cache,
+            persist_terms_cache=persist_terms_cache,
+            use_fetch_cache=use_fetch_cache,
+        )
+        return preview["post"], preview["report"]
+
     def research_post(
         self,
         post: Dict,
@@ -548,41 +568,45 @@ class ResearchPipeline:
     ) -> Dict:
         """
         Research a single post: generate terms, search, fetch content.
-        
+
         Args:
             post: Post dictionary
             step: Workflow step name
-        
+
         Returns:
             Enriched post dictionary with search_results
         """
-        preview = self.preview_post(
-            post=post,
-            step=step,
+        post_out, _ = self._research_post_pair(
+            post,
+            step,
             force=force,
             use_terms_cache=use_terms_cache,
             persist_terms_cache=persist_terms_cache,
             use_fetch_cache=use_fetch_cache,
         )
-        return preview["post"]
+        return post_out
     
     def process_posts(
         self,
         step: str = "filter-researched",
         count: int = 1,
         offset: int = 1,
+        include_breakdown: bool = False,
     ) -> List[Dict]:
         """
         Process multiple posts for research.
-        
+
         Args:
             step: Workflow step name
             count: Number of posts to process
             offset: Offset for pagination
-        
+            include_breakdown: When True, populate ``last_research_breakdown_posts``.
+
         Returns:
             List of researched post dictionaries
         """
+        if include_breakdown:
+            self.last_research_breakdown_posts = []
         trace_id = str(uuid4())
         log = self._log.bind(trace_id=trace_id)
         t_batch0 = time.perf_counter()
@@ -592,6 +616,7 @@ class ResearchPipeline:
             step=step,
             count=count,
             offset=offset,
+            include_breakdown=include_breakdown,
         )
         posts_list = self.backend.posts_list(step=step, count=count, offset=offset)
         file_names = posts_list.get("fileNames", [])
@@ -612,7 +637,9 @@ class ResearchPipeline:
                 posts.append(self.backend.get_post_local(file_name, step))
             except Exception:
                 self._log.exception("research load failed for file={}", file_name)
-        results = self.process_post_objects(posts=posts, step=step)
+        results = self.process_post_objects(
+            posts=posts, step=step, include_breakdown=include_breakdown
+        )
         log.info(
             "research_process_posts_complete",
             event="research_timing",
@@ -630,6 +657,7 @@ class ResearchPipeline:
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
+        include_breakdown: bool = False,
     ) -> List[Dict[str, Any]]:
         """Process already-loaded post objects and persist researched versions."""
         researched_posts: List[Dict[str, Any]] = []
@@ -640,7 +668,7 @@ class ResearchPipeline:
             t_one = time.perf_counter()
             try:
                 was_new = self._is_new_post(post)
-                researched = self.research_post(
+                researched, report = self._research_post_pair(
                     post,
                     step,
                     force=force,
@@ -648,6 +676,10 @@ class ResearchPipeline:
                     persist_terms_cache=persist_terms_cache,
                     use_fetch_cache=use_fetch_cache,
                 )
+                if include_breakdown:
+                    self.last_research_breakdown_posts.append(
+                        {"post_id": str(post_id), "report": report}
+                    )
                 self.backend.save_post_local(researched, step=step)
                 if was_new:
                     try:

@@ -1,7 +1,8 @@
 """Configuration management."""
 import os
+import re
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Literal, Optional, Set, Tuple
 
 import dotenv
 
@@ -10,17 +11,17 @@ ENV_FILE_PATH = REPO_ROOT / ".env"
 
 # Load .env file once at module level.
 dotenv.load_dotenv(dotenv_path=ENV_FILE_PATH if ENV_FILE_PATH.exists() else None)
-_DOTENV_VALUES: Optional[Dict[str, Optional[str]]] = None
+_dotenv_values_cache: Optional[Dict[str, Optional[str]]] = None
 
 
 def _load_dotenv_values() -> Dict[str, Optional[str]]:
     """Load and cache .env key-values without printing missing-key warnings."""
-    global _DOTENV_VALUES
-    if _DOTENV_VALUES is None:
-        _DOTENV_VALUES = (
+    global _dotenv_values_cache
+    if _dotenv_values_cache is None:
+        _dotenv_values_cache = (
             dotenv.dotenv_values(str(ENV_FILE_PATH)) if ENV_FILE_PATH.exists() else {}
         )
-    return _DOTENV_VALUES
+    return _dotenv_values_cache
 
 
 def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -91,6 +92,63 @@ def get_lm_studio_request_timeout_seconds(default: int = 600) -> int:
     except ValueError:
         return default
     return max(30, min(n, 86400))
+
+
+DEFAULT_GOOGLE_AI_STUDIO_MODEL = "gemma-4-26b-a4b-it"
+
+
+def get_workflow_llm_backend() -> Literal["lm_studio", "google"]:
+    """Workflow LLM target: Google AI Studio (Generative Language API) or local LM Studio."""
+    raw = (get_env("WORKFLOW_LLM_BACKEND") or "ai_studio").strip().lower()
+    if raw in ("google", "gemini", "ai_studio"):
+        return "google"
+    return "lm_studio"
+
+
+def get_google_ai_studio_model() -> str:
+    """Generative Language API model id when workflow LLM backend is AI Studio / Google."""
+    explicit = (get_env("GOOGLE_AI_STUDIO_MODEL") or "").strip()
+    return explicit or DEFAULT_GOOGLE_AI_STUDIO_MODEL
+
+
+def _parse_api_key_list(raw: Optional[str]) -> list[str]:
+    """Split comma- or whitespace-separated API key tokens."""
+    if not raw:
+        return []
+    return [p for p in (s.strip() for s in re.split(r"[\s,]+", raw.strip())) if p]
+
+
+def get_google_generative_language_api_keys() -> List[str]:
+    """
+    API keys for ``generativelanguage.googleapis.com`` (AI Studio / Gemini), in try order.
+
+    Order: ``GOOGLE_PALM_API_KEY`` (if set), then ``GOOGLE_AI_API_KEYS``, then
+    ``GOOGLE_AI_API_KEY`` (each of the latter may be comma-separated). Duplicates removed.
+    """
+    seen: Set[str] = set()
+    out: List[str] = []
+    for chunk in (
+        _parse_api_key_list(get_env("GOOGLE_PALM_API_KEY"))
+        + _parse_api_key_list(get_env("GOOGLE_AI_API_KEYS"))
+        + _parse_api_key_list(get_env("GOOGLE_AI_API_KEY"))
+    ):
+        if chunk not in seen:
+            seen.add(chunk)
+            out.append(chunk)
+    return out
+
+
+def get_google_generative_language_api_key() -> Optional[str]:
+    """First Generative Language API key (backward compatible)."""
+    keys = get_google_generative_language_api_keys()
+    return keys[0] if keys else None
+
+
+def resolve_workflow_llm_provider_and_model(lm_model: str) -> Tuple[str, str]:
+    """``(provider, model)`` for :meth:`workflows.adapters.llm.LLMAdapter.call_llm`."""
+    if get_workflow_llm_backend() == "google":
+        return "gemini", get_google_ai_studio_model()
+    return "lm_studio", lm_model
 
 
 # Common configuration constants

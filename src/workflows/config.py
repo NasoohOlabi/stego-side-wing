@@ -7,6 +7,7 @@ from typing import Iterator, Optional
 from infrastructure.config import (
     REPO_ROOT,
     get_env,
+    get_google_generative_language_api_key,
     get_step_dirs as get_global_step_dirs,
     resolve_path,
 )
@@ -28,7 +29,7 @@ class WorkflowConfig:
 
         # LLM API keys
         self.openai_api_key = get_env("OPENAI_API_KEY")
-        self.google_palm_api_key = get_env("GOOGLE_PALM_API_KEY")
+        self.google_palm_api_key = get_google_generative_language_api_key()
         self.groq_api_key = get_env("GROQ_API_KEY")
 
         # Dataset directories (single-source from infrastructure.config/STEPS)

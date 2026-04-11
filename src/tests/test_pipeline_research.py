@@ -10,6 +10,7 @@ from workflows.pipelines.research import ResearchPipeline
 def _research_pipeline_stub() -> ResearchPipeline:
     p = ResearchPipeline.__new__(ResearchPipeline)
     p._log = logger.bind(component="ResearchPipeline")
+    p.last_research_breakdown_posts = []
     return p
 
 
@@ -98,10 +99,52 @@ def test_process_posts_saves_local_for_all_and_remote_for_new_only():
         save_post_local=lambda post, step: local_saves.append(post["id"]),
         save_post=lambda post, step: remote_saves.append(post["id"]),
     )
-    pipeline.research_post = lambda post, step, **kwargs: {**post, "processed": True}
+
+    def _pair(post, step, **kwargs):
+        return {**post, "processed": True}, {"post_id": post["id"], "stub": True}
+
+    pipeline._research_post_pair = _pair
 
     result = pipeline.process_posts(step="filter-researched", count=2, offset=0)
 
     assert [p["id"] for p in result] == ["new", "old"]
     assert local_saves == ["new", "old"]
     assert remote_saves == ["new"]
+
+
+def test_process_post_objects_include_breakdown_appends_reports():
+    pipeline = _research_pipeline_stub()
+    pipeline.gen_terms = SimpleNamespace(
+        preview_generation=lambda **kwargs: {"terms": ["t1"]}
+    )
+    pipeline.backend = SimpleNamespace(
+        save_post_local=lambda *a, **k: None,
+        save_post=lambda *a, **k: None,
+        google_search=lambda **kwargs: {"results": [{"link": "https://a.com/x"}]},
+    )
+    pipeline.fetch_content = SimpleNamespace(
+        fetch=lambda url, use_cache: FetchUrlResult(
+            url=url, success=True, text=f"body:{url}"
+        )
+    )
+    posts = [{"id": "p1", "title": "t", "selftext": "b", "url": "https://u"}]
+    pipeline.process_post_objects(
+        posts=posts, step="filter-researched", include_breakdown=True
+    )
+    assert len(pipeline.last_research_breakdown_posts) == 1
+    entry = pipeline.last_research_breakdown_posts[0]
+    assert entry["post_id"] == "p1"
+    assert "timing" in entry["report"]
+    assert entry["report"]["timing"]["preview_total_ms"] >= 0
+
+
+def test_process_posts_clears_breakdown_when_include_breakdown():
+    pipeline = _research_pipeline_stub()
+    pipeline.last_research_breakdown_posts = [{"stale": True}]
+    pipeline.backend = SimpleNamespace(
+        posts_list=lambda **kwargs: {"fileNames": []},
+    )
+    pipeline.process_posts(
+        step="filter-researched", count=1, offset=0, include_breakdown=True
+    )
+    assert pipeline.last_research_breakdown_posts == []

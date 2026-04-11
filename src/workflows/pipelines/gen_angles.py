@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 from loguru import logger
 
+from infrastructure.config import resolve_workflow_llm_provider_and_model
 from infrastructure.json_logging import get_trace_id
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
@@ -263,11 +264,14 @@ class GenAnglesPipeline:
         system_message = ga.system_template
 
         try:
+            provider, model = resolve_workflow_llm_provider_and_model(
+                self.config.model or "mistral-nemo-instruct-2407-abliterated"
+            )
             response = self.llm.call_llm(
                 prompt=prompt,
                 system_message=system_message,
-                model=self.config.model,
-                provider="lm_studio",
+                model=model,
+                provider=provider,
                 temperature=0.0,
             )
 

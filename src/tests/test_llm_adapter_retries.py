@@ -10,6 +10,7 @@ def _adapter() -> LLMAdapter:
     adapter = LLMAdapter.__new__(LLMAdapter)
     adapter.openai_api_key = None
     adapter.google_palm_api_key = None
+    adapter.google_generative_language_api_keys = []
     adapter.groq_api_key = None
     adapter.lm_studio_url = "https://example.invalid/v1"
     adapter.lm_studio_api_token = "token"
@@ -82,3 +83,46 @@ def test_lm_studio_404_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     assert excinfo.value.response.status_code == 404
     assert adapter.last_call_metadata["retry_count"] == 0
     assert adapter.last_call_metadata["http_status"] == 404
+
+
+def test_gemini_rotates_to_second_key_after_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str | None] = []
+
+    class FakeModels:
+        def __init__(self, api_key: str) -> None:
+            self._api_key = api_key
+
+        def generate_content(self, **_kwargs: object) -> MagicMock:
+            calls.append(self._api_key)
+            if self._api_key == "key-a":
+                from google.genai.errors import ClientError
+
+                raise ClientError(
+                    403,
+                    {"error": {"reason": "API_KEY_SERVICE_BLOCKED"}},
+                    None,
+                )
+            ok = MagicMock()
+            ok.text = "ok"
+            return ok
+
+    class FakeClient:
+        def __init__(self, api_key: str | None = None, **_kwargs: object) -> None:
+            self._api_key = api_key or ""
+
+        @property
+        def models(self) -> FakeModels:
+            return FakeModels(self._api_key)
+
+    monkeypatch.setattr("workflows.adapters.llm.genai.Client", FakeClient)
+    monkeypatch.setattr("workflows.adapters.llm._llm_max_attempts", lambda: 2)
+    monkeypatch.setattr("workflows.adapters.llm._llm_retry_backoff_sec", lambda _i: 0.0)
+    monkeypatch.setattr("workflows.adapters.llm._llm_retry_jitter_sec", lambda _s: 0.0)
+    monkeypatch.setattr("workflows.adapters.llm.time.sleep", lambda _s: None)
+
+    adapter = _adapter()
+    adapter.google_generative_language_api_keys = ["key-a", "key-b"]
+    adapter.google_palm_api_key = "key-a"
+    out = adapter.call_llm(prompt="hi", provider="gemini", model="gemini-pro")
+    assert out == "ok"
+    assert calls == ["key-a", "key-b"]

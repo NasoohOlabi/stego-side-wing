@@ -83,8 +83,10 @@ Current strict pyright config is in `pyrightconfig.json`.
 Some endpoints/pipelines require provider credentials (for example):
 
 - `OPENAI_API_KEY`
-- `GOOGLE_PALM_API_KEY`
+- `GOOGLE_PALM_API_KEY` (Generative Language API / AI Studio; alias: `GOOGLE_AI_API_KEY` if `GOOGLE_PALM_API_KEY` is unset)
 - `GROQ_API_KEY`
+- `WORKFLOW_LLM_BACKEND` — `ai_studio` (default; aliases `google` / `gemini`) or `lm_studio` for workflow pipelines (`LLMAdapter` → Google `generateContent` when not `lm_studio`)
+- `GOOGLE_AI_STUDIO_MODEL` — model id when using Google backend (default `gemma-4-26b-a4b-it`)
 - `LM_STUDIO_URL`
 - `LM_STUDIO_API_TOKEN`
 - `GOOGLE_CSE_ID`

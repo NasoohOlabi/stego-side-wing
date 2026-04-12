@@ -1,5 +1,6 @@
 """Tests for angles LLM retries and transport splitting (via public entrypoints)."""
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,6 +8,12 @@ import requests
 
 from infrastructure.cache import deterministic_hash_sha256
 from pipelines.angles.angle_runner import analyze_angles_from_texts, angles_model_name
+
+
+@pytest.fixture(autouse=True)
+def _angles_http_tests_use_lm_studio(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests mock ``requests.post`` on the legacy LM Studio HTTP path."""
+    monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "lm_studio")
 
 
 def test_analyze_angles_retries_read_timeout_then_ok(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -116,7 +123,7 @@ def test_analyze_angles_connection_error_splits_and_completes(
 
 def test_analyze_angles_quarantines_corrupt_cache_file(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr("pipelines.angles.angle_runner.get_angles_cache_dir", lambda: tmp_path)
     monkeypatch.setattr("pipelines.angles.angle_runner._llm_max_attempts", lambda: 1)

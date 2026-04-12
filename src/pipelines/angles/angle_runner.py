@@ -6,7 +6,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import requests
 from requests.exceptions import (
@@ -19,9 +19,16 @@ from requests.exceptions import (
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from infrastructure.cache import deterministic_hash_sha256
-from infrastructure.config import get_env, get_lm_studio_url
+from infrastructure.config import (
+    get_env,
+    get_lm_studio_url,
+    get_workflow_llm_backend,
+    resolve_workflow_llm_provider_and_model,
+)
 from infrastructure.json_logging import TAG_WORKFLOW, get_trace_id
+from workflows.adapters.llm import LLMAdapter
 from workflows.cache_context import get_angles_cache_dir
+from workflows.config import get_config
 from workflows.utils.text_utils import chunk_text_equal_overlap
 
 _LOG = logging.getLogger(__name__)
@@ -75,6 +82,8 @@ CONTEXT_RETRY_OVERLAP_CHARS = max(
 )
 
 _TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+_WORKFLOW_GOOGLE_CACHE_SUBDIR = "workflow_google"
 _CONNECTIVITY_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ReadTimeout,
     Timeout,
@@ -779,9 +788,233 @@ def _tag_source_document(
     return out
 
 
+def _workflow_google_cache_dir(cache_root: Path) -> Path:
+    return cache_root / _WORKFLOW_GOOGLE_CACHE_SUBDIR
+
+
+def _repair_json_workflow(
+    llm: LLMAdapter,
+    *,
+    provider: str,
+    model: str,
+    raw_text: str,
+    error_message: str,
+    attempt: int,
+) -> str:
+    system_prompt = (
+        "You are a JSON repair tool. Return ONLY a valid JSON array matching "
+        "this schema:\n"
+        '{ "type": "array", "items": { "type": "object", "properties": '
+        '{ "source_quote": { "type": "string" }, "tangent": { "type": "string" }, '
+        '"category": { "type": "string" } }, '
+        '"required": ["source_quote", "tangent", "category"] } }\n'
+        "No markdown, no commentary, only raw JSON."
+    )
+    user_prompt = (
+        "The previous response failed JSON parsing or schema validation.\n\n"
+        f"Error:\n{error_message}\n\n"
+        "Original response:\n"
+        f"{raw_text}\n\n"
+        "Fix the JSON and return ONLY the corrected array."
+    )
+    _log_prompt(user_prompt, attempt, attempt, label="angles_repair_workflow")
+    return llm.call_llm(
+        prompt=user_prompt,
+        system_message=system_prompt,
+        model=model,
+        provider=provider,
+        temperature=0.0,
+        max_tokens=8192,
+    )
+
+
+def _parse_or_repair_workflow(
+    llm: LLMAdapter,
+    *,
+    provider: str,
+    model: str,
+    raw_text: str,
+) -> List[Dict[str, str]]:
+    cleaned = _strip_code_fences(raw_text)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        repaired = _repair_json_workflow(
+            llm,
+            provider=provider,
+            model=model,
+            raw_text=cleaned,
+            error_message=str(exc),
+            attempt=1,
+        )
+        cleaned_repair = _strip_code_fences(repaired)
+        data = json.loads(cleaned_repair)
+
+    errors = _schema_errors(data)
+    if errors:
+        repaired = _repair_json_workflow(
+            llm,
+            provider=provider,
+            model=model,
+            raw_text=cleaned,
+            error_message="; ".join(errors),
+            attempt=2,
+        )
+        cleaned_repair = _strip_code_fences(repaired)
+        data = json.loads(cleaned_repair)
+
+        errors = _schema_errors(data)
+        if errors:
+            raise ValueError("Schema validation failed: " + "; ".join(errors))
+
+    return data
+
+
+def _run_workflow_angle_batch(
+    llm: LLMAdapter,
+    *,
+    provider: str,
+    model: str,
+    batch: List[str],
+    batch_index: int,
+    batch_total: int,
+) -> List[Dict[str, str]]:
+    user_prompt = _build_user_prompt(batch)
+    _log_prompt(user_prompt, batch_index, batch_total, label="angles_workflow")
+    answer = llm.call_llm(
+        prompt=user_prompt,
+        system_message=SYSTEM_PROMPT,
+        model=model,
+        provider=provider,
+        temperature=TEMPERATURE,
+        max_tokens=8192,
+    )
+    return _parse_or_repair_workflow(llm, provider=provider, model=model, raw_text=answer)
+
+
+def analyze_angles_from_texts_via_workflow_llm(
+    texts: List[str],
+    *,
+    use_cache: bool = True,
+    llm: Optional[LLMAdapter] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Same outputs as ``analyze_angles_from_texts`` but uses ``LLMAdapter`` (Google when configured).
+
+    Disk cache lives under ``angles_cache/workflow_google/`` so LM Studio cache files are not mixed.
+    """
+    analyze_t0 = time.perf_counter()
+    all_responses: List[Dict[str, Any]] = []
+    adapter = llm or LLMAdapter()
+    cfg = get_config()
+    provider, model = resolve_workflow_llm_provider_and_model(
+        cfg.model or "mistral-nemo-instruct-2407-abliterated"
+    )
+
+    cache_root = get_angles_cache_dir()
+    wf_cache = _workflow_google_cache_dir(cache_root)
+    try:
+        wf_cache.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        _LOG.warning(
+            "angles_workflow_cache_dir_unavailable",
+            extra={
+                "event": "angles.workflow_cache_dir_unavailable",
+                "tags": [TAG_WORKFLOW],
+                "component": "angle_runner",
+                "cache_root": str(wf_cache),
+                "error": str(exc),
+            },
+        )
+        use_cache = False
+
+    running = 0
+    for text in texts:
+        if not text:
+            continue
+
+        try:
+            cache_key = deterministic_hash_sha256(text)
+            cache_file = wf_cache / f"{cache_key}.json"
+
+            if use_cache and cache_file.exists():
+                _emit_status(f"[angles-workflow] cache hit {cache_key[:10]}...")
+                try:
+                    cached_data = json.loads(cache_file.read_text(encoding="utf-8"))
+                    if not isinstance(cached_data, list):
+                        raise ValueError("cache root must be array")
+                    all_responses.extend(_tag_source_document(cached_data, running))
+                    continue
+                except Exception as e:
+                    _emit_status(f"[angles-workflow] cache read error {cache_key[:10]}...: {e}")
+                    _LOG.warning(
+                        "angles_workflow_cache_corrupt",
+                        extra={
+                            "event": "angles.workflow_cache_corrupt",
+                            "tags": [TAG_WORKFLOW],
+                            "component": "angle_runner",
+                            "cache_file": str(cache_file),
+                            "cache_key": cache_key,
+                            "error": str(e),
+                        },
+                    )
+                    _quarantine_cache_file(cache_file, str(e))
+
+            _emit_status(f"[angles-workflow] cache miss {cache_key[:10]}...")
+
+            segments = _chunk_text_at_boundaries(text, MAX_CHARS_PER_TEXT)
+            if not segments:
+                continue
+
+            batches = _make_batches(segments, _effective_max_chars_per_prompt())
+            text_responses: List[Dict[str, str]] = []
+
+            for idx, batch in enumerate(batches, start=1):
+                validated = _run_workflow_angle_batch(
+                    adapter,
+                    provider=provider,
+                    model=model,
+                    batch=batch,
+                    batch_index=idx,
+                    batch_total=len(batches),
+                )
+                text_responses.extend(validated)
+
+            if use_cache:
+                try:
+                    cache_file.write_text(
+                        json.dumps(text_responses, indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                except Exception as e:
+                    _emit_status(f"[angles-workflow] cache save error {cache_key[:10]}...: {e}")
+
+            all_responses.extend(_tag_source_document(text_responses, running))
+        finally:
+            running += 1
+
+    total_ms = int((time.perf_counter() - analyze_t0) * 1000)
+    _LOG.info(
+        "angles_analyze_from_texts_workflow_complete",
+        extra={
+            "event": "angles.analyze_from_texts_workflow_complete",
+            "tags": [TAG_WORKFLOW],
+            "component": "angle_runner",
+            "elapsed_ms": total_ms,
+            "text_blocks_input": len(texts),
+            "angles_out": len(all_responses),
+            "use_cache": use_cache,
+            "trace_id": get_trace_id() or "",
+        },
+    )
+    return all_responses
+
+
 def analyze_angles_from_texts(
     texts: List[str], *, use_cache: bool = True
 ) -> List[Dict[str, Any]]:
+    if get_workflow_llm_backend() == "google":
+        return analyze_angles_from_texts_via_workflow_llm(texts, use_cache=use_cache)
     analyze_t0 = time.perf_counter()
     all_responses: List[Dict[str, Any]] = []
 
@@ -877,4 +1110,4 @@ def analyze_angles_from_texts(
     return all_responses
 
 
-__all__ = ["analyze_angles_from_texts"]
+__all__ = ["analyze_angles_from_texts", "analyze_angles_from_texts_via_workflow_llm"]

@@ -4,7 +4,10 @@ from typing import Any, Dict, List
 
 from loguru import logger
 
-from infrastructure.config import resolve_workflow_llm_provider_and_model
+from infrastructure.config import (
+    get_workflow_llm_backend,
+    resolve_workflow_llm_provider_and_model,
+)
 from infrastructure.json_logging import get_trace_id
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
@@ -75,6 +78,14 @@ class GenAnglesPipeline:
         post_id = str(post.get("id") or "<unknown>")
         dictionary = self._build_dictionary(post)
         t_preview = time.perf_counter()
+        cfg = getattr(self, "config", None) or get_config()
+        if get_workflow_llm_backend() == "google":
+            wf_provider, wf_model = resolve_workflow_llm_provider_and_model(
+                cfg.model or "mistral-nemo-instruct-2407-abliterated"
+            )
+            report_provider, report_model = wf_provider, wf_model
+        else:
+            report_provider, report_model = "lm_studio", angles_model_name()
         report = {
             "post_id": post_id,
             "input_count": len(dictionary),
@@ -88,8 +99,8 @@ class GenAnglesPipeline:
                 }
                 for idx, text in enumerate(dictionary)
             ],
-            "provider": "lm_studio",
-            "model": angles_model_name(),
+            "provider": report_provider,
+            "model": report_model,
             "temperature": ANGLES_TEMPERATURE,
             "system_prompt_hash": stable_hash(ANGLES_SYSTEM_PROMPT),
             "user_prompt_template_hash": stable_hash(ANGLES_USER_PROMPT_TEMPLATE),

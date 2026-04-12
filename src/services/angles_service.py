@@ -21,7 +21,7 @@ def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, A
         
     Raises:
         ValueError: If texts is invalid
-        requests.RequestException: If LM Studio request fails
+        requests.RequestException: If the legacy LM Studio HTTP path fails (``WORKFLOW_LLM_BACKEND=lm_studio``)
     """
     if not isinstance(texts, list) or not all(isinstance(x, str) for x in texts):
         raise ValueError("'texts' must be a list of strings")
@@ -29,8 +29,8 @@ def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, A
     if not texts:
         raise ValueError("Provide at least one text block")
 
+    cast_texts: list[str] = list(texts)
     try:
-        cast_texts = [x for x in texts if isinstance(x, str)]
         logger.info(
             "analyze_angles",
             extra={
@@ -42,18 +42,18 @@ def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, A
         )
         results = analyze_angles_from_texts(cast_texts, use_cache=use_cache)
         return results
-    except ValueError as e:
+    except ValueError:
         logger.exception(
             "angles analysis validation failed",
             extra={
                 "event": "angles",
                 "action": "analyze",
-                "text_blocks": len(texts) if isinstance(texts, list) else None,
+                "text_blocks": len(cast_texts),
                 "use_cache": use_cache,
             },
         )
         raise
-    except Exception as e:
+    except Exception:
         logger.exception(
             "angles analysis failed",
             extra={

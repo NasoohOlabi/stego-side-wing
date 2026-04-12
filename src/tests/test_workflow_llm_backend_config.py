@@ -48,6 +48,13 @@ def test_get_workflow_llm_backend_google_aliases(
     assert get_workflow_llm_backend() == "google"
 
 
+def test_get_workflow_llm_backend_lm_studio_string(
+    monkeypatch: pytest.MonkeyPatch, clear_llm_backend_env: None
+) -> None:
+    monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "lm_studio")
+    assert get_workflow_llm_backend() == "lm_studio"
+
+
 def test_get_google_ai_studio_model_default(clear_llm_backend_env: None) -> None:
     assert get_google_ai_studio_model() == DEFAULT_GOOGLE_AI_STUDIO_MODEL
 

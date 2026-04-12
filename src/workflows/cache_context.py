@@ -22,7 +22,7 @@ def get_angles_cache_dir() -> Path:
 
 @contextmanager
 def angles_cache_context(cache_dir: Path) -> Iterator[None]:
-    """Bind ``analyze_angles_from_texts`` cache reads/writes to ``cache_dir``."""
+    """Bind angles disk cache (LM + ``workflow_google/`` workflow-LLM subtree) to ``cache_dir``."""
     token = _angles_cache_dir_var.set(cache_dir.resolve())
     try:
         yield

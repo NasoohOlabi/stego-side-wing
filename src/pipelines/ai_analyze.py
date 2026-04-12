@@ -7,10 +7,10 @@ from typing import Any, Dict, List, cast
 
 import httpx
 from icecream import ic  # Import icecream for colorful logging
-from openai import OpenAI
 
-from infrastructure.config import get_lm_studio_url
+from infrastructure.config import resolve_workflow_llm_provider_and_model
 from pipelines.headless_browser_analyzer import WebAnalyzer
+from workflows.adapters.llm import LLMAdapter
 from integrations.news_api import (
     Article,
     EverythingParams,
@@ -35,19 +35,40 @@ def _httpx_client_init_with_proxies(
 
 httpx.Client.__init__ = _httpx_client_init_with_proxies
 
-MODEL_URL = get_lm_studio_url()
-MODEL_NAME = "mistral-nemo-instruct-2407-abliterated"
-# MODEL_NAME = "openai/gpt-oss-20b"
+_DEFAULT_AI_ANALYZE_LM_MODEL = "mistral-nemo-instruct-2407-abliterated"
+_TOPIC_SYSTEM_MESSAGE = """You are an expert at extracting specific, detailed list of topics from a post and rephrasing them into concise, actionable search queries. The output should only be a JSON list of topics formatted as search-friendly queries. Do not include any personal details, such as the author's name or their emotional state. Focus only on the technical and situational topics that someone might want to research.
 
-# Point to the local server URL provided by LM Studio
-client = OpenAI(
-    base_url=MODEL_URL,  # Adjust this if your port is different
-    # The API key can be anything; LM Studio doesn't use it.
-    api_key="lm-studio",
-)
+    output format OR I'LL KILL MYSELF: ["topic1", "topic2", "topic3"]
+"""
 
-# return the post data
-ic(client)
+
+def llm_topic_list_from_article_json(
+    post: str, *, adapter: LLMAdapter | None = None
+) -> List[str]:
+    """Resolve WORKFLOW_LLM_BACKEND and return parsed topic list from LLM text."""
+    provider, model = resolve_workflow_llm_provider_and_model(_DEFAULT_AI_ANALYZE_LM_MODEL)
+    prompt = f"""
+    You are an expert at extracting specific, detailed topics from articles and rephrasing them into concise, actionable search queries. Your task is to identify key issues, decisions, and technical details discussed by the author, and present them as a list of bullet points.
+
+    Here is the article
+
+    ---
+
+    {post}
+    """
+    llm = adapter or LLMAdapter()
+    full_response = llm.call_llm(
+        prompt=prompt,
+        system_message=_TOPIC_SYSTEM_MESSAGE,
+        model=model,
+        provider=provider,
+        temperature=0.7,
+        max_tokens=None,
+    )
+    start = full_response.find("[")
+    end = len(full_response) - full_response[::-1].find("]")
+    bracket_slice = full_response[start:end]
+    return json.loads(bracket_slice)
 
 
 async def process_file(post_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -58,56 +79,13 @@ async def process_file(post_data: Dict[str, Any]) -> Dict[str, Any]:
     post_data.pop("comments", None)
     post = json.dumps(post_data)
 
-    prompt = f"""
-    You are an expert at extracting specific, detailed topics from articles and rephrasing them into concise, actionable search queries. Your task is to identify key issues, decisions, and technical details discussed by the author, and present them as a list of bullet points.
-
-    Here is the article
-
-    ---
-
-    {post}
-    """
-
-    # Define the messages for the conversation
-    messages = [
-        {
-            "role": "system",
-            "content": """You are an expert at extracting specific, detailed list of topics from a post and rephrasing them into concise, actionable search queries. The output should only be a JSON list of topics formatted as search-friendly queries. Do not include any personal details, such as the author's name or their emotional state. Focus only on the technical and situational topics that someone might want to research.
-
-    output format OR I'LL KILL MYSELF: ["topic1", "topic2", "topic3"]
-""",
-        },
-        {"role": "user", "content": prompt},
-    ]
-
-    global MODEL_NAME
-    ic(MODEL_NAME)
+    ic(_DEFAULT_AI_ANALYZE_LM_MODEL)
     print("🤖 Sending request to AI model for topic extraction")
-    # Create the chat completion request
-    completion = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=messages,  # type: ignore
-        temperature=0.7,
-        stream=False,  # Set to True to receive the response in chunks
-    )
-
-    # Process the response
-    print("📝 AI Response received:")
-
-    full_response = completion.choices[0].message.content or ""
-
-    ic(full_response)
-    start = full_response.find("[")
-    end = len(full_response) - full_response[::-1].find("]")
-    full_response = full_response[start:end]
-    ic(full_response)
-
     try:
-        topics = json.loads(full_response)
+        topics = llm_topic_list_from_article_json(post)
         print(f"📋 Successfully parsed {len(topics)} topics from AI response")
     except json.JSONDecodeError as e:
         print(f"❌ Failed to parse JSON response: {e}")
-        print(f"Raw response: {full_response}")
         raise
 
     print(f"\n📋 Extracted {len(topics)} topics:")

@@ -10,12 +10,17 @@ from crawl4ai.extraction_strategy import LLMExtractionStrategy
 from loguru import logger
 from pydantic import BaseModel
 
-from infrastructure.config import get_lm_studio_url
+from infrastructure.config import (
+    get_env,
+    get_lm_studio_url,
+    get_workflow_llm_backend,
+    resolve_workflow_llm_provider_and_model,
+)
+from workflows.adapters.llm import LLMAdapter
 
-# --- Configuration Constants ---
-LM_STUDIO_URL = get_lm_studio_url()
 
-API_TOKEN = "lm-studio"  # Placeholder for local server
+def _lm_studio_api_token() -> str:
+    return (get_env("LM_STUDIO_API_TOKEN") or "lm-studio").strip() or "lm-studio"
 
 # Custom JavaScript to click common "Accept Cookies" buttons if Magic Mode misses them
 JS_CONSENT_CLICK = """
@@ -99,55 +104,135 @@ def _page_text_fallback(crawl_result: Any) -> str:
     return ""
 
 
-async def extract_structured_data(
-    url: str,
-    schema: Type[BaseModel],
-    model_name: str = "mistral-nemo-instruct-2407-abliterated",
-    instruction: str = "Extract the data according to the schema.",
-) -> Optional[Dict[str, Any]]:
-    """
-    Scrapes a URL using Crawl4AI with local LLM extraction (LM Studio).
-    Handles consent popups via 'Magic Mode' and fallback JS.
-    """
-    # Track request start
-    start_time = _tracker.start(url)
-
-    _SCRAPER_LOG.info("crawl4ai_step_llm_config", model_name=model_name)
-
-    # 1. Configure LLM (Using 'openai/' provider allows generic local URL usage)
-    llm_config = LLMConfig(
-        provider=f"openai/{model_name}",
-        base_url=LM_STUDIO_URL,
-        api_token=API_TOKEN,
-        temperature=0,
+def _markdown_only_run_config() -> CrawlerRunConfig:
+    return CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        magic=True,
+        remove_overlay_elements=True,
+        js_code=JS_CONSENT_CLICK,
+        wait_for="body",
+        page_timeout=60000,
     )
 
-    # 2. Define Extraction Strategy
+
+def parse_structured_llm_schema_text(
+    raw: str, schema: Type[BaseModel]
+) -> Optional[Dict[str, Any]]:
+    text = raw.strip()
+    if text.startswith("```"):
+        chunks = text.split("```")
+        if len(chunks) >= 2:
+            inner = chunks[1].strip()
+            if inner.lower().startswith("json"):
+                inner = inner[4:].lstrip()
+            text = inner.strip()
+    try:
+        validated = schema.model_validate_json(text)
+        return validated.model_dump()
+    except Exception:
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                validated = schema.model_validate(parsed)
+                return validated.model_dump()
+        except Exception:
+            return None
+        return None
+
+
+async def _extract_structured_google_backend(
+    url: str,
+    schema: Type[BaseModel],
+    model_name: str,
+    instruction: str,
+    start_time: float,
+) -> Optional[Dict[str, Any]]:
+    _SCRAPER_LOG.info(
+        "crawl4ai_step_google_backend", url=url, model_name=model_name
+    )
+    run_config = _markdown_only_run_config()
+    try:
+        async with AsyncWebCrawler(verbose=False) as crawler:
+            result: Any = await crawler.arun(url=url, config=run_config)
+    except Exception:
+        _SCRAPER_LOG.exception("crawl4ai_unexpected_error", url=url)
+        _tracker.end(url, start_time, success=False)
+        raise
+
+    if not result.success:
+        _SCRAPER_LOG.error(
+            "crawl4ai_crawl_failed",
+            url=url,
+            error_message=result.error_message,
+        )
+        _tracker.end(url, start_time, success=False)
+        return None
+
+    page_text = _page_text_fallback(result)
+    if not page_text.strip():
+        _tracker.end(url, start_time, success=False)
+        return None
+
+    schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+    prompt = (
+        f"{instruction}\n\n"
+        "Output a single JSON object only (no markdown fences) that conforms "
+        f"to this JSON Schema:\n{schema_json}\n\nPage content:\n{page_text[:120_000]}"
+    )
+    provider, model = resolve_workflow_llm_provider_and_model(model_name)
+    raw = LLMAdapter().call_llm(
+        prompt=prompt,
+        system_message="You extract structured data. Reply with JSON only, no prose.",
+        model=model,
+        provider=provider,
+        temperature=0.0,
+        max_tokens=None,
+    )
+    data = parse_structured_llm_schema_text(raw, schema)
+    if data is not None:
+        _SCRAPER_LOG.info("crawl4ai_success", url=url)
+        _tracker.end(url, start_time, success=True)
+        return data
+    if raw.strip():
+        _tracker.end(url, start_time, success=True)
+        return {"raw_content": raw}
+    _tracker.end(url, start_time, success=False)
+    return None
+
+
+async def _extract_structured_lm_studio_backend(
+    url: str,
+    schema: Type[BaseModel],
+    model_name: str,
+    instruction: str,
+    start_time: float,
+) -> Optional[Dict[str, Any]]:
+    base_url = get_lm_studio_url()
+    llm_config = LLMConfig(
+        provider=f"openai/{model_name}",
+        base_url=base_url,
+        api_token=_lm_studio_api_token(),
+        temperature=0,
+    )
     strategy = LLMExtractionStrategy(
         llm_config=llm_config,
         schema=schema.model_json_schema(),
         instruction=instruction,
-        input_format="fit_markdown",  # Best for local LLMs (reduces noise)
+        input_format="fit_markdown",
         verbose=False,
     )
-
-    # 3. Configure Crawler Run (Magic Mode + Anti-Overlay)
     run_config = CrawlerRunConfig(
         extraction_strategy=strategy,
-        cache_mode=CacheMode.BYPASS,  # Ensure fresh data
-        magic=True,  # AUTO: Handle popups/user-simulation
-        remove_overlay_elements=True,  # AUTO: Strip modals/banners
-        js_code=JS_CONSENT_CLICK,  # MANUAL: Fallback click script
-        wait_for="body",  # Wait for page load
-        page_timeout=60000,  # 60s page load timeout
+        cache_mode=CacheMode.BYPASS,
+        magic=True,
+        remove_overlay_elements=True,
+        js_code=JS_CONSENT_CLICK,
+        wait_for="body",
+        page_timeout=60000,
     )
-
     _SCRAPER_LOG.info("crawl4ai_step_visit", url=url)
-
     try:
-        # verbose=False: crawl4ai logs use Unicode symbols that break on Windows cp1252 consoles.
         async with AsyncWebCrawler(verbose=False) as crawler:
-            # Run the crawl
             result: Any = await crawler.arun(url=url, config=run_config)
 
             if not result.success:
@@ -161,7 +246,6 @@ async def extract_structured_data(
 
             _SCRAPER_LOG.info("crawl4ai_step_parse", url=url)
 
-            # 4. Parse and Return Data
             try:
                 extracted = result.extracted_content
                 if not (isinstance(extracted, str) and extracted.strip()):
@@ -176,7 +260,6 @@ async def extract_structured_data(
                         return {"raw_content": fb}
                     _tracker.end(url, start_time, success=False)
                     return None
-                # result.extracted_content is usually a JSON string from the LLM
                 data = json.loads(extracted)
                 if data is None or (isinstance(data, list) and len(data) == 0):
                     fb = _page_text_fallback(result)
@@ -198,10 +281,10 @@ async def extract_structured_data(
                     "crawl4ai_llm_raw_text_not_json",
                     url=url,
                 )
-                raw = result.extracted_content
-                if isinstance(raw, str) and raw.strip():
+                raw_err = result.extracted_content
+                if isinstance(raw_err, str) and raw_err.strip():
                     _tracker.end(url, start_time, success=True)
-                    return {"raw_content": raw}
+                    return {"raw_content": raw_err}
                 fb = _page_text_fallback(result)
                 if fb:
                     _tracker.end(url, start_time, success=True)
@@ -226,3 +309,26 @@ async def extract_structured_data(
         _SCRAPER_LOG.exception("crawl4ai_unexpected_error", url=url)
         _tracker.end(url, start_time, success=False)
         raise
+
+
+async def extract_structured_data(
+    url: str,
+    schema: Type[BaseModel],
+    model_name: str = "mistral-nemo-instruct-2407-abliterated",
+    instruction: str = "Extract the data according to the schema.",
+) -> Optional[Dict[str, Any]]:
+    """
+    Crawl4AI page fetch; structured fields via LLM.
+
+    ``WORKFLOW_LLM_BACKEND=lm_studio``: OpenAI-compatible server at ``LM_STUDIO_URL``.
+    ``ai_studio`` / ``google`` / ``gemini``: markdown crawl then ``LLMAdapter`` (Gemini).
+    """
+    start_time = _tracker.start(url)
+    _SCRAPER_LOG.info("crawl4ai_step_llm_config", model_name=model_name)
+    if get_workflow_llm_backend() == "google":
+        return await _extract_structured_google_backend(
+            url, schema, model_name, instruction, start_time
+        )
+    return await _extract_structured_lm_studio_backend(
+        url, schema, model_name, instruction, start_time
+    )

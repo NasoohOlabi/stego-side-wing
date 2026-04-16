@@ -19,11 +19,13 @@ from workflows.utils.text_utils import (
     flatten_comments,
     parse_json_array_response,
 )
+from workflows.utils.angles_llm_config import (
+    SYSTEM_PROMPT as ANGLES_SYSTEM_PROMPT,
+    TEMPERATURE as ANGLES_TEMPERATURE,
+    USER_PROMPT_TEMPLATE as ANGLES_USER_PROMPT_TEMPLATE,
+    angles_model_name,
+)
 from workflows.utils.workflow_llm_prompts import get_prompts
-from pipelines.angles.angle_runner import angles_model_name
-from pipelines.angles.angle_runner import SYSTEM_PROMPT as ANGLES_SYSTEM_PROMPT
-from pipelines.angles.angle_runner import TEMPERATURE as ANGLES_TEMPERATURE
-from pipelines.angles.angle_runner import USER_PROMPT_TEMPLATE as ANGLES_USER_PROMPT_TEMPLATE
 
 _LOG = logger.bind(component="GenAnglesPipeline")
 

@@ -6,10 +6,10 @@ from unittest.mock import patch
 import pytest
 
 from workflows.pipelines.research import is_likely_google_quota_error
-from workflows.runner import (
-    WorkflowRunner,
-    _compressed_full_for_live_receiver,
-    _is_receiver_data_load_failure,
+from workflows.runner import WorkflowRunner
+from workflows.runner_orchestration_utils import (
+    compressed_full_for_live_receiver,
+    is_receiver_data_load_failure,
 )
 
 
@@ -20,15 +20,15 @@ def test_is_likely_google_quota_error() -> None:
 
 
 def test_is_receiver_data_load_failure() -> None:
-    assert _is_receiver_data_load_failure(RuntimeError("Receiver data-load failed: x"))
-    assert not _is_receiver_data_load_failure(RuntimeError("other"))
+    assert is_receiver_data_load_failure(RuntimeError("Receiver data-load failed: x"))
+    assert not is_receiver_data_load_failure(RuntimeError("other"))
 
 
 def test_compressed_full_for_live_receiver_prefers_override() -> None:
     stego = {"embedding": {"compression": {"compressed": "1abc"}}}
-    assert _compressed_full_for_live_receiver(stego, "override") == "override"
-    assert _compressed_full_for_live_receiver(stego, None) == "1abc"
-    assert _compressed_full_for_live_receiver(stego, "  ") == "1abc"
+    assert compressed_full_for_live_receiver(stego, "override") == "override"
+    assert compressed_full_for_live_receiver(stego, None) == "1abc"
+    assert compressed_full_for_live_receiver(stego, "  ") == "1abc"
 
 
 def test_live_sim_skips_receiver_data_load_then_succeeds(tmp_path: Path) -> None:
@@ -47,7 +47,7 @@ def test_live_sim_skips_receiver_data_load_then_succeeds(tmp_path: Path) -> None
             raise n
         return n
 
-    with patch("workflows.runner._run_stego_receiver_live_sim_once", side_effect=_once):
+    with patch("workflows.runner.run_stego_receiver_live_sim_once", side_effect=_once):
         out = runner.run_stego_receiver_live_sim(
             "alice",
             post_id=None,
@@ -67,7 +67,7 @@ def test_live_sim_raises_non_data_load_runtime_error(tmp_path: Path) -> None:
     def _once(**kwargs: object) -> dict:
         raise RuntimeError("receiver failed for other reasons")
 
-    with patch("workflows.runner._run_stego_receiver_live_sim_once", side_effect=_once):
+    with patch("workflows.runner.run_stego_receiver_live_sim_once", side_effect=_once):
         with pytest.raises(RuntimeError, match="other reasons"):
             runner.run_stego_receiver_live_sim(
                 "alice",
@@ -93,7 +93,7 @@ def test_live_sim_skips_google_quota_then_succeeds(tmp_path: Path) -> None:
             raise n
         return n
 
-    with patch("workflows.runner._run_stego_receiver_live_sim_once", side_effect=_once):
+    with patch("workflows.runner.run_stego_receiver_live_sim_once", side_effect=_once):
         out = runner.run_stego_receiver_live_sim(
             "alice",
             post_id=None,

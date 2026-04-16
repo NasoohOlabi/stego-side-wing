@@ -38,6 +38,32 @@ def _elapsed_ms(since: float) -> int:
     return int((time.perf_counter() - since) * 1000)
 
 
+def _fetch_progress_fields(urls_completed: int, urls_total: int) -> Dict[str, float | int]:
+    """Share of URL fetches finished (by count), for batch/phase logs."""
+    if urls_total <= 0:
+        return {"urls_total": 0, "urls_completed": 0, "fetch_progress_pct": 100.0}
+    c = max(0, min(urls_completed, urls_total))
+    return {
+        "urls_total": urls_total,
+        "urls_completed": c,
+        "fetch_progress_pct": round(100.0 * c / urls_total, 2),
+    }
+
+
+def _fetch_url_slot_progress(
+    url_index: int, urls_total: int
+) -> Dict[str, float | int]:
+    """Queue slot before this URL (1-based index); parallel fetches may finish out of order."""
+    if urls_total <= 0:
+        return {}
+    before = max(0, url_index - 1)
+    return {
+        "urls_total": urls_total,
+        "url_index": url_index,
+        "fetch_progress_pct": round(100.0 * before / urls_total, 2),
+    }
+
+
 def is_likely_google_quota_error(exc: BaseException) -> bool:
     s = str(exc).lower()
     needles = (
@@ -67,10 +93,15 @@ class ResearchPipeline:
         post_id: str,
         url: str,
         use_fetch_cache: bool,
+        url_index: int | None = None,
+        urls_total: int | None = None,
     ) -> FetchUrlResult:
         """Run fetch in an isolated worker with per-attempt timeout; retry on timeout."""
         attempts = _fetch_attempts_total()
         ts = _RESEARCH_FETCH_TIMEOUT_SEC
+        prog: Dict[str, float | int] = {}
+        if url_index is not None and urls_total is not None:
+            prog = _fetch_url_slot_progress(url_index, urls_total)
         for attempt in range(1, attempts + 1):
             if attempt > 1:
                 self._log.info(
@@ -81,6 +112,7 @@ class ResearchPipeline:
                     attempt=attempt,
                     attempts_total=attempts,
                     timeout_sec=ts,
+                    **prog,
                 )
             ex = ThreadPoolExecutor(max_workers=1)
             fut = ex.submit(self.fetch_content.fetch, url, use_fetch_cache)
@@ -97,6 +129,7 @@ class ResearchPipeline:
                     attempts_total=attempts,
                     timeout_sec=ts,
                     will_retry=attempt < attempts,
+                    **prog,
                 )
                 if attempt >= attempts:
                     err = f"Timed out after {attempts} attempt(s) ({ts}s each)"
@@ -107,6 +140,7 @@ class ResearchPipeline:
                         url=url,
                         attempts_total=attempts,
                         timeout_sec=ts,
+                        **prog,
                     )
                     return FetchUrlResult(url=url, success=False, error=err)
                 continue
@@ -117,6 +151,7 @@ class ResearchPipeline:
                     post_id,
                     url,
                     attempt,
+                    **prog,
                 )
                 return FetchUrlResult(url=url, success=False, error=str(e))
             else:
@@ -389,6 +424,7 @@ class ResearchPipeline:
             fetch_timeout_sec=_RESEARCH_FETCH_TIMEOUT_SEC,
             fetch_retries=_RESEARCH_FETCH_RETRIES,
             fetch_attempts_total=_fetch_attempts_total(),
+            **_fetch_progress_fields(0, total_urls),
         )
 
         batch_num = 0
@@ -408,21 +444,25 @@ class ResearchPipeline:
                 batch_index=batch_num,
                 batch_url_count=len(urls),
                 urls=urls[:5],
+                **_fetch_progress_fields(i, total_urls),
             )
             with ThreadPoolExecutor(max_workers=batch_size) as pool:
                 future_items = [
                     (
                         url,
+                        i + j + 1,
                         pool.submit(
                             self._fetch_url_with_timeout_retries,
                             post_id,
                             url,
                             use_fetch_cache,
+                            i + j + 1,
+                            total_urls,
                         ),
                     )
-                    for url in urls
+                    for j, url in enumerate(urls)
                 ]
-                for url, future in future_items:
+                for url, url_index, future in future_items:
                     try:
                         fetch_result = future.result()
                         page_report: Dict[str, Any] = {
@@ -443,7 +483,12 @@ class ResearchPipeline:
                             )
                         fetched_pages.append(page_report)
                     except Exception as e:
-                        log.exception("content fetch failed post_id={} url={}", post_id, url)
+                        log.exception(
+                            "content fetch failed post_id={} url={}",
+                            post_id,
+                            url,
+                            **_fetch_url_slot_progress(url_index, total_urls),
+                        )
                         fetched_pages.append(
                             {
                                 "url": url,
@@ -458,6 +503,7 @@ class ResearchPipeline:
                 post_id=post_id,
                 batch_index=batch_num,
                 elapsed_ms=_elapsed_ms(t_batch),
+                **_fetch_progress_fields(i + len(urls), total_urls),
             )
 
         t_after_fetch = time.perf_counter()
@@ -471,6 +517,7 @@ class ResearchPipeline:
             urls_to_fetch=total_urls,
             batch_count=n_batches,
             pages_recorded=len(fetched_pages),
+            **_fetch_progress_fields(total_urls, total_urls),
         )
 
         post_copy = dict(post)

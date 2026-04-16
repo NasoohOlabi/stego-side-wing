@@ -291,6 +291,11 @@ def _first_non_empty_line_index(lines: list[str]) -> int:
     return -1
 
 
+def _normalize_payload_probe_line(line: str) -> str:
+    """Strip leading BOM so payload-start detection sees ``[`` / ``{`` / ``idx:``."""
+    return line.lstrip("\ufeff")
+
+
 def _strip_plain_thinking_prefix(text: str) -> str:
     """Remove leading plain-text 'Thinking Process:' blocks (no XML tags)."""
     plain, rest = _split_plain_thinking_prefix(text)
@@ -305,7 +310,8 @@ def _split_plain_thinking_prefix(text: str) -> tuple[str, str]:
         return "", text
     for j in range(i0 + 1, len(lines)):
         line = lines[j]
-        if _PAYLOAD_START_LINE_RE.match(line) or line.lstrip().startswith("```"):
+        probe = _normalize_payload_probe_line(line)
+        if _PAYLOAD_START_LINE_RE.match(probe) or probe.lstrip().startswith("```"):
             prefix = "\n".join(lines[i0:j])
             rest = "\n".join(lines[j:]).strip()
             return prefix, rest
@@ -314,7 +320,7 @@ def _split_plain_thinking_prefix(text: str) -> tuple[str, str]:
 
 def _strip_redacted_thinking(text: str) -> str:
     """Remove model chain-of-thought wrappers from assistant text for logs and parsing."""
-    s = text
+    s = text.replace("\ufeff", "")
     for _ in range(64):
         prev = s
         for pat in _THINK_PAIR_RES:
@@ -746,6 +752,8 @@ class LLMAdapter:
                         max_tokens=max_tokens,
                     )
                     text = _strip_redacted_thinking(raw)
+                    if not text.strip() and raw.strip():
+                        text = raw.strip()
                     self._log_workflow_llm_turn(
                         provider="gemini",
                         model=model_name,

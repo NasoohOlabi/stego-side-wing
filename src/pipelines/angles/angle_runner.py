@@ -608,6 +608,13 @@ def _strip_code_fences(text: str) -> str:
     return cleaned
 
 
+def _json_loads_angles_payload(text: str, *, phase: str) -> Any:
+    stripped = text.strip()
+    if not stripped:
+        raise ValueError(f"angles LLM returned empty text after JSON {phase}")
+    return json.loads(stripped)
+
+
 def _schema_errors(data: Any) -> List[str]:
     errors: List[str] = []
     if not isinstance(data, list):
@@ -761,13 +768,13 @@ def _parse_or_repair(raw_text: str) -> List[Dict[str, str]]:
     except json.JSONDecodeError as exc:
         repaired = _repair_json(cleaned, str(exc), attempt=1)
         cleaned_repair = _strip_code_fences(repaired)
-        data = json.loads(cleaned_repair)
+        data = _json_loads_angles_payload(cleaned_repair, phase="repair")
 
     errors = _schema_errors(data)
     if errors:
         repaired = _repair_json(cleaned, "; ".join(errors), attempt=2)
         cleaned_repair = _strip_code_fences(repaired)
-        data = json.loads(cleaned_repair)
+        data = _json_loads_angles_payload(cleaned_repair, phase="schema repair")
 
         errors = _schema_errors(data)
         if errors:
@@ -848,7 +855,7 @@ def _parse_or_repair_workflow(
             attempt=1,
         )
         cleaned_repair = _strip_code_fences(repaired)
-        data = json.loads(cleaned_repair)
+        data = _json_loads_angles_payload(cleaned_repair, phase="repair")
 
     errors = _schema_errors(data)
     if errors:
@@ -861,7 +868,7 @@ def _parse_or_repair_workflow(
             attempt=2,
         )
         cleaned_repair = _strip_code_fences(repaired)
-        data = json.loads(cleaned_repair)
+        data = _json_loads_angles_payload(cleaned_repair, phase="schema repair")
 
         errors = _schema_errors(data)
         if errors:

@@ -89,6 +89,15 @@ _tracker = Crawl4AITracker()
 _SCRAPER_LOG = logger.bind(component="Crawl4AIScraper")
 
 
+def _crawl4ai_structured_llm_resolution(
+    model_hint: str,
+) -> tuple[str, str, str]:
+    """Backend and ``LLMAdapter`` (provider, model) used for structured extraction."""
+    backend = get_workflow_llm_backend()
+    provider, model = resolve_workflow_llm_provider_and_model(model_hint)
+    return backend, provider, model
+
+
 def _page_text_fallback(crawl_result: Any) -> str:
     """Use crawl markdown/HTML when LLM extraction yields nothing usable."""
     md = getattr(crawl_result, "_markdown", None)
@@ -147,8 +156,14 @@ async def _extract_structured_google_backend(
     instruction: str,
     start_time: float,
 ) -> Optional[Dict[str, Any]]:
+    wf_backend, provider, model = _crawl4ai_structured_llm_resolution(model_name)
     _SCRAPER_LOG.info(
-        "crawl4ai_step_google_backend", url=url, model_name=model_name
+        "crawl4ai_step_google_backend",
+        url=url,
+        workflow_llm_backend=wf_backend,
+        llm_provider=provider,
+        llm_model=model,
+        llm_model_hint=model_name,
     )
     run_config = _markdown_only_run_config()
     try:
@@ -179,7 +194,13 @@ async def _extract_structured_google_backend(
         "Output a single JSON object only (no markdown fences) that conforms "
         f"to this JSON Schema:\n{schema_json}\n\nPage content:\n{page_text[:120_000]}"
     )
-    provider, model = resolve_workflow_llm_provider_and_model(model_name)
+    _SCRAPER_LOG.info(
+        "crawl4ai_llm_invoke",
+        url=url,
+        llm_provider=provider,
+        llm_model=model,
+        llm_model_hint=model_name,
+    )
     raw = LLMAdapter().call_llm(
         prompt=prompt,
         system_message="You extract structured data. Reply with JSON only, no prose.",
@@ -207,6 +228,17 @@ async def _extract_structured_lm_studio_backend(
     instruction: str,
     start_time: float,
 ) -> Optional[Dict[str, Any]]:
+    wf_backend, llm_provider, llm_model = _crawl4ai_structured_llm_resolution(
+        model_name
+    )
+    _SCRAPER_LOG.info(
+        "crawl4ai_step_lm_studio_backend",
+        url=url,
+        workflow_llm_backend=wf_backend,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        llm_model_hint=model_name,
+    )
     base_url = get_lm_studio_url()
     llm_config = LLMConfig(
         provider=f"openai/{model_name}",
@@ -324,8 +356,18 @@ async def extract_structured_data(
     ``ai_studio`` / ``google`` / ``gemini``: markdown crawl then ``LLMAdapter`` (Gemini).
     """
     start_time = _tracker.start(url)
-    _SCRAPER_LOG.info("crawl4ai_step_llm_config", model_name=model_name)
-    if get_workflow_llm_backend() == "google":
+    wf_backend, llm_provider, llm_model = _crawl4ai_structured_llm_resolution(
+        model_name
+    )
+    _SCRAPER_LOG.info(
+        "crawl4ai_step_llm_config",
+        url=url,
+        workflow_llm_backend=wf_backend,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        llm_model_hint=model_name,
+    )
+    if wf_backend == "google":
         return await _extract_structured_google_backend(
             url, schema, model_name, instruction, start_time
         )

@@ -1,4 +1,5 @@
 """API v1: tools (fetch, metrics, search, semantic, angles, protocol previews)."""
+
 from __future__ import annotations
 
 import logging
@@ -32,6 +33,7 @@ from services.search_service import search_bing, search_google, search_news_api,
 from services.semantic_service import find_best_match, semantic_search
 
 logger = logging.getLogger(__name__)
+
 
 @bp.route("/tools/process-file", methods=["POST"])
 def tool_process_file() -> tuple[Any, int]:
@@ -552,4 +554,3 @@ def tool_protocol_angles_preview() -> tuple[Any, int]:
         )
     except Exception as exc:
         return fail("Angles preview failed", status=500, details=str(exc))
-

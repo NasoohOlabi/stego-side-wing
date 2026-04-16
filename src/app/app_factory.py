@@ -1,4 +1,5 @@
 """Flask application factory."""
+
 import atexit
 import logging
 import time
@@ -83,11 +84,11 @@ def create_app(
         if tok is not None:
             reset_trace_id(tok)
         return response
-    
+
     # Start the persistent event loop at module level
     # This ensures it's available before any requests are handled
     start_event_loop()
-    
+
     # Configure Flask-Caching
     cache = Cache(
         config={
@@ -99,18 +100,18 @@ def create_app(
     )
     cache.init_app(app)
     app.config["cache"] = cache
-    
+
     # Register blueprints
     from app.routes import (
-        api_v1_routes,
         analysis_routes,
         angles_routes,
+        api_v1_routes,
         kv_routes,
         posts_routes,
         search_routes,
         semantic_routes,
     )
-    
+
     app.register_blueprint(api_v1_routes.bp)
     api_v1_routes.init_workflow_runner(app)
     app.register_blueprint(posts_routes.bp)
@@ -119,7 +120,7 @@ def create_app(
     app.register_blueprint(semantic_routes.bp)
     app.register_blueprint(angles_routes.bp)
     app.register_blueprint(kv_routes.bp)
-    
+
     # Register root route
     @app.route("/", methods=["GET"])
     def index():
@@ -128,7 +129,7 @@ def create_app(
             "Welcome to stego-side-wing API. "
             "Use /api/v1/health and /api/v1/state/steps for the versioned API surface."
         )
-    
+
     # Cleanup on app shutdown
     atexit.register(stop_event_loop)
 

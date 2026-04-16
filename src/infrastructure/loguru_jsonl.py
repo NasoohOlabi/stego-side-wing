@@ -1,4 +1,5 @@
 """Loguru sinks emitting JSONL aligned with observability rules (timestamp, level, component, trace_id, message)."""
+
 from __future__ import annotations
 
 import inspect
@@ -6,7 +7,7 @@ import json
 import logging
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO, cast
 
@@ -31,9 +32,9 @@ _LOGRECORD_STD_KEYS = frozenset(
 
 def _iso_utc_z(dt: datetime) -> str:
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     else:
-        dt = dt.astimezone(timezone.utc)
+        dt = dt.astimezone(UTC)
     return dt.isoformat().replace("+00:00", "Z")
 
 
@@ -69,9 +70,7 @@ def _payload_from_loguru_message(message: Any) -> dict[str, Any]:
     if exc is not None:
         try:
             typ, val, steb = exc  # type: ignore[misc]
-            payload["exc_info"] = "".join(
-                traceback.format_exception(typ, val, steb)
-            ).rstrip()
+            payload["exc_info"] = "".join(traceback.format_exception(typ, val, steb)).rstrip()
         except Exception:
             payload["exc_info"] = str(exc)
     for key, value in extra.items():

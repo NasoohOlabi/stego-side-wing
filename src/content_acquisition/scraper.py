@@ -1,9 +1,7 @@
-import asyncio
 import json
-import os
 import threading
 import time
-from typing import Any, Dict, Optional, Type, cast
+from typing import Any, cast
 
 from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig, LLMConfig
 from crawl4ai.extraction_strategy import LLMExtractionStrategy
@@ -21,6 +19,7 @@ from workflows.adapters.llm import LLMAdapter
 
 def _lm_studio_api_token() -> str:
     return (get_env("LM_STUDIO_API_TOKEN") or "lm-studio").strip() or "lm-studio"
+
 
 # Custom JavaScript to click common "Accept Cookies" buttons if Magic Mode misses them
 JS_CONSENT_CLICK = """
@@ -124,9 +123,7 @@ def _markdown_only_run_config() -> CrawlerRunConfig:
     )
 
 
-def parse_structured_llm_schema_text(
-    raw: str, schema: Type[BaseModel]
-) -> Optional[Dict[str, Any]]:
+def parse_structured_llm_schema_text(raw: str, schema: type[BaseModel]) -> dict[str, Any] | None:
     text = raw.strip()
     if text.startswith("```"):
         chunks = text.split("```")
@@ -151,11 +148,11 @@ def parse_structured_llm_schema_text(
 
 async def _extract_structured_google_backend(
     url: str,
-    schema: Type[BaseModel],
+    schema: type[BaseModel],
     model_name: str,
     instruction: str,
     start_time: float,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     wf_backend, provider, model = _crawl4ai_structured_llm_resolution(model_name)
     _SCRAPER_LOG.info(
         "crawl4ai_step_google_backend",
@@ -223,14 +220,12 @@ async def _extract_structured_google_backend(
 
 async def _extract_structured_lm_studio_backend(
     url: str,
-    schema: Type[BaseModel],
+    schema: type[BaseModel],
     model_name: str,
     instruction: str,
     start_time: float,
-) -> Optional[Dict[str, Any]]:
-    wf_backend, llm_provider, llm_model = _crawl4ai_structured_llm_resolution(
-        model_name
-    )
+) -> dict[str, Any] | None:
+    wf_backend, llm_provider, llm_model = _crawl4ai_structured_llm_resolution(model_name)
     _SCRAPER_LOG.info(
         "crawl4ai_step_lm_studio_backend",
         url=url,
@@ -307,7 +302,7 @@ async def _extract_structured_lm_studio_backend(
                     return None
                 _SCRAPER_LOG.info("crawl4ai_success", url=url)
                 _tracker.end(url, start_time, success=True)
-                return cast(Dict[str, Any], data)
+                return cast(dict[str, Any], data)
             except json.JSONDecodeError:
                 _SCRAPER_LOG.warning(
                     "crawl4ai_llm_raw_text_not_json",
@@ -345,10 +340,10 @@ async def _extract_structured_lm_studio_backend(
 
 async def extract_structured_data(
     url: str,
-    schema: Type[BaseModel],
+    schema: type[BaseModel],
     model_name: str = "mistral-nemo-instruct-2407-abliterated",
     instruction: str = "Extract the data according to the schema.",
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Crawl4AI page fetch; structured fields via LLM.
 
@@ -356,9 +351,7 @@ async def extract_structured_data(
     ``ai_studio`` / ``google`` / ``gemini``: markdown crawl then ``LLMAdapter`` (Gemini).
     """
     start_time = _tracker.start(url)
-    wf_backend, llm_provider, llm_model = _crawl4ai_structured_llm_resolution(
-        model_name
-    )
+    wf_backend, llm_provider, llm_model = _crawl4ai_structured_llm_resolution(model_name)
     _SCRAPER_LOG.info(
         "crawl4ai_step_llm_config",
         url=url,

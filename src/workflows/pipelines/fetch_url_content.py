@@ -1,6 +1,6 @@
 """Fetch and process URL content."""
+
 import time
-from typing import Optional
 from urllib.parse import urlparse
 
 from loguru import logger
@@ -14,7 +14,7 @@ _MAX_FRESH_ATTEMPTS_AFTER_VALIDATION_FAILURE = 3
 _LOG = logger.bind(component="FetchUrlContentPipeline")
 
 
-def _url_host(url: str) -> Optional[str]:
+def _url_host(url: str) -> str | None:
     try:
         return urlparse(url.strip()).netloc or None
     except Exception:
@@ -68,9 +68,7 @@ class FetchUrlContentPipeline:
                     phase=f"recovery_attempt_{attempt}",
                 )
                 return self._finalize(result, summarize)
-            self._log_validation_reject(
-                url, result, f"recovery_attempt_{attempt}_disk_bypass"
-            )
+            self._log_validation_reject(url, result, f"recovery_attempt_{attempt}_disk_bypass")
         raise RuntimeError(
             f"URL content failed validation after {_MAX_FRESH_ATTEMPTS_AFTER_VALIDATION_FAILURE} "
             f"live refetches (disk cache bypassed): {url}. "
@@ -104,8 +102,8 @@ class FetchUrlContentPipeline:
         Raises ``RuntimeError`` if validation still fails.
         """
         t0 = time.perf_counter()
-        result: Optional[FetchUrlResult] = None
-        exc_out: Optional[BaseException] = None
+        result: FetchUrlResult | None = None
+        exc_out: BaseException | None = None
         try:
             result = self._run_fetch_core(url, use_cache, summarize)
             return result

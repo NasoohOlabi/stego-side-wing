@@ -1,9 +1,10 @@
 """Adapter for content fetching with explicit local/HTTP clients."""
+
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 from loguru import logger
@@ -27,11 +28,11 @@ _ERROR_INDICATORS: tuple[str, ...] = (
 )
 
 
-def _validation_indicator_hits(text_lower: str) -> Dict[str, int]:
+def _validation_indicator_hits(text_lower: str) -> dict[str, int]:
     return {tok: text_lower.count(tok) for tok in _ERROR_INDICATORS if tok in text_lower}
 
 
-def _build_validation_report(text: Optional[str]) -> Dict[str, Any]:
+def _build_validation_report(text: str | None) -> dict[str, Any]:
     if not text or not str(text).strip():
         return {
             "passed": False,
@@ -44,7 +45,7 @@ def _build_validation_report(text: Optional[str]) -> Dict[str, Any]:
     body = str(text)
     lower = body.lower()
     hits = _validation_indicator_hits(lower)
-    matched: List[str] = [k for k in _ERROR_INDICATORS if k in lower]
+    matched: list[str] = [k for k in _ERROR_INDICATORS if k in lower]
     distinct = len(matched)
     passed = distinct < 2
     return {
@@ -57,7 +58,7 @@ def _build_validation_report(text: Optional[str]) -> Dict[str, Any]:
     }
 
 
-def _enrich_validation_log_fields(text: Optional[str], base: Dict[str, Any]) -> Dict[str, Any]:
+def _enrich_validation_log_fields(text: str | None, base: dict[str, Any]) -> dict[str, Any]:
     if not text:
         return base
     body = text
@@ -77,7 +78,7 @@ class LocalContentClient:
     """In-process content fetch client."""
 
     @staticmethod
-    def fetch(url: str, *, use_disk_cache: bool = True) -> Dict[str, Any]:
+    def fetch(url: str, *, use_disk_cache: bool = True) -> dict[str, Any]:
         from services.analysis_service import fetch_url_content_crawl4ai
 
         return fetch_url_content_crawl4ai(url, use_disk_cache=use_disk_cache)
@@ -89,7 +90,7 @@ class HttpContentClient:
     def __init__(self, base_url: str):
         self.base_url = base_url
 
-    def fetch(self, url: str) -> Dict[str, Any]:
+    def fetch(self, url: str) -> dict[str, Any]:
         response = requests.post(
             f"{self.base_url}/fetch_url_content_crawl4ai",
             params={"url": url},
@@ -102,7 +103,7 @@ class HttpContentClient:
 class ContentAdapter:
     """Adapter for fetching and processing URL content."""
 
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(self, base_url: str | None = None):
         self.config: WorkflowConfig = get_config()
         resolved = base_url or self.config.base_url or "http://127.0.0.1:5001"
         self.base_url = resolved
@@ -197,16 +198,20 @@ class ContentAdapter:
             self._cache_content(url, api_response)
         return result
 
-    def _get_cached_content(self, url: str) -> Optional[FetchUrlResult]:
+    def _get_cached_content(self, url: str) -> FetchUrlResult | None:
         normalized_url = normalize_url(url)
         cache_key = deterministic_hash_sha256(normalized_url)
         cache_file = get_config().url_cache_dir / f"{cache_key}.json"
         if not cache_file.exists():
             return None
         try:
-            with open(cache_file, "r", encoding="utf-8") as f:
+            with open(cache_file, encoding="utf-8") as f:
                 cached_response = json.load(f)
-            result_data = cached_response.get("result") if isinstance(cached_response, dict) else cached_response
+            result_data = (
+                cached_response.get("result")
+                if isinstance(cached_response, dict)
+                else cached_response
+            )
             if result_data is None or (isinstance(result_data, list) and len(result_data) == 0):
                 return None
             normalized = self._normalize_result(url=url, result_data=result_data)
@@ -216,7 +221,7 @@ class ContentAdapter:
         except Exception:
             return None
 
-    def _cache_content(self, url: str, api_response: Dict[str, Any]) -> None:
+    def _cache_content(self, url: str, api_response: dict[str, Any]) -> None:
         normalized_url = normalize_url(url)
         cache_key = deterministic_hash_sha256(normalized_url)
         cache_file = get_config().url_cache_dir / f"{cache_key}.json"
@@ -226,16 +231,16 @@ class ContentAdapter:
         except Exception:
             pass
 
-    def content_validation_report(self, text: Optional[str]) -> Dict[str, Any]:
+    def content_validation_report(self, text: str | None) -> dict[str, Any]:
         """Structured outcome of the HTML/text heuristic (for logs and debugging)."""
         base = _build_validation_report(text)
         raw = text if text and str(text).strip() else None
         return _enrich_validation_log_fields(raw, base)
 
-    def validate_content(self, text: Optional[str]) -> bool:
+    def validate_content(self, text: str | None) -> bool:
         return bool(_build_validation_report(text)["passed"])
 
-    def log_validation_failed(self, *, url: str, text: Optional[str], phase: str) -> None:
+    def log_validation_failed(self, *, url: str, text: str | None, phase: str) -> None:
         """Emit JSONL-friendly fields when ``validate_content`` would reject ``text``."""
         report = self.content_validation_report(text)
         _LOG.bind(trace_id=None).warning(

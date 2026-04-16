@@ -1,8 +1,10 @@
 """Research pipeline: generate search terms, search, and fetch content."""
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+
 import os
 import time
-from typing import Any, Dict, List
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
@@ -38,7 +40,7 @@ def _elapsed_ms(since: float) -> int:
     return int((time.perf_counter() - since) * 1000)
 
 
-def _fetch_progress_fields(urls_completed: int, urls_total: int) -> Dict[str, float | int]:
+def _fetch_progress_fields(urls_completed: int, urls_total: int) -> dict[str, float | int]:
     """Share of URL fetches finished (by count), for batch/phase logs."""
     if urls_total <= 0:
         return {"urls_total": 0, "urls_completed": 0, "fetch_progress_pct": 100.0}
@@ -50,9 +52,7 @@ def _fetch_progress_fields(urls_completed: int, urls_total: int) -> Dict[str, fl
     }
 
 
-def _fetch_url_slot_progress(
-    url_index: int, urls_total: int
-) -> Dict[str, float | int]:
+def _fetch_url_slot_progress(url_index: int, urls_total: int) -> dict[str, float | int]:
     """Queue slot before this URL (1-based index); parallel fetches may finish out of order."""
     if urls_total <= 0:
         return {}
@@ -86,7 +86,7 @@ class ResearchPipeline:
         self.backend = BackendAPIAdapter()
         self.gen_terms = GenSearchTermsPipeline()
         self.fetch_content = FetchUrlContentPipeline()
-        self.last_research_breakdown_posts: List[Dict[str, Any]] = []
+        self.last_research_breakdown_posts: list[dict[str, Any]] = []
 
     def _fetch_url_with_timeout_retries(
         self,
@@ -99,7 +99,7 @@ class ResearchPipeline:
         """Run fetch in an isolated worker with per-attempt timeout; retry on timeout."""
         attempts = _fetch_attempts_total()
         ts = _RESEARCH_FETCH_TIMEOUT_SEC
-        prog: Dict[str, float | int] = {}
+        prog: dict[str, float | int] = {}
         if url_index is not None and urls_total is not None:
             prog = _fetch_url_slot_progress(url_index, urls_total)
         for attempt in range(1, attempts + 1):
@@ -160,7 +160,7 @@ class ResearchPipeline:
         raise RuntimeError("research fetch retry loop fell through")
 
     @staticmethod
-    def _search_summary(result: Dict[str, Any]) -> Dict[str, Any]:
+    def _search_summary(result: dict[str, Any]) -> dict[str, Any]:
         return {
             "title": result.get("title", ""),
             "link": result.get("link", ""),
@@ -170,7 +170,7 @@ class ResearchPipeline:
 
     def _web_search_google_or_bing(
         self, query: str, first: int, count: int, post_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Google CSE first; on quota-style failures try Bing (ScrapingDog) if configured."""
         from services.search_service import search_bing
 
@@ -195,13 +195,13 @@ class ResearchPipeline:
 
     def preview_post(
         self,
-        post: Dict[str, Any],
+        post: dict[str, Any],
         step: str = "filter-researched",
         force: bool = False,
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Run the live research protocol without saving the output."""
         post_id = post.get("id")
         if not post_id:
@@ -311,9 +311,9 @@ class ResearchPipeline:
             post_copy["search_results"] = []
             return {"post": post_copy, "report": report}
 
-        all_search_results: List[Dict[str, Any]] = []
-        search_events: List[Dict[str, Any]] = []
-        raw_results_by_term: List[List[Dict[str, Any]]] = []
+        all_search_results: list[dict[str, Any]] = []
+        search_events: list[dict[str, Any]] = []
+        raw_results_by_term: list[list[dict[str, Any]]] = []
         seen_links: set[str] = set()
         n_terms = len(search_terms)
         t_search_phase0 = time.perf_counter()
@@ -355,8 +355,8 @@ class ResearchPipeline:
                 raw_hits=len(raw_results),
             )
 
-            selected_for_term: List[Dict[str, Any]] = []
-            skipped_for_term: List[Dict[str, Any]] = []
+            selected_for_term: list[dict[str, Any]] = []
+            skipped_for_term: list[dict[str, Any]] = []
             for result in raw_results:
                 link = result.get("link", "")
                 if not link:
@@ -407,8 +407,8 @@ class ResearchPipeline:
                 selected_unique_urls=len(all_search_results),
             )
 
-        fetched_texts: List[str] = []
-        fetched_pages: List[Dict[str, Any]] = []
+        fetched_texts: list[str] = []
+        fetched_pages: list[dict[str, Any]] = []
         batch_size = 3
         total_urls = len(all_search_results)
         n_batches = (total_urls + batch_size - 1) // batch_size if total_urls else 0
@@ -430,9 +430,7 @@ class ResearchPipeline:
         batch_num = 0
         for i in range(0, len(all_search_results), batch_size):
             batch = all_search_results[i : i + batch_size]
-            urls: List[str] = [
-                str(link) for link in (r.get("link") for r in batch) if link
-            ]
+            urls: list[str] = [str(link) for link in (r.get("link") for r in batch) if link]
             if not urls:
                 continue
             batch_num += 1
@@ -465,7 +463,7 @@ class ResearchPipeline:
                 for url, url_index, future in future_items:
                     try:
                         fetch_result = future.result()
-                        page_report: Dict[str, Any] = {
+                        page_report: dict[str, Any] = {
                             "url": url,
                             "success": fetch_result.success,
                             "content_type": fetch_result.content_type,
@@ -536,9 +534,7 @@ class ResearchPipeline:
             "search_terms_hash": stable_hash(search_terms),
             "terms_report": terms_report,
             "searches": search_events,
-            "selected_results": [
-                self._search_summary(result) for result in all_search_results
-            ],
+            "selected_results": [self._search_summary(result) for result in all_search_results],
             "fetched_pages": fetched_pages,
             "search_results": fetched_texts,
             "search_results_hash": stable_hash(fetched_texts),
@@ -561,7 +557,7 @@ class ResearchPipeline:
         return {"post": post_copy, "report": report}
 
     @staticmethod
-    def _is_new_post(post: Dict[str, Any]) -> bool:
+    def _is_new_post(post: dict[str, Any]) -> bool:
         """
         Mirror n8n "New" IF node semantics:
         treat post as new when search_results is missing, empty,
@@ -575,7 +571,7 @@ class ResearchPipeline:
             return len([x for x in search_results if isinstance(x, str) and x.strip()]) == 0
 
         if isinstance(search_results, dict):
-            flattened: List[Any] = []
+            flattened: list[Any] = []
             for value in search_results.values():
                 if isinstance(value, list):
                     flattened.extend(value)
@@ -584,16 +580,16 @@ class ResearchPipeline:
             return len([x for x in flattened if isinstance(x, str) and x.strip()]) == 0
 
         return False
-    
+
     def _research_post_pair(
         self,
-        post: Dict,
+        post: dict,
         step: str = "filter-researched",
         force: bool = False,
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
-    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         preview = self.preview_post(
             post=post,
             step=step,
@@ -606,13 +602,13 @@ class ResearchPipeline:
 
     def research_post(
         self,
-        post: Dict,
+        post: dict,
         step: str = "filter-researched",
         force: bool = False,
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
-    ) -> Dict:
+    ) -> dict:
         """
         Research a single post: generate terms, search, fetch content.
 
@@ -632,14 +628,14 @@ class ResearchPipeline:
             use_fetch_cache=use_fetch_cache,
         )
         return post_out
-    
+
     def process_posts(
         self,
         step: str = "filter-researched",
         count: int = 1,
         offset: int = 1,
         include_breakdown: bool = False,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Process multiple posts for research.
 
@@ -678,7 +674,7 @@ class ResearchPipeline:
             )
             return []
 
-        posts: List[Dict[str, Any]] = []
+        posts: list[dict[str, Any]] = []
         for file_name in file_names:
             try:
                 posts.append(self.backend.get_post_local(file_name, step))
@@ -698,16 +694,16 @@ class ResearchPipeline:
 
     def process_post_objects(
         self,
-        posts: List[Dict[str, Any]],
+        posts: list[dict[str, Any]],
         step: str = "filter-researched",
         force: bool = False,
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
         include_breakdown: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Process already-loaded post objects and persist researched versions."""
-        researched_posts: List[Dict[str, Any]] = []
+        researched_posts: list[dict[str, Any]] = []
         for post in posts:
             post_id = post.get("id", "<unknown>")
             trace_id = str(uuid4())
@@ -732,9 +728,7 @@ class ResearchPipeline:
                     try:
                         self.backend.save_post(researched, step=step)
                     except Exception:
-                        self._log.exception(
-                            "research backend save failed for post_id={}", post_id
-                        )
+                        self._log.exception("research backend save failed for post_id={}", post_id)
                 researched_posts.append(researched)
                 log.info(
                     "research_post_object_complete",
@@ -762,7 +756,7 @@ class ResearchPipeline:
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Process one post by ID and persist researched output.
 

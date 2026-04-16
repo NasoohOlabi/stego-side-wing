@@ -51,10 +51,14 @@ uv run pytest
 
 ## Lint and format
 
+Same roots as `pyrightconfig.json` `include` (matches CI):
+
 ```bash
-uv run ruff check src/app/routes/api_v1 src/app/schemas
-uv run ruff format src
+uv run ruff check src/app src/services src/content_acquisition src/integrations src/infrastructure src/workflows
+uv run ruff format --check src/app src/services src/content_acquisition src/integrations src/infrastructure src/workflows
 ```
+
+To apply formatting: repeat the last command without `--check`.
 
 ## Strict type checking
 

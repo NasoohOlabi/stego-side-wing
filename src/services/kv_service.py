@@ -1,9 +1,10 @@
 """Key-value store service."""
+
 import json
 import logging
 import os
 import sqlite3
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +16,7 @@ def init_db() -> None:
     """Initialize the SQLite database and create the kv table if it doesn't exist."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute(
-        "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)"
-    )
+    cursor.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
     conn.commit()
     conn.close()
 
@@ -56,7 +55,7 @@ def migrate_json_to_sqlite() -> None:
 
     try:
         # Load data from old JSON file
-        with open(OLD_DB_FILE, "r", encoding="utf-8") as f:
+        with open(OLD_DB_FILE, encoding="utf-8") as f:
             old_data = json.load(f)
 
         if not old_data:
@@ -106,14 +105,14 @@ def migrate_json_to_sqlite() -> None:
         raise
 
 
-def set_value(key: str, value: Any) -> Dict[str, Any]:
+def set_value(key: str, value: Any) -> dict[str, Any]:
     """
     Set a key-value pair in the store.
-    
+
     Args:
         key: Key name
         value: Value to store (will be JSON serialized)
-        
+
     Returns:
         Dict with status and data
     """
@@ -123,9 +122,7 @@ def set_value(key: str, value: Any) -> Dict[str, Any]:
     # Insert or replace the key-value pair in SQLite
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value_json)
-    )
+    cursor.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value_json))
     conn.commit()
     conn.close()
 
@@ -140,13 +137,13 @@ def set_value(key: str, value: Any) -> Dict[str, Any]:
     }
 
 
-def get_value(key: str) -> Optional[Dict[str, Any]]:
+def get_value(key: str) -> dict[str, Any] | None:
     """
     Get a value by key.
-    
+
     Args:
         key: Key name
-        
+
     Returns:
         Dict with 'k' and 'v' keys, or None if not found
     """
@@ -171,7 +168,7 @@ def get_value(key: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def list_values(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
+def list_values(limit: int = 100, offset: int = 0) -> dict[str, Any]:
     """
     List key-value entries with basic pagination.
 
@@ -196,7 +193,7 @@ def list_values(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
     rows = cursor.fetchall()
     conn.close()
 
-    items: List[Dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
     for key, raw_value in rows:
         try:
             parsed = json.loads(raw_value)
@@ -215,7 +212,7 @@ def list_values(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
     }
 
 
-def delete_value(key: str) -> Dict[str, Any]:
+def delete_value(key: str) -> dict[str, Any]:
     """
     Delete an entry by key.
 

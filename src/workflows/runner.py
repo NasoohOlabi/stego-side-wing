@@ -1,14 +1,17 @@
 """Workflow runner for orchestrating pipeline execution."""
+
 import json
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
 
 from infrastructure.json_logging import get_trace_id
+from services.workflow_run_tracker import get_run_id
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.config import isolated_workflow_config
 from workflows.pipelines.data_load import DataLoadPipeline
@@ -18,9 +21,6 @@ from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline
 from workflows.pipelines.receiver import ReceiverPipeline
 from workflows.pipelines.research import ResearchPipeline, is_likely_google_quota_error
 from workflows.pipelines.stego import StegoPipeline
-from workflows.utils.debug_probe import write_debug_probe
-from workflows.utils.protocol_utils import stable_hash
-from services.workflow_run_tracker import get_run_id
 from workflows.runner_diff_utils import collect_diff_paths
 from workflows.runner_orchestration_utils import (
     clear_double_process_claim,
@@ -36,6 +36,8 @@ from workflows.runner_orchestration_utils import (
     write_double_process_claim,
 )
 from workflows.runner_validate_post import validation_outcome_from_report
+from workflows.utils.debug_probe import write_debug_probe
+from workflows.utils.protocol_utils import stable_hash
 
 _LOG = logger.bind(component="WorkflowRunner")
 
@@ -58,13 +60,13 @@ class WorkflowRunner:
         self.gen_terms = GenSearchTermsPipeline()
         # In-memory counters for data-load URL fetch failures by post id.
         # This resets when the API process restarts.
-        self._fetch_fail_counts: Dict[str, int] = {}
+        self._fetch_fail_counts: dict[str, int] = {}
 
     @staticmethod
     def _emit(
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
         event: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
     ) -> None:
         if on_progress is None:
             return
@@ -77,7 +79,7 @@ class WorkflowRunner:
     @staticmethod
     def _call_with_optional_progress(
         func: Callable[..., Any],
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
         **kwargs: Any,
     ) -> Any:
         if on_progress is None:
@@ -95,8 +97,8 @@ class WorkflowRunner:
         return dest_dir / f"{post_id}.json"
 
     @staticmethod
-    def _load_json(path: Path) -> Dict[str, Any]:
-        with open(path, "r", encoding="utf-8") as f:
+    def _load_json(path: Path) -> dict[str, Any]:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
 
     @staticmethod
@@ -105,8 +107,8 @@ class WorkflowRunner:
         path.write_text(content, encoding="utf-8")
 
     @staticmethod
-    def _summarize_stage_payload(stage_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        summary: Dict[str, Any] = {"hash": stable_hash(payload)}
+    def _summarize_stage_payload(stage_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        summary: dict[str, Any] = {"hash": stable_hash(payload)}
         if stage_name == "data_load":
             selftext = payload.get("selftext", "")
             summary.update(
@@ -141,7 +143,7 @@ class WorkflowRunner:
         self,
         post_id: str,
         use_cache: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self.data_load.preview_post_id(
             post_id=post_id,
             step="filter-url-unresolved",
@@ -154,8 +156,8 @@ class WorkflowRunner:
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
-        source_post: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        source_post: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         file_name = f"{post_id}.json"
         post = source_post or self.backend.get_post_local(file_name, "filter-researched")
         return self.research.preview_post(
@@ -170,9 +172,9 @@ class WorkflowRunner:
     def preview_gen_angles_post(
         self,
         post_id: str,
-        source_post: Optional[Dict[str, Any]] = None,
+        source_post: dict[str, Any] | None = None,
         allow_fallback: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         file_name = f"{post_id}.json"
         post = source_post or self.backend.get_post_local(file_name, "angles-step")
         return self.gen_angles.preview_post(post=post, allow_fallback=allow_fallback)
@@ -182,8 +184,8 @@ class WorkflowRunner:
         count: int = 100,
         offset: int = 0,
         batch_size: int = 5,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> List[Dict]:
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> list[dict]:
         """Run DataLoad pipeline."""
         self._emit(
             on_progress,
@@ -216,12 +218,12 @@ class WorkflowRunner:
             },
         )
         return results
-    
+
     def run_research(
         self,
         count: int = 1,
         offset: int = 0,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
         include_breakdown: bool = False,
     ) -> Any:
         """Run Research pipeline."""
@@ -285,13 +287,13 @@ class WorkflowRunner:
             },
         )
         return payload_out
-    
+
     def run_gen_angles(
         self,
         count: int = 1,
         offset: int = 0,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> List[Dict]:
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> list[dict]:
         """Run GenAngles pipeline."""
         self._emit(
             on_progress,
@@ -336,21 +338,19 @@ class WorkflowRunner:
             },
         )
         return results
-    
+
     def run_stego(
         self,
-        post_id: Optional[str] = None,
-        payload: Optional[str] = None,
-        tag: Optional[str] = None,
+        post_id: str | None = None,
+        payload: str | None = None,
+        tag: str | None = None,
         list_offset: int = 1,
         run_all: bool = False,
-        max_posts: Optional[int] = None,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> Dict[str, Any]:
+        max_posts: int | None = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """Run Stego pipeline."""
-        max_posts_cap: Optional[int] = (
-            max_posts if max_posts is not None and max_posts >= 1 else None
-        )
+        max_posts_cap: int | None = max_posts if max_posts is not None and max_posts >= 1 else None
         if run_all and post_id:
             raise ValueError("'post_id' cannot be combined with run_all=true")
 
@@ -387,7 +387,7 @@ class WorkflowRunner:
             )
             return result
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         success_count = 0
         failure_count = 0
         seen_failed_post_ids: set[str] = set()
@@ -471,14 +471,14 @@ class WorkflowRunner:
             },
         )
         return result
-    
+
     def run_decode(
         self,
         stego_text: str,
-        angles: List[Dict[str, Any]],
-        few_shots: Optional[List[Dict[str, Any]]] = None,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> Optional[int]:
+        angles: list[dict[str, Any]],
+        few_shots: list[dict[str, Any]] | None = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> int | None:
         """Run Decode pipeline."""
         self._emit(
             on_progress,
@@ -499,7 +499,7 @@ class WorkflowRunner:
 
     def run_receiver(
         self,
-        post: Dict[str, Any],
+        post: dict[str, Any],
         sender_user_id: str,
         *,
         use_fetch_cache: bool = True,
@@ -507,10 +507,10 @@ class WorkflowRunner:
         persist_terms_cache: bool = True,
         use_fetch_cache_research: bool = True,
         allow_fallback: bool = False,
-        compressed_full: Optional[str] = None,
+        compressed_full: str | None = None,
         max_padding_bits: int = 256,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> Dict[str, Any]:
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """Rebuild context on the receiver and recover the stego payload."""
         self._emit(
             on_progress,
@@ -552,17 +552,17 @@ class WorkflowRunner:
         self,
         sender_user_id: str,
         *,
-        post_id: Optional[str] = None,
-        payload: Optional[str] = None,
-        tag: Optional[str] = None,
+        post_id: str | None = None,
+        payload: str | None = None,
+        tag: str | None = None,
         list_offset: int = 1,
-        simulation_root: Optional[Path] = None,
+        simulation_root: Path | None = None,
         max_post_attempts: int = 25,
         allow_fallback: bool = False,
-        compressed_full: Optional[str] = None,
+        compressed_full: str | None = None,
         max_padding_bits: int = 256,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> Dict[str, Any]:
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """Run stego then receiver with disjoint on-disk caches (cold receiver).
 
         When ``post_id`` is omitted, advances ``list_offset`` on receiver data-load
@@ -576,7 +576,7 @@ class WorkflowRunner:
         base = base.resolve()
         multi = post_id is None
         attempts = max(1, max_post_attempts) if multi else 1
-        skipped: List[Dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
 
         for attempt_idx in range(attempts):
             stego_off = list_offset + attempt_idx
@@ -597,8 +597,7 @@ class WorkflowRunner:
                 )
             except Exception as exc:
                 if multi and (
-                    is_receiver_data_load_failure(exc)
-                    or is_likely_google_quota_error(exc)
+                    is_receiver_data_load_failure(exc) or is_likely_google_quota_error(exc)
                 ):
                     stage = (
                         "receiver_data_load"
@@ -651,11 +650,11 @@ class WorkflowRunner:
     def run_gen_search_terms(
         self,
         post_id: str,
-        post_title: Optional[str] = None,
-        post_text: Optional[str] = None,
-        post_url: Optional[str] = None,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> List[str]:
+        post_title: str | None = None,
+        post_text: str | None = None,
+        post_url: str | None = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> list[str]:
         """Run GenSearchTerms pipeline."""
         self._emit(
             on_progress,
@@ -694,12 +693,12 @@ class WorkflowRunner:
     def validate_post_pipeline(
         self,
         post_id: str,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
         use_terms_cache: bool = False,
         persist_terms_cache: bool = False,
         use_fetch_cache: bool = False,
         allow_angles_fallback: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Replay the live protocol for one post and compare with saved stage artifacts.
 
@@ -720,7 +719,7 @@ class WorkflowRunner:
             "gen_angles": "angles-step",
         }
 
-        baseline: Dict[str, Dict[str, Any]] = {}
+        baseline: dict[str, dict[str, Any]] = {}
         for stage_name, step in stage_steps.items():
             path = self._artifact_path(step, post_id)
             if not path.exists():
@@ -734,9 +733,9 @@ class WorkflowRunner:
             "stage_start",
             {"stage": "validate-post", "post_id": post_id},
         )
-        stage_errors: Dict[str, str] = {}
-        rerun_payloads: Dict[str, Dict[str, Any]] = {}
-        protocol_reports: Dict[str, Dict[str, Any]] = {}
+        stage_errors: dict[str, str] = {}
+        rerun_payloads: dict[str, dict[str, Any]] = {}
+        protocol_reports: dict[str, dict[str, Any]] = {}
 
         self._emit(
             on_progress,
@@ -795,7 +794,7 @@ class WorkflowRunner:
             except Exception as exc:
                 stage_errors["gen_angles"] = str(exc)
 
-        steps_report: Dict[str, Dict[str, Any]] = {}
+        steps_report: dict[str, dict[str, Any]] = {}
         valid = True
         upstream_failed = False
         for stage_name, step in stage_steps.items():
@@ -838,9 +837,7 @@ class WorkflowRunner:
             rerun_payload = rerun_payloads[stage_name]
             baseline_payload = baseline[stage_name]
             matches = baseline_payload == rerun_payload
-            changed_keys = [] if matches else collect_diff_paths(
-                baseline_payload, rerun_payload
-            )
+            changed_keys = [] if matches else collect_diff_paths(baseline_payload, rerun_payload)
             steps_report[stage_name] = {
                 "step": step,
                 "comparison": "match" if matches else "mismatch",
@@ -936,7 +933,7 @@ class WorkflowRunner:
         self._fetch_fail_counts.pop(post_id, None)
 
     @staticmethod
-    def _slim_substage_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
+    def _slim_substage_summary(summary: dict[str, Any]) -> dict[str, Any]:
         keys = (
             "hash",
             "selftext_length",
@@ -948,7 +945,7 @@ class WorkflowRunner:
 
     def _double_process_substage_begin(
         self,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
         *,
         post_id: str,
         pass_num: int,
@@ -976,14 +973,14 @@ class WorkflowRunner:
 
     def _double_process_substage_end(
         self,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
         *,
         post_id: str,
         pass_num: int,
         cache_mode: str,
         pipeline_substage: str,
         elapsed_ms: int,
-        summary: Dict[str, Any],
+        summary: dict[str, Any],
     ) -> None:
         slim = self._slim_substage_summary(summary)
         self._emit(
@@ -1011,7 +1008,7 @@ class WorkflowRunner:
 
     def _double_process_substage_failed(
         self,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
         *,
         post_id: str,
         pass_num: int,
@@ -1045,14 +1042,14 @@ class WorkflowRunner:
 
     def _run_timed_dp_substage(
         self,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
         *,
         post_id: str,
         pass_num: int,
         cache_mode: str,
         pipeline_substage: str,
-        run_fn: Callable[[], Dict[str, Any]],
-    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        run_fn: Callable[[], dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         self._double_process_substage_begin(
             on_progress,
             post_id=post_id,
@@ -1096,10 +1093,10 @@ class WorkflowRunner:
         persist_terms_cache: bool,
         use_fetch_cache: bool,
         allow_angles_fallback: bool,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
         pass_num: int = 1,
         cache_mode: str = "unknown",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Run data_load -> research -> gen_angles for one post ID."""
         _, data_summary = self._run_timed_dp_substage(
             on_progress,
@@ -1156,9 +1153,9 @@ class WorkflowRunner:
 
     def run_double_process_new_post(
         self,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
         allow_angles_fallback: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Process one new post twice through data_load -> research -> gen_angles.
 
@@ -1463,11 +1460,11 @@ class WorkflowRunner:
 
     def run_batch_angles_determinism(
         self,
-        post_ids: List[str],
+        post_ids: list[str],
         *,
         step: str = "angles-step",
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> Dict[str, Any]:
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """
         Empirically test whether two fresh angle runs (no angles disk cache) match.
 
@@ -1490,7 +1487,7 @@ class WorkflowRunner:
             },
         )
 
-        row_results: List[Dict[str, Any]] = []
+        row_results: list[dict[str, Any]] = []
 
         for post_id_raw in post_ids:
             if not post_id_raw.strip():
@@ -1652,16 +1649,16 @@ class WorkflowRunner:
         self,
         start_step: str = "filter-url-unresolved",
         count: int = 1,
-        payload: Optional[str] = None,
-        on_progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    ) -> List[Dict]:
+        payload: str | None = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> list[dict]:
         """
         Run full pipeline from start_step to final-step.
-        
+
         Args:
             start_step: Starting step name
             count: Number of posts to process
-        
+
         Returns:
             List of processed posts
         """
@@ -1676,7 +1673,7 @@ class WorkflowRunner:
                 "payload_provided": bool(payload),
             },
         )
-        
+
         if start_step == "filter-url-unresolved":
             data_results = self._call_with_optional_progress(
                 self.run_data_load,

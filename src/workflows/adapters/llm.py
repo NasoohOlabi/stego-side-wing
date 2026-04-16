@@ -1,11 +1,12 @@
 """LLM adapter for multiple providers."""
 
 import json
-import re
 import random
+import re
 import time
-from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 import openai
@@ -24,18 +25,19 @@ from infrastructure.config import (
     get_lm_studio_url,
     get_workflow_llm_backend,
 )
+from infrastructure.json_logging import get_trace_id
 from services.workflow_run_tracker import get_run_id
 from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash
-from infrastructure.json_logging import get_trace_id
 
-
-PROMPTS_LOG_TIMESTAMP = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+PROMPTS_LOG_TIMESTAMP = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 PROMPTS_LOG_PATH = REPO_ROOT / "logs" / f"stego_prompts_{PROMPTS_LOG_TIMESTAMP}.log"
 
 _LLM_ADAPTER_LOG = logger.bind(component="LLMAdapter")
 
 _RETRYABLE_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+
+
 def _llm_max_attempts() -> int:
     raw = (get_env("LLM_MAX_ATTEMPTS") or "").strip()
     return max(1, int(raw or "3"))
@@ -54,7 +56,7 @@ def _llm_retry_jitter_sec(wait_sec: float) -> float:
     return random.uniform(0.0, jitter_cap)
 
 
-def _exception_status_code(exc: BaseException) -> Optional[int]:
+def _exception_status_code(exc: BaseException) -> int | None:
     if isinstance(exc, GoogleGenaiAPIError):
         code = getattr(exc, "code", None)
         if isinstance(code, int):
@@ -109,9 +111,9 @@ def _genai_generate_text(
     api_key: str,
     model_name: str,
     user_text: str,
-    system_message: Optional[str],
+    system_message: str | None,
     temperature: float,
-    max_tokens: Optional[int],
+    max_tokens: int | None,
 ) -> str:
     client = genai.Client(api_key=api_key)
     config = genai_types.GenerateContentConfig(
@@ -152,7 +154,9 @@ def _should_try_next_gemini_api_key(exc: BaseException) -> bool:
     )
 
 
-def _provider_endpoint(provider: str, *, lm_studio_url: str | None = None, model: str | None = None) -> str:
+def _provider_endpoint(
+    provider: str, *, lm_studio_url: str | None = None, model: str | None = None
+) -> str:
     if provider == "openai":
         return "https://api.openai.com/v1/chat/completions"
     if provider == "gemini":
@@ -170,9 +174,9 @@ def _llm_attempt_log_fields(
     model: str,
     endpoint: str,
     prompt: str,
-    system_message: Optional[str],
+    system_message: str | None,
     temperature: float,
-    max_tokens: Optional[int],
+    max_tokens: int | None,
     attempt: int,
     attempts_max: int,
 ) -> dict[str, Any]:
@@ -194,10 +198,10 @@ def _llm_attempt_log_fields(
 
 
 def _openai_compatible_meta(
-    data: Dict[str, Any],
-) -> tuple[Optional[str], Optional[int], Optional[int]]:
+    data: dict[str, Any],
+) -> tuple[str | None, int | None, int | None]:
     """finish_reason and token usage from OpenAI-compatible JSON bodies (LM Studio, Groq)."""
-    finish_reason: Optional[str] = None
+    finish_reason: str | None = None
     choices = data.get("choices")
     if isinstance(choices, list) and choices:
         ch0 = choices[0]
@@ -205,8 +209,8 @@ def _openai_compatible_meta(
             fr = ch0.get("finish_reason")
             if fr is not None:
                 finish_reason = str(fr)
-    prompt_tokens: Optional[int] = None
-    completion_tokens: Optional[int] = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
     usage = data.get("usage")
     if isinstance(usage, dict):
         pt = usage.get("prompt_tokens")
@@ -222,9 +226,9 @@ def _emit_llm_suspicion_logs(
     *,
     provider: str,
     model: str,
-    max_tokens: Optional[int],
-    finish_reason: Optional[str],
-    completion_tokens: Optional[int],
+    max_tokens: int | None,
+    finish_reason: str | None,
+    completion_tokens: int | None,
     raw: str,
     thinking: str,
     response: str,
@@ -251,6 +255,7 @@ def _emit_llm_suspicion_logs(
             raw_chars=len(raw),
             thinking_chars=len(thinking),
         ).warning("llm_strip_removed_all_parseable_response")
+
 
 def _think_pair_patterns() -> tuple[re.Pattern[str], ...]:
     """Long `redacted_thinking` vs short `think`, including mixed open/close."""
@@ -362,7 +367,7 @@ class LLMAdapter:
 
     def __init__(self):
         self.openai_api_key = get_env("OPENAI_API_KEY")
-        self.google_generative_language_api_keys: List[str] = (
+        self.google_generative_language_api_keys: list[str] = (
             get_google_generative_language_api_keys()
         )
         self.google_palm_api_key = get_google_generative_language_api_key()
@@ -370,28 +375,28 @@ class LLMAdapter:
         self.lm_studio_url = get_lm_studio_url()
         self.lm_studio_api_token = get_env("LM_STUDIO_API_TOKEN", "lm-studio")
         self.lm_studio_timeout_sec = get_lm_studio_request_timeout_seconds()
-        self.last_call_metadata: Dict[str, Any] = {}
+        self.last_call_metadata: dict[str, Any] = {}
 
     def _log_workflow_llm_turn(
         self,
         provider: str,
         model: str,
         prompt: str,
-        system_message: Optional[str],
+        system_message: str | None,
         temperature: float,
-        max_tokens: Optional[int],
+        max_tokens: int | None,
         assistant_response_raw: str,
         *,
-        finish_reason: Optional[str] = None,
-        prompt_tokens: Optional[int] = None,
-        completion_tokens: Optional[int] = None,
+        finish_reason: str | None = None,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
     ) -> None:
         """Append prompt + assistant text for one workflow LLM call to a timestamped log."""
         thinking, response = _split_thinking_and_answer(assistant_response_raw)
         truncation_suspected = finish_reason == "length"
         call_meta = dict(getattr(self, "last_call_metadata", {}))
-        record: Dict[str, Any] = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+        record: dict[str, Any] = {
+            "timestamp": datetime.now(UTC).isoformat(),
             "scope": "workflows",
             "component": "LLMAdapter",
             "trace_id": get_trace_id(),
@@ -447,9 +452,9 @@ class LLMAdapter:
         model: str,
         endpoint: str,
         prompt: str,
-        system_message: Optional[str],
+        system_message: str | None,
         temperature: float,
-        max_tokens: Optional[int],
+        max_tokens: int | None,
         request_fn: Callable[[], str],
     ) -> str:
         attempts = _llm_max_attempts()
@@ -486,17 +491,20 @@ class LLMAdapter:
                 },
             )
             # endregion
-            _LLM_ADAPTER_LOG.info("llm_request_begin", extra=_llm_attempt_log_fields(
-                provider=provider,
-                model=model,
-                endpoint=endpoint,
-                prompt=prompt,
-                system_message=system_message,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                attempt=attempt,
-                attempts_max=attempts,
-            ))
+            _LLM_ADAPTER_LOG.info(
+                "llm_request_begin",
+                extra=_llm_attempt_log_fields(
+                    provider=provider,
+                    model=model,
+                    endpoint=endpoint,
+                    prompt=prompt,
+                    system_message=system_message,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    attempt=attempt,
+                    attempts_max=attempts,
+                ),
+            )
             try:
                 text = request_fn()
                 elapsed_ms = int((time.perf_counter() - started_at) * 1000)
@@ -602,11 +610,11 @@ class LLMAdapter:
     def call_llm(
         self,
         prompt: str,
-        system_message: Optional[str] = None,
-        model: Optional[str] = None,
-        provider: Optional[str] = None,
+        system_message: str | None = None,
+        model: str | None = None,
+        provider: str | None = None,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
     ) -> str:
         """
         Call LLM with prompt.
@@ -627,21 +635,13 @@ class LLMAdapter:
             provider = self._select_provider()
 
         if provider == "openai":
-            return self._call_openai(
-                prompt, system_message, model, temperature, max_tokens
-            )
+            return self._call_openai(prompt, system_message, model, temperature, max_tokens)
         elif provider == "gemini":
-            return self._call_gemini(
-                prompt, system_message, model, temperature, max_tokens
-            )
+            return self._call_gemini(prompt, system_message, model, temperature, max_tokens)
         elif provider == "groq":
-            return self._call_groq(
-                prompt, system_message, model, temperature, max_tokens
-            )
+            return self._call_groq(prompt, system_message, model, temperature, max_tokens)
         elif provider == "lm_studio":
-            return self._call_lm_studio(
-                prompt, system_message, model, temperature, max_tokens
-            )
+            return self._call_lm_studio(prompt, system_message, model, temperature, max_tokens)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -667,10 +667,10 @@ class LLMAdapter:
     def _call_openai(
         self,
         prompt: str,
-        system_message: Optional[str],
-        model: Optional[str],
+        system_message: str | None,
+        model: str | None,
         temperature: float,
-        max_tokens: Optional[int],
+        max_tokens: int | None,
     ) -> str:
         """Call OpenAI API."""
         if not self.openai_api_key:
@@ -684,7 +684,7 @@ class LLMAdapter:
             if system_message:
                 messages.append({"role": "system", "content": system_message})
             messages.append({"role": "user", "content": prompt})
-            kwargs: Dict[str, Any] = {
+            kwargs: dict[str, Any] = {
                 "model": resolved_model,
                 "messages": messages,
                 "temperature": temperature,
@@ -727,10 +727,10 @@ class LLMAdapter:
     def _call_gemini(
         self,
         prompt: str,
-        system_message: Optional[str],
-        model: Optional[str],
+        system_message: str | None,
+        model: str | None,
         temperature: float,
-        max_tokens: Optional[int],
+        max_tokens: int | None,
     ) -> str:
         """Call Google Gemini API, rotating through configured API keys on auth/quota errors."""
         if not self.google_generative_language_api_keys:
@@ -738,7 +738,7 @@ class LLMAdapter:
         model_name = model or "gemini-pro"
         endpoint = _provider_endpoint("gemini", model=model_name)
         keys = self.google_generative_language_api_keys
-        last_exc: Optional[BaseException] = None
+        last_exc: BaseException | None = None
         for key_index, api_key in enumerate(keys):
 
             def _make_request(resolved_key: str) -> Callable[[], str]:
@@ -800,10 +800,10 @@ class LLMAdapter:
     def _call_groq(
         self,
         prompt: str,
-        system_message: Optional[str],
-        model: Optional[str],
+        system_message: str | None,
+        model: str | None,
         temperature: float,
-        max_tokens: Optional[int],
+        max_tokens: int | None,
     ) -> str:
         """Call Groq API."""
         if not self.groq_api_key:
@@ -814,12 +814,13 @@ class LLMAdapter:
             "Content-Type": "application/json",
         }
         resolved_model = model or "llama3-70b-8192"
+
         def _request() -> str:
             messages = []
             if system_message:
                 messages.append({"role": "system", "content": system_message})
             messages.append({"role": "user", "content": prompt})
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "model": resolved_model,
                 "messages": messages,
                 "temperature": temperature,
@@ -863,10 +864,10 @@ class LLMAdapter:
     def _call_lm_studio(
         self,
         prompt: str,
-        system_message: Optional[str],
-        model: Optional[str],
+        system_message: str | None,
+        model: str | None,
         temperature: float,
-        max_tokens: Optional[int],
+        max_tokens: int | None,
     ) -> str:
         """Call LM Studio API."""
         url = _provider_endpoint("lm_studio", lm_studio_url=self.lm_studio_url)
@@ -875,12 +876,13 @@ class LLMAdapter:
             "Content-Type": "application/json",
         }
         resolved_model = model or "openai/gpt-oss-20b"
+
         def _request() -> str:
             messages = []
             if system_message:
                 messages.append({"role": "system", "content": system_message})
             messages.append({"role": "user", "content": prompt})
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "model": resolved_model,
                 "messages": messages,
                 "temperature": temperature,

@@ -1,4 +1,5 @@
 """Posts management routes."""
+
 from flask import Blueprint, jsonify
 
 from app.schemas.validators import get_json_body, get_query_param
@@ -15,19 +16,19 @@ def posts_list():
     if err:
         return err
     assert count is not None
-    
+
     step, err = get_query_param("step", str, required=True)
     if err:
         return err
     assert step is not None
-    
+
     tag, _ = get_query_param("tag", str, required=False)
     offset, _ = get_query_param("offset", int, required=False, default=0)
     assert offset is not None
-    
+
     if step not in STEPS:
         return jsonify({"error": f"Invalid step: {step}"}), 400
-    
+
     try:
         result = list_posts(count, step, tag, offset)
         return jsonify(result), 200
@@ -42,15 +43,15 @@ def get_post_route():
     if err:
         return err
     assert post is not None
-    
+
     step, err = get_query_param("step", str, required=True)
     if err:
         return err
     assert step is not None
-    
+
     if step not in STEPS:
         return jsonify({"error": f"Invalid step: {step}"}), 400
-    
+
     try:
         result = get_post(post, step)
         return jsonify(result), 200
@@ -65,15 +66,15 @@ def save_post_route():
     if err:
         return err
     assert step is not None
-    
+
     if step not in STEPS:
         return jsonify({"error": f"Invalid step: {step}"}), 400
-    
+
     data, err = get_json_body()
     if err:
         return err
     assert data is not None
-    
+
     try:
         result = save_post(data, step)
         return jsonify(result), 200
@@ -88,20 +89,20 @@ def save_object_route():
     if err:
         return err
     assert step is not None
-    
+
     if step not in STEPS:
         return jsonify({"error": f"Invalid step: {step}"}), 400
-    
+
     filename, err = get_query_param("filename", str, required=True)
     if err:
         return err
     assert filename is not None
-    
+
     data, err = get_json_body()
     if err:
         return err
     assert data is not None
-    
+
     try:
         result = save_object(data, step, filename)
         return jsonify(result), 200
@@ -114,12 +115,12 @@ def save_json():
     """Accepts JSON body and saves it to ./output-results/{timestamp}.json"""
     import datetime
     from pathlib import Path
-    
+
     data, err = get_json_body()
     if err:
         return err
     assert data is not None
-    
+
     try:
         # Create output directory if it doesn't exist
         output_dir = Path("./output-results")
@@ -134,6 +135,7 @@ def save_json():
 
         # Write JSON to file with pretty formatting
         import json
+
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False, sort_keys=True)
 

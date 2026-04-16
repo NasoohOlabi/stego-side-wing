@@ -1,8 +1,9 @@
 """Tiny NDJSON debug logging for runtime triage."""
+
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from infrastructure.config import REPO_ROOT
@@ -26,7 +27,7 @@ def write_debug_probe(
         "location": location,
         "message": message,
         "data": data or {},
-        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+        "timestamp": int(datetime.now(UTC).timestamp() * 1000),
     }
     DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with DEBUG_LOG_PATH.open("a", encoding="utf-8") as handle:

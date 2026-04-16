@@ -1,13 +1,14 @@
 """Semantic search and similarity services."""
+
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Global model instance for sentence transformers (lazy-loaded)
 _semantic_model = None
-_single_text_embedding_cache: Dict[str, Any] = {}
-_list_embedding_cache: Dict[tuple[str, ...], Any] = {}
+_single_text_embedding_cache: dict[str, Any] = {}
+_list_embedding_cache: dict[tuple[str, ...], Any] = {}
 
 
 def get_semantic_model():
@@ -26,9 +27,7 @@ def get_semantic_model():
             # Explicitly set device to avoid meta tensor issues
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
-            _semantic_model = SentenceTransformer(
-                "all-MiniLM-L6-v2", device=device
-            )
+            _semantic_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
 
             # Verify model is on correct device and not meta
             try:
@@ -39,9 +38,7 @@ def get_semantic_model():
                         "semantic_model_meta_reload",
                         extra={"event": "semantic", "action": "model_reload", "device": "cpu"},
                     )
-                    _semantic_model = SentenceTransformer(
-                        "all-MiniLM-L6-v2", device="cpu"
-                    )
+                    _semantic_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 
             logger.info(
                 "semantic_model_loaded",
@@ -50,24 +47,24 @@ def get_semantic_model():
         except ImportError:
             raise ImportError(
                 "sentence-transformers library not installed. Install it with: pip install sentence-transformers"
-            )
+            ) from None
     return _semantic_model
 
 
 def semantic_search(
-    query_text: str, objects_list: List[Dict[str, Any]], n: Optional[int] = None
-) -> Dict[str, List[Dict[str, Any]]]:
+    query_text: str, objects_list: list[dict[str, Any]], n: int | None = None
+) -> dict[str, list[dict[str, Any]]]:
     """
     Perform semantic similarity search.
-    
+
     Args:
         query_text: Query text to search for
         objects_list: List of objects to search through
         n: Optional number of top results to return
-        
+
     Returns:
         Dict with 'results' list containing objects with scores and ranks
-        
+
     Raises:
         ValueError: If inputs are invalid
         ImportError: If required libraries are not available
@@ -87,8 +84,8 @@ def semantic_search(
             n = int(n)
             if n < 1:
                 raise ValueError("'n' must be a positive integer")
-        except (ValueError, TypeError):
-            raise ValueError("'n' must be a valid integer or None")
+        except (ValueError, TypeError) as exc:
+            raise ValueError("'n' must be a valid integer or None") from exc
 
     # Load the model
     model = get_semantic_model()
@@ -119,9 +116,7 @@ def semantic_search(
 
         # If no common fields found, convert entire object to string
         if not text_parts:
-            text_parts = [
-                str(v) for v in obj.values() if isinstance(v, (str, int, float))
-            ]
+            text_parts = [str(v) for v in obj.values() if isinstance(v, (str, int, float))]
 
         doc_text = " ".join(text_parts) if text_parts else str(obj)
         doc_texts.append(doc_text)
@@ -134,9 +129,7 @@ def semantic_search(
     cosine_scores = util.cos_sim(query_embedding, doc_embeddings)[0]
 
     # Get scores as list and pair with indices
-    scores_with_indices = [
-        (float(cosine_scores[i].item()), i) for i in range(len(objects_list))
-    ]
+    scores_with_indices = [(float(cosine_scores[i].item()), i) for i in range(len(objects_list))]
 
     # Sort by score (descending)
     scores_with_indices.sort(reverse=True, key=lambda x: x[0])
@@ -159,17 +152,17 @@ def semantic_search(
     return {"results": results}
 
 
-def find_best_match(needle: object, haystack: object) -> Dict[str, Any]:
+def find_best_match(needle: object, haystack: object) -> dict[str, Any]:
     """
     Find the best matching document using semantic similarity.
-    
+
     Args:
         needle: The search text to find
         haystack: List of documents to search through
-        
+
     Returns:
         Dict with best_match, index, and score
-        
+
     Raises:
         ValueError: If inputs are invalid
         ImportError: If required libraries are not available
@@ -236,7 +229,7 @@ def _encode_single_cached(model: Any, text: str) -> Any:
     return embedding
 
 
-def _encode_list_cached(model: Any, texts: List[str]) -> Any:
+def _encode_list_cached(model: Any, texts: list[str]) -> Any:
     """Encode list of strings and cache by exact ordered tuple."""
     key = tuple(texts)
     cached = _list_embedding_cache.get(key)

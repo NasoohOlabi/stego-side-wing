@@ -1,4 +1,5 @@
 """Angles analysis service."""
+
 import logging
 from typing import Any
 
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, Any]]:
     """
     Analyze angles from text chunks.
-    
+
     Args:
         texts: List of text strings to analyze
         use_cache: When False, skip angles disk cache read/write (forces fresh LLM work).
@@ -18,7 +19,7 @@ def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, A
     Returns:
         List of angle dicts with source_quote, tangent, category, and source_document
         (0-based index into ``texts``, counting only non-empty blocks in order).
-        
+
     Raises:
         ValueError: If texts is invalid
         requests.RequestException: If the legacy LM Studio HTTP path fails (``WORKFLOW_LLM_BACKEND=lm_studio``)

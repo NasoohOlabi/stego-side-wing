@@ -3,10 +3,11 @@
 Mirrors logic previously embedded in ``StegoPipeline`` for compression,
 comment/angle embedding, and payload recovery after stripping embed prefixes.
 """
+
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from pydantic import validate_call
 
@@ -36,7 +37,7 @@ def encode_int(value: int, max_value: int) -> str:
 
 
 @validate_call
-def take_bits(bits: str, count: int) -> Tuple[str, str, bool]:
+def take_bits(bits: str, count: int) -> tuple[str, str, bool]:
     if count <= 0:
         return "", bits, False
     if len(bits) >= count:
@@ -45,13 +46,13 @@ def take_bits(bits: str, count: int) -> Tuple[str, str, bool]:
 
 
 @validate_call
-def build_dictionary(post: Dict[str, Any]) -> List[str]:
+def build_dictionary(post: dict[str, Any]) -> list[str]:
     dictionary = build_post_text_dictionary(post)
     return [entry for entry in dictionary if is_non_empty_string(entry)]
 
 
 @validate_call
-def compress_payload(payload: str, dictionary: List[str]) -> Dict[str, Any]:
+def compress_payload(payload: str, dictionary: list[str]) -> dict[str, Any]:
     """Same semantics as legacy ``StegoPipeline._compress_payload``."""
     std_binary = to_binary_utf8(payload)
     std_length = 1 + len(std_binary)
@@ -63,11 +64,11 @@ def compress_payload(payload: str, dictionary: List[str]) -> Dict[str, Any]:
         if len(text) > global_max_match:
             global_max_match = len(text)
 
-    matches: Dict[int, List[Dict[str, int]]] = {}
+    matches: dict[int, list[dict[str, int]]] = {}
     if n > 0 and dictionary:
         for i in range(n):
             current_char = payload[i]
-            matches_at_i: List[Dict[str, int]] = []
+            matches_at_i: list[dict[str, int]] = []
             for doc_idx, dict_text in enumerate(dictionary):
                 start = dict_text.find(current_char)
                 while start != -1:
@@ -85,7 +86,7 @@ def compress_payload(payload: str, dictionary: List[str]) -> Dict[str, Any]:
                 matches[i] = matches_at_i
 
     dp = [float("inf")] * (n + 1)
-    choice: List[Optional[Dict[str, Any]]] = [None] * n
+    choice: list[dict[str, Any] | None] = [None] * n
     dp[n] = 0.0
 
     bw_literal_len = get_bit_width(MAX_LITERAL_LEN)
@@ -108,20 +109,14 @@ def compress_payload(payload: str, dictionary: List[str]) -> Dict[str, Any]:
 
         for match in matches.get(i, []):
             doc_len_bits = get_bit_width(len(dictionary[match["doc"]]))
-            cost = (
-                1
-                + bw_dict_idx
-                + doc_len_bits
-                + bw_match_len
-                + dp[i + match["len"]]
-            )
+            cost = 1 + bw_dict_idx + doc_len_bits + bw_match_len + dp[i + match["len"]]
             if cost < dp[i]:
                 dp[i] = cost
                 choice[i] = {"kind": "dict", **match}
 
     curr = 0
-    dict_binary_parts: List[str] = []
-    references: List[Dict[str, Any]] = []
+    dict_binary_parts: list[str] = []
+    references: list[dict[str, Any]] = []
 
     while curr < n:
         picked = choice[curr] or {
@@ -171,19 +166,19 @@ def compress_payload(payload: str, dictionary: List[str]) -> Dict[str, Any]:
     }
 
 
-def embed_in_comment_selection(bits: str, post: Dict[str, Any]) -> Dict[str, Any]:
+def embed_in_comment_selection(bits: str, post: dict[str, Any]) -> dict[str, Any]:
     flattened_comments = flatten_comments(post.get("comments", []))
     n = len(flattened_comments)
     bits_count = get_bit_width(n)
     bits_used, remaining, insufficient = take_bits(bits, bits_count)
     selection_index = int(bits_used or "0", 2)
     if selection_index > n:
-        selection_index %= (n + 1)
+        selection_index %= n + 1
 
-    picked_chain: List[Dict[str, Any]] = []
+    picked_chain: list[dict[str, Any]] = []
     if selection_index > 0 and n > 0:
         picked_comment = flattened_comments[selection_index - 1]
-        comment_map: Dict[str, Dict[str, Any]] = {}
+        comment_map: dict[str, dict[str, Any]] = {}
         for comment in flattened_comments:
             cid = comment.get("id")
             if isinstance(cid, str):
@@ -203,15 +198,10 @@ def embed_in_comment_selection(bits: str, post: Dict[str, Any]) -> Dict[str, Any
                 {
                     "name": (
                         current.get("author")
-                        if isinstance(current.get("author"), str)
-                        and current.get("author").strip()
+                        if isinstance(current.get("author"), str) and current.get("author").strip()
                         else "Unknown"
                     ),
-                    "body": (
-                        current.get("body")
-                        if isinstance(current.get("body"), str)
-                        else ""
-                    ),
+                    "body": (current.get("body") if isinstance(current.get("body"), str) else ""),
                     "id": current.get("id"),
                     "parent_id": current.get("parent_id"),
                     "permalink": current.get("permalink"),
@@ -247,13 +237,9 @@ def embed_in_comment_selection(bits: str, post: Dict[str, Any]) -> Dict[str, Any
     }
 
 
-def flatten_nested_angles(post: Dict[str, Any]) -> List[Dict[str, Any]]:
-    nested = [
-        x if isinstance(x, list) else [x]
-        for x in post.get("angles", [])
-        if x is not None
-    ]
-    angles: List[Dict[str, Any]] = []
+def flatten_nested_angles(post: dict[str, Any]) -> list[dict[str, Any]]:
+    nested = [x if isinstance(x, list) else [x] for x in post.get("angles", []) if x is not None]
+    angles: list[dict[str, Any]] = []
     for angle_group in nested:
         for angle in angle_group:
             with_idx = dict(angle)
@@ -263,9 +249,9 @@ def flatten_nested_angles(post: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def embed_in_angle_selection(
-    bits: str, nested_angles: List[List[Dict[str, Any]]]
-) -> Dict[str, Any]:
-    angles: List[Dict[str, Any]] = []
+    bits: str, nested_angles: list[list[dict[str, Any]]]
+) -> dict[str, Any]:
+    angles: list[dict[str, Any]] = []
     for angle_group in nested_angles:
         for angle in angle_group:
             with_idx = dict(angle)
@@ -304,15 +290,13 @@ def embed_in_angle_selection(
     }
 
 
-def augment_post(payload: str, post: Dict[str, Any]) -> Dict[str, Any]:
+def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
     nested_angles = [
-        x if isinstance(x, list) else [x]
-        for x in post.get("angles", [])
-        if x is not None
+        x if isinstance(x, list) else [x] for x in post.get("angles", []) if x is not None
     ]
     dictionary = build_dictionary(post)
     compression = compress_payload(payload, dictionary)
-    warnings: List[str] = []
+    warnings: list[str] = []
     if compression.get("method") == "standard":
         warnings.append("Dictionary compression inefficient; used standard encoding.")
 
@@ -334,7 +318,7 @@ def augment_post(payload: str, post: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def comment_selection_bit_width(post: Dict[str, Any]) -> int:
+def comment_selection_bit_width(post: dict[str, Any]) -> int:
     n = len(flatten_comments(post.get("comments", [])))
     return get_bit_width(n)
 
@@ -352,21 +336,19 @@ def angle_bits_for_index(idx: int, n_angles: int) -> str:
     return encode_int(idx, n_angles - 1)
 
 
-def _decompress_standard_suffix(utf8_bit_suffix: str) -> Optional[str]:
+def _decompress_standard_suffix(utf8_bit_suffix: str) -> str | None:
     if len(utf8_bit_suffix) % 8 != 0:
         return None
     try:
-        data = bytes(
-            int(utf8_bit_suffix[i : i + 8], 2) for i in range(0, len(utf8_bit_suffix), 8)
-        )
+        data = bytes(int(utf8_bit_suffix[i : i + 8], 2) for i in range(0, len(utf8_bit_suffix), 8))
         return data.decode("utf-8")
     except (UnicodeDecodeError, ValueError):
         return None
 
 
 def decompress_after_embed_prefix(
-    compressed_full: str, dictionary: List[str], lc: int, la: int
-) -> Optional[str]:
+    compressed_full: str, dictionary: list[str], lc: int, la: int
+) -> str | None:
     """Invert ``compress_payload`` given the full ``compressed`` bitstring from encode.
 
     Comment/angle bits are taken from the front of this string, but they are always
@@ -392,7 +374,7 @@ def decompress_after_embed_prefix(
     return _decompress_dictionary_bitstream(compressed_full[1:], dictionary)
 
 
-def _read_fixed_int(bits: str, pos: int, max_value: int) -> Optional[Tuple[int, int]]:
+def _read_fixed_int(bits: str, pos: int, max_value: int) -> tuple[int, int] | None:
     """Read integer using same width as ``encode_int(..., max_value)``."""
     w = get_bit_width(max_value)
     if pos + w > len(bits):
@@ -401,7 +383,7 @@ def _read_fixed_int(bits: str, pos: int, max_value: int) -> Optional[Tuple[int, 
     return int(chunk, 2), pos + w
 
 
-def _read_utf8_n_chars(bits: str, pos: int, n_chars: int) -> Optional[Tuple[str, int]]:
+def _read_utf8_n_chars(bits: str, pos: int, n_chars: int) -> tuple[str, int] | None:
     """Read UTF-8 bytes (8 bits each) until exactly ``n_chars`` Unicode chars decode."""
     if n_chars <= 0:
         return "", pos
@@ -424,7 +406,7 @@ def _read_utf8_n_chars(bits: str, pos: int, n_chars: int) -> Optional[Tuple[str,
     return None
 
 
-def _decompress_dictionary_bitstream(rem: str, dictionary: List[str]) -> Optional[str]:
+def _decompress_dictionary_bitstream(rem: str, dictionary: list[str]) -> str | None:
     if not rem:
         return ""
     if not dictionary:
@@ -432,7 +414,7 @@ def _decompress_dictionary_bitstream(rem: str, dictionary: List[str]) -> Optiona
     max_dict_index = len(dictionary)
     global_max_match = max(len(t) for t in dictionary)
     pos = 0
-    out: List[str] = []
+    out: list[str] = []
 
     while pos < len(rem):
         kind = rem[pos]
@@ -476,14 +458,14 @@ def _decompress_dictionary_bitstream(rem: str, dictionary: List[str]) -> Optiona
 
 def recover_payload_with_compressed_full(
     compressed_full: str,
-    dictionary: List[str],
-    pre_sender_post: Dict[str, Any],
-    nested_angles: List[List[Dict[str, Any]]],
+    dictionary: list[str],
+    pre_sender_post: dict[str, Any],
+    nested_angles: list[list[dict[str, Any]]],
     decoded_angle_index: int,
-) -> Optional[Tuple[str, Dict[str, Any]]]:
+) -> tuple[str, dict[str, Any]] | None:
     """Recover payload when the full compressed bitstring from encode is known."""
     lc = comment_selection_bit_width(pre_sender_post)
-    angles: List[Dict[str, Any]] = []
+    angles: list[dict[str, Any]] = []
     for angle_group in nested_angles:
         for angle in angle_group:
             angles.append(dict(angle))
@@ -511,14 +493,14 @@ def recover_payload_with_compressed_full(
 
 
 def recover_payload_bruteforce_comment_bits(
-    dictionary: List[str],
-    pre_sender_post: Dict[str, Any],
-    nested_angles: List[List[Dict[str, Any]]],
+    dictionary: list[str],
+    pre_sender_post: dict[str, Any],
+    nested_angles: list[list[dict[str, Any]]],
     decoded_angle_index: int,
     max_padding_bits: int = 256,
     *,
-    compressed_full: Optional[str] = None,
-) -> Optional[Tuple[str, Dict[str, Any]]]:
+    compressed_full: str | None = None,
+) -> tuple[str, dict[str, Any]] | None:
     """
     Recover payload by brute-forcing the comment-selection prefix (small ``2**lc``).
 
@@ -527,7 +509,7 @@ def recover_payload_bruteforce_comment_bits(
     ``decompress_after_embed_prefix`` to round-trip the candidate.
     """
     lc = comment_selection_bit_width(pre_sender_post)
-    angles: List[Dict[str, Any]] = []
+    angles: list[dict[str, Any]] = []
     for angle_group in nested_angles:
         for angle in angle_group:
             angles.append(dict(angle))
@@ -555,7 +537,7 @@ def recover_payload_bruteforce_comment_bits(
 
     n_comment_guesses = 1 << lc if lc > 0 else 1
 
-    def _accepts(candidate: str, check: Dict[str, Any], b_comment: str) -> bool:
+    def _accepts(candidate: str, check: dict[str, Any], b_comment: str) -> bool:
         cfull = check.get("compressed", "")
         if not isinstance(cfull, str):
             return False
@@ -565,7 +547,7 @@ def recover_payload_bruteforce_comment_bits(
         recovered = decompress_after_embed_prefix(cfull, dictionary, lc, la)
         return recovered == candidate
 
-    best: Optional[Tuple[str, Dict[str, Any], int]] = None
+    best: tuple[str, dict[str, Any], int] | None = None
 
     for guess in range(n_comment_guesses):
         b_comment = format(guess, f"0{lc}b") if lc > 0 else ""

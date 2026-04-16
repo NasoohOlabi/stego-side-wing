@@ -1,7 +1,9 @@
 """Receiver pipeline: rebuild post context and recover stego payload."""
+
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 from loguru import logger
 
@@ -20,10 +22,10 @@ from workflows.utils.text_utils import flatten_comments
 
 _RECEIVER_LOG = logger.bind(component="ReceiverPipeline")
 
-ProgressCb = Optional[Callable[[str, Dict[str, Any]], None]]
+ProgressCb = Callable[[str, dict[str, Any]], None] | None
 
 
-def _emit(cb: ProgressCb, event: str, payload: Dict[str, Any]) -> None:
+def _emit(cb: ProgressCb, event: str, payload: dict[str, Any]) -> None:
     if cb is None:
         return
     try:
@@ -32,7 +34,7 @@ def _emit(cb: ProgressCb, event: str, payload: Dict[str, Any]) -> None:
         return
 
 
-def _author_matches(comment: Dict[str, Any], sender_user_id: str) -> bool:
+def _author_matches(comment: dict[str, Any], sender_user_id: str) -> bool:
     uid = sender_user_id.strip()
     if not uid:
         return False
@@ -45,11 +47,9 @@ def _author_matches(comment: Dict[str, Any], sender_user_id: str) -> bool:
     return False
 
 
-def locate_sender_stego_comment(
-    post: Dict[str, Any], sender_user_id: str
-) -> Optional[Dict[str, Any]]:
+def locate_sender_stego_comment(post: dict[str, Any], sender_user_id: str) -> dict[str, Any] | None:
     """Pick the sender-authored comment that carries stego text (non-empty body)."""
-    matches: List[Dict[str, Any]] = []
+    matches: list[dict[str, Any]] = []
     for c in flatten_comments(post.get("comments", [])):
         if not _author_matches(c, sender_user_id):
             continue
@@ -67,10 +67,10 @@ def locate_sender_stego_comment(
     return matches[0]
 
 
-def _remove_comment_by_id(comments: Any, target_id: str) -> Tuple[List[Dict[str, Any]], bool]:
+def _remove_comment_by_id(comments: Any, target_id: str) -> tuple[list[dict[str, Any]], bool]:
     if not isinstance(comments, list):
         return [], False
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     removed = False
     for raw in comments:
         if not isinstance(raw, dict):
@@ -89,7 +89,7 @@ def _remove_comment_by_id(comments: Any, target_id: str) -> Tuple[List[Dict[str,
     return out, removed
 
 
-def build_pre_sender_post(post: Dict[str, Any], sender_comment_id: str) -> Dict[str, Any]:
+def build_pre_sender_post(post: dict[str, Any], sender_comment_id: str) -> dict[str, Any]:
     """Clone post and drop the sender stego comment subtree."""
     clone = dict(post)
     new_comments, ok = _remove_comment_by_id(post.get("comments", []), sender_comment_id)
@@ -99,7 +99,7 @@ def build_pre_sender_post(post: Dict[str, Any], sender_comment_id: str) -> Dict[
     return clone
 
 
-def nested_angles_from_post(post: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
+def nested_angles_from_post(post: dict[str, Any]) -> list[list[dict[str, Any]]]:
     raw = post.get("angles", [])
     if not isinstance(raw, list):
         return []
@@ -118,7 +118,7 @@ class ReceiverPipeline:
 
     def rebuild_context(
         self,
-        pre_sender_post: Dict[str, Any],
+        pre_sender_post: dict[str, Any],
         *,
         use_fetch_cache: bool = True,
         use_terms_cache: bool = True,
@@ -126,7 +126,7 @@ class ReceiverPipeline:
         use_fetch_cache_research: bool = True,
         allow_fallback: bool = False,
         on_progress: ProgressCb = None,
-    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Data-load → research → gen-angles on the receiver side."""
         post_id = pre_sender_post.get("id", "<unknown>")
         _emit(
@@ -186,13 +186,13 @@ class ReceiverPipeline:
         self,
         *,
         stego_text: str,
-        rebuilt_post: Dict[str, Any],
-        pre_sender_post: Dict[str, Any],
-        nested_angles: List[List[Dict[str, Any]]],
-        compressed_full: Optional[str] = None,
+        rebuilt_post: dict[str, Any],
+        pre_sender_post: dict[str, Any],
+        nested_angles: list[list[dict[str, Any]]],
+        compressed_full: str | None = None,
         max_padding_bits: int = 256,
         on_progress: ProgressCb = None,
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any]]:
         tangents_db = flatten_nested_angles(rebuilt_post)
         if not tangents_db:
             raise ValueError("Rebuilt post has no angles; cannot decode")
@@ -217,7 +217,7 @@ class ReceiverPipeline:
             {"decoded_angle_index": decoded_idx, "tags": ["workflow"]},
         )
 
-        recovery_meta: Dict[str, Any]
+        recovery_meta: dict[str, Any]
         if compressed_full is not None:
             got = recover_payload_with_compressed_full(
                 compressed_full,
@@ -248,7 +248,7 @@ class ReceiverPipeline:
 
     def run(
         self,
-        post: Dict[str, Any],
+        post: dict[str, Any],
         sender_user_id: str,
         *,
         use_fetch_cache: bool = True,
@@ -256,10 +256,10 @@ class ReceiverPipeline:
         persist_terms_cache: bool = True,
         use_fetch_cache_research: bool = True,
         allow_fallback: bool = False,
-        compressed_full: Optional[str] = None,
+        compressed_full: str | None = None,
         max_padding_bits: int = 256,
         on_progress: ProgressCb = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         post_id = post.get("id", "<unknown>")
         _emit(
             on_progress,

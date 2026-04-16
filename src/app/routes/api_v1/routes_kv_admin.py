@@ -1,4 +1,5 @@
 """API v1: KV store and admin endpoints."""
+
 from __future__ import annotations
 
 import logging
@@ -20,6 +21,7 @@ from services.kv_service import (
 from services.state_service import clear_cache, get_cache_stats
 
 logger = logging.getLogger(__name__)
+
 
 @bp.route("/kv", methods=["GET"])
 def kv_list() -> tuple[Any, int]:

@@ -1,4 +1,5 @@
 """Normalize stdout/stderr for UTF-8 (avoids cp1252 UnicodeEncodeError on Windows)."""
+
 from __future__ import annotations
 
 import os

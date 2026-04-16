@@ -1,4 +1,5 @@
 """Angles analysis routes."""
+
 from flask import Blueprint, jsonify
 
 from app.schemas.validators import get_json_body
@@ -14,11 +15,11 @@ def analyze_angles_endpoint():
     if err:
         return err
     assert data is not None
-    
+
     texts = data.get("texts")
     if not isinstance(texts, list) or not all(isinstance(x, str) for x in texts):
         return jsonify({"error": "'texts' must be a list of strings"}), 400
-    
+
     try:
         results = analyze_angles(texts)
         return jsonify({"results": results}), 200

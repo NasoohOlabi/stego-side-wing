@@ -1,6 +1,7 @@
 """Generate angles from post content."""
+
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 from loguru import logger
 
@@ -12,18 +13,24 @@ from infrastructure.json_logging import get_trace_id
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
+from workflows.utils.angles_llm_config import (
+    SYSTEM_PROMPT as ANGLES_SYSTEM_PROMPT,
+)
+from workflows.utils.angles_llm_config import (
+    TEMPERATURE as ANGLES_TEMPERATURE,
+)
+from workflows.utils.angles_llm_config import (
+    USER_PROMPT_TEMPLATE as ANGLES_USER_PROMPT_TEMPLATE,
+)
+from workflows.utils.angles_llm_config import (
+    angles_model_name,
+)
 from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.text_utils import (
     build_post_text_dictionary,
     flatten_comments,
     parse_json_array_response,
-)
-from workflows.utils.angles_llm_config import (
-    SYSTEM_PROMPT as ANGLES_SYSTEM_PROMPT,
-    TEMPERATURE as ANGLES_TEMPERATURE,
-    USER_PROMPT_TEMPLATE as ANGLES_USER_PROMPT_TEMPLATE,
-    angles_model_name,
 )
 from workflows.utils.workflow_llm_prompts import get_prompts
 
@@ -57,25 +64,25 @@ class GenAnglesPipeline:
         self.backend = BackendAPIAdapter()
         self.llm = LLMAdapter()
         self.config = get_config()
-        self._last_batch_summary: Dict[str, Any] = {}
+        self._last_batch_summary: dict[str, Any] = {}
 
-    def _flatten_comments(self, comments: List[Dict]) -> List[Dict]:
+    def _flatten_comments(self, comments: list[dict]) -> list[dict]:
         """Flatten nested comment structure."""
         return flatten_comments(comments)
 
-    def _build_dictionary(self, post: Dict) -> List[str]:
+    def _build_dictionary(self, post: dict) -> list[str]:
         """Build dictionary of texts from post."""
         return build_post_text_dictionary(post)
 
-    def build_dictionary_for_post(self, post: Dict[str, Any]) -> List[str]:
+    def build_dictionary_for_post(self, post: dict[str, Any]) -> list[str]:
         """Public alias for workflow runner / tools that need the same inputs as gen_angles."""
         return self._build_dictionary(post)
 
     def preview_post(
         self,
-        post: Dict[str, Any],
+        post: dict[str, Any],
         allow_fallback: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate angles without mutating or saving artifacts."""
         post_id = str(post.get("id") or "<unknown>")
         dictionary = self._build_dictionary(post)
@@ -140,7 +147,7 @@ class GenAnglesPipeline:
             angles = []
             for result in results:
                 if isinstance(result, dict):
-                    angle: Dict[str, Any] = {
+                    angle: dict[str, Any] = {
                         "source_quote": result.get("source_quote", ""),
                         "tangent": result.get("tangent", ""),
                         "category": result.get("category", ""),
@@ -257,7 +264,7 @@ class GenAnglesPipeline:
             )
             return {"post": processed_post, "report": report}
 
-    def generate_angles(self, post: Dict, allow_fallback: bool = False) -> List[Dict[str, Any]]:
+    def generate_angles(self, post: dict, allow_fallback: bool = False) -> list[dict[str, Any]]:
         """
         Generate angles from post content.
 
@@ -269,7 +276,7 @@ class GenAnglesPipeline:
         """
         return list(self.preview_post(post, allow_fallback=allow_fallback)["report"]["angles"])
 
-    def _generate_angles_llm(self, texts: List[str]) -> List[Dict[str, Any]]:
+    def _generate_angles_llm(self, texts: list[str]) -> list[dict[str, Any]]:
         """Generate angles using LLM directly."""
         combined_text = "\n\n---\n\n".join(texts)
         ga = get_prompts().gen_angles
@@ -310,10 +317,10 @@ class GenAnglesPipeline:
 
     def process_post(
         self,
-        post: Dict,
+        post: dict,
         step: str = "angles-step",
         allow_fallback: bool = False,
-    ) -> Dict:
+    ) -> dict:
         """
         Process a post to generate angles.
 
@@ -331,7 +338,7 @@ class GenAnglesPipeline:
         step: str = "angles-step",
         count: int = 1,
         offset: int = 0,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Process multiple posts to generate angles.
 
@@ -367,7 +374,7 @@ class GenAnglesPipeline:
             )
             return []
 
-        posts: List[Dict[str, Any]] = []
+        posts: list[dict[str, Any]] = []
         for file_name in file_names:
             try:
                 posts.append(self.backend.get_post_local(file_name, step))
@@ -421,12 +428,12 @@ class GenAnglesPipeline:
 
     def process_post_objects(
         self,
-        posts: List[Dict[str, Any]],
+        posts: list[dict[str, Any]],
         step: str = "angles-step",
         allow_fallback: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Process already-loaded post objects and persist angle-enriched versions."""
-        processed_posts: List[Dict[str, Any]] = []
+        processed_posts: list[dict[str, Any]] = []
         for post in posts:
             post_id = post.get("id", "<unknown>")
             t_post = time.perf_counter()
@@ -462,7 +469,7 @@ class GenAnglesPipeline:
         post_id: str,
         step: str = "angles-step",
         allow_fallback: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Process one post by ID and persist angle output.
 

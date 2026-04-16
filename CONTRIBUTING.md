@@ -15,8 +15,8 @@
 uv sync --all-groups
 uv run pytest
 uv run pyright
-uv run ruff check src/app/routes/api_v1 src/app/schemas
-uv run ruff format src
+uv run ruff check src/app src/services src/content_acquisition src/integrations src/infrastructure src/workflows
+uv run ruff format --check src/app src/services src/content_acquisition src/integrations src/infrastructure src/workflows
 ```
 
 ## Optional extras

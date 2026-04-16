@@ -1,11 +1,12 @@
 """State inspection and admin helpers for API routes."""
+
 from __future__ import annotations
 
 import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from infrastructure.config import METRICS_DIR, REPO_ROOT, STEPS, resolve_path
 
@@ -24,8 +25,8 @@ def safe_repo_path(relative_path: str) -> Path:
     return candidate
 
 
-def get_paths_map() -> Dict[str, str]:
-    paths: Dict[str, str] = {}
+def get_paths_map() -> dict[str, str]:
+    paths: dict[str, str] = {}
     for step_name, config in STEPS.items():
         paths[f"{step_name}.source_dir"] = str(resolve_path(config["source_dir"]))
         paths[f"{step_name}.dest_dir"] = str(resolve_path(config["dest_dir"]))
@@ -43,7 +44,7 @@ def get_paths_map() -> Dict[str, str]:
     return paths
 
 
-def list_directory(relative_path: str, recursive: bool = False, limit: int = 200) -> Dict[str, Any]:
+def list_directory(relative_path: str, recursive: bool = False, limit: int = 200) -> dict[str, Any]:
     root = safe_repo_path(relative_path)
     if not root.exists():
         raise FileNotFoundError(f"path not found: {relative_path}")
@@ -51,7 +52,7 @@ def list_directory(relative_path: str, recursive: bool = False, limit: int = 200
         raise ValueError("path must reference a directory")
 
     safe_limit = max(1, min(int(limit), 5000))
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
 
     if recursive:
         iterator = root.rglob("*")
@@ -82,7 +83,7 @@ def list_directory(relative_path: str, recursive: bool = False, limit: int = 200
     }
 
 
-def read_json_file(relative_path: str) -> Dict[str, Any]:
+def read_json_file(relative_path: str) -> dict[str, Any]:
     file_path = safe_repo_path(relative_path)
     if not file_path.exists():
         raise FileNotFoundError(f"path not found: {relative_path}")
@@ -105,7 +106,9 @@ def read_json_file(relative_path: str) -> Dict[str, Any]:
     }
 
 
-def write_json_file(relative_path: str, data: Dict[str, Any], overwrite: bool = True) -> Dict[str, Any]:
+def write_json_file(
+    relative_path: str, data: dict[str, Any], overwrite: bool = True
+) -> dict[str, Any]:
     file_path = safe_repo_path(relative_path)
     if file_path.suffix.lower() != ".json":
         raise ValueError("only .json files are supported by this endpoint")
@@ -127,7 +130,7 @@ def write_json_file(relative_path: str, data: Dict[str, Any], overwrite: bool = 
     }
 
 
-def delete_path(relative_path: str, recursive: bool = False) -> Dict[str, Any]:
+def delete_path(relative_path: str, recursive: bool = False) -> dict[str, Any]:
     target = safe_repo_path(relative_path)
     if not target.exists():
         return {"deleted": False, "path": relative_path}
@@ -149,7 +152,7 @@ def delete_path(relative_path: str, recursive: bool = False) -> Dict[str, Any]:
     return {"deleted": True, "path": relative_path}
 
 
-def clear_cache(target: str) -> Dict[str, Any]:
+def clear_cache(target: str) -> dict[str, Any]:
     targets = {
         "flask": resolve_path("./cache-directory"),
         "url": resolve_path("./datasets/url_cache"),
@@ -160,7 +163,7 @@ def clear_cache(target: str) -> Dict[str, Any]:
     if any(name not in targets for name in names):
         raise ValueError("target must be one of: flask, url, angles, all")
 
-    cleared: Dict[str, int] = {}
+    cleared: dict[str, int] = {}
     for name in names:
         cache_dir = targets[name]
         removed = 0
@@ -180,13 +183,13 @@ def clear_cache(target: str) -> Dict[str, Any]:
     return {"target": target, "cleared_entries": cleared}
 
 
-def get_cache_stats() -> Dict[str, Any]:
+def get_cache_stats() -> dict[str, Any]:
     cache_dirs = {
         "flask": resolve_path("./cache-directory"),
         "url": resolve_path("./datasets/url_cache"),
         "angles": resolve_path("./datasets/angles_cache"),
     }
-    stats: Dict[str, Any] = {}
+    stats: dict[str, Any] = {}
     for name, directory in cache_dirs.items():
         files = 0
         size = 0

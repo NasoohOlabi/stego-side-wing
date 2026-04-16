@@ -1,4 +1,5 @@
 """API v1: workflow POST routes and generic ``/workflows/run``."""
+
 from __future__ import annotations
 
 import logging
@@ -35,6 +36,7 @@ from infrastructure.json_logging import get_trace_id
 from services.workflow_run_tracker import iter_snapshot
 
 logger = logging.getLogger(__name__)
+
 
 @bp.route("/workflows/data-load", methods=["POST"])
 def wf_data_load() -> Any:

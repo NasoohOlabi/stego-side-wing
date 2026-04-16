@@ -1,9 +1,11 @@
 """Helpers for protocol-level reproducibility reporting."""
+
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 
 def stable_json_dumps(value: Any) -> str:

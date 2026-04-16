@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from infrastructure.config import REPO_ROOT, get_env, resolve_path
 from workflows.config import WorkflowConfig, isolated_workflow_config
 
 
-def sum_research_preview_total_ms(entries: List[Dict[str, Any]]) -> int:
+def sum_research_preview_total_ms(entries: list[dict[str, Any]]) -> int:
     total = 0
     for item in entries:
         rep = item.get("report")
@@ -28,13 +29,13 @@ def sum_research_preview_total_ms(entries: List[Dict[str, Any]]) -> int:
 
 def research_run_with_breakdown(
     *,
-    posts: List[Dict[str, Any]],
-    breakdown_entries: List[Dict[str, Any]],
+    posts: list[dict[str, Any]],
+    breakdown_entries: list[dict[str, Any]],
     batch_elapsed_ms: int,
     requested_count: int,
     offset: int,
     runner_trace_id: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     batch = {
         "elapsed_ms": batch_elapsed_ms,
         "processed_count": len(posts),
@@ -59,7 +60,7 @@ def isolated_workflow_config_for_side(base: Path, side: str) -> WorkflowConfig:
     )
 
 
-def workflow_cache_paths(cfg: WorkflowConfig) -> Dict[str, str]:
+def workflow_cache_paths(cfg: WorkflowConfig) -> dict[str, str]:
     return {
         "url_cache_dir": str(cfg.url_cache_dir),
         "research_terms_db_path": str(cfg.research_terms_db_path),
@@ -85,7 +86,7 @@ def double_process_claim_path() -> Path:
     return double_process_cache_base_root() / _DOUBLE_PROCESS_CLAIM_NAME
 
 
-def try_read_double_process_claim() -> Optional[Tuple[str, str]]:
+def try_read_double_process_claim() -> tuple[str, str] | None:
     """Return (post_id, file_name) if a prior run reserved a post and did not finish."""
     path = double_process_claim_path()
     if not path.is_file():
@@ -142,8 +143,8 @@ def is_receiver_data_load_failure(exc: Exception) -> bool:
 
 
 def compressed_full_for_live_receiver(
-    stego_out: Dict[str, Any], override: Optional[str]
-) -> Optional[str]:
+    stego_out: dict[str, Any], override: str | None
+) -> str | None:
     """Prefer explicit API override; else use sender embedding (same bitstring receiver must recover)."""
     if isinstance(override, str) and override.strip():
         return override.strip()
@@ -157,7 +158,7 @@ def compressed_full_for_live_receiver(
     return c if isinstance(c, str) and c else None
 
 
-def receiver_post_from_stego(stego_result: Dict[str, Any], sender_user_id: str) -> Dict[str, Any]:
+def receiver_post_from_stego(stego_result: dict[str, Any], sender_user_id: str) -> dict[str, Any]:
     """Attach successful stego output as a single comment from ``sender_user_id``."""
     if not stego_result.get("succeeded"):
         raise ValueError("stego did not succeed; cannot build receiver post")
@@ -186,7 +187,7 @@ def live_sim_attempt_root(base: Path, attempt_idx: int, multi_post: bool) -> Pat
 
 def live_sim_simulation_meta(
     base: Path, attempt_idx: int, sender_cfg: WorkflowConfig, receiver_cfg: WorkflowConfig
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "root": str(base),
         "attempt_index": attempt_idx,
@@ -198,12 +199,12 @@ def live_sim_simulation_meta(
 def _live_sim_run_sender_stego(
     *,
     sender_cfg: WorkflowConfig,
-    post_id: Optional[str],
-    payload: Optional[str],
-    tag: Optional[str],
+    post_id: str | None,
+    payload: str | None,
+    tag: str | None,
     stego_list_offset: int,
-    on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
-) -> Dict[str, Any]:
+    on_progress: Callable[[str, dict[str, Any]], None] | None,
+) -> dict[str, Any]:
     from workflows.runner import WorkflowRunner
 
     with isolated_workflow_config(sender_cfg):
@@ -219,7 +220,7 @@ def _live_sim_run_sender_stego(
 
 def _live_sim_prepare_side_configs(
     base: Path, attempt_idx: int, multi_post: bool
-) -> Tuple[WorkflowConfig, WorkflowConfig, Dict[str, Any]]:
+) -> tuple[WorkflowConfig, WorkflowConfig, dict[str, Any]]:
     attempt_root = live_sim_attempt_root(base, attempt_idx, multi_post)
     sender_cfg = isolated_workflow_config_for_side(attempt_root, "sender")
     receiver_cfg = isolated_workflow_config_for_side(attempt_root, "receiver")
@@ -227,7 +228,7 @@ def _live_sim_prepare_side_configs(
     return sender_cfg, receiver_cfg, sim_meta
 
 
-def _live_sim_fail_stego(sim_meta: Dict[str, Any], stego_out: Dict[str, Any]) -> Dict[str, Any]:
+def _live_sim_fail_stego(sim_meta: dict[str, Any], stego_out: dict[str, Any]) -> dict[str, Any]:
     return {
         "succeeded": False,
         "stage": "stego",
@@ -238,8 +239,8 @@ def _live_sim_fail_stego(sim_meta: Dict[str, Any], stego_out: Dict[str, Any]) ->
 
 
 def _live_sim_fail_build_post(
-    sim_meta: Dict[str, Any], exc: ValueError, stego_out: Dict[str, Any]
-) -> Dict[str, Any]:
+    sim_meta: dict[str, Any], exc: ValueError, stego_out: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "succeeded": False,
         "stage": "build_receiver_post",
@@ -251,8 +252,8 @@ def _live_sim_fail_build_post(
 
 
 def _live_sim_success_bundle(
-    sim_meta: Dict[str, Any], stego_out: Dict[str, Any], recv_out: Dict[str, Any]
-) -> Dict[str, Any]:
+    sim_meta: dict[str, Any], stego_out: dict[str, Any], recv_out: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "succeeded": True,
         "stego": stego_out,
@@ -264,13 +265,13 @@ def _live_sim_success_bundle(
 def _live_sim_run_receiver(
     *,
     receiver_cfg: WorkflowConfig,
-    recv_post: Dict[str, Any],
+    recv_post: dict[str, Any],
     uid: str,
     allow_fallback: bool,
-    effective_compressed: Optional[str],
+    effective_compressed: str | None,
     max_padding_bits: int,
-    on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
-) -> Dict[str, Any]:
+    on_progress: Callable[[str, dict[str, Any]], None] | None,
+) -> dict[str, Any]:
     from workflows.runner import WorkflowRunner
 
     with isolated_workflow_config(receiver_cfg):
@@ -292,18 +293,18 @@ def _live_sim_run_receiver(
 def run_stego_receiver_live_sim_once(
     *,
     uid: str,
-    post_id: Optional[str],
+    post_id: str | None,
     stego_list_offset: int,
-    payload: Optional[str],
-    tag: Optional[str],
+    payload: str | None,
+    tag: str | None,
     base: Path,
     attempt_idx: int,
     multi_post: bool,
     allow_fallback: bool,
-    compressed_full: Optional[str],
+    compressed_full: str | None,
     max_padding_bits: int,
-    on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
-) -> Dict[str, Any]:
+    on_progress: Callable[[str, dict[str, Any]], None] | None,
+) -> dict[str, Any]:
     """Single stego + receiver pair; may raise :exc:`RuntimeError` from receiver."""
     sender_cfg, receiver_cfg, sim_meta = _live_sim_prepare_side_configs(
         base, attempt_idx, multi_post
@@ -335,9 +336,9 @@ def run_stego_receiver_live_sim_once(
     return _live_sim_success_bundle(sim_meta, stego_out, recv_out)
 
 
-def normalized_angles_from_raw(raw: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+def normalized_angles_from_raw(raw: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Same filtering as GenAnglesPipeline.preview_post for comparable hashes."""
-    angles: List[Dict[str, str]] = []
+    angles: list[dict[str, str]] = []
     for result in raw:
         angle = {
             "source_quote": str(result.get("source_quote", "")),

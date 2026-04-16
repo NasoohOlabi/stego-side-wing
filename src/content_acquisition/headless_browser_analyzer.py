@@ -1,7 +1,6 @@
-import json
 import os
 import time
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
@@ -23,27 +22,42 @@ def normalize_url(url: str) -> str:
         parsed = urlparse(url)
         # Remove fragment
         parsed = parsed._replace(fragment="")
-        
+
         # Remove common tracking parameters
         tracking_params = {
-            "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-            "ref", "source", "fbclid", "gclid", "msclkid", "_ga", "_gid",
-            "mc_cid", "mc_eid", "ncid", "ncid", "yclid", "twclid"
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_term",
+            "utm_content",
+            "ref",
+            "source",
+            "fbclid",
+            "gclid",
+            "msclkid",
+            "_ga",
+            "_gid",
+            "mc_cid",
+            "mc_eid",
+            "ncid",
+            "yclid",
+            "twclid",
         }
-        
+
         if parsed.query:
             query_params = parse_qs(parsed.query, keep_blank_values=False)
             # Filter out tracking params
-            filtered_params = {k: v for k, v in query_params.items() 
-                             if k.lower() not in tracking_params}
-            
+            filtered_params = {
+                k: v for k, v in query_params.items() if k.lower() not in tracking_params
+            }
+
             # Rebuild query string
             if filtered_params:
                 new_query = urlencode(filtered_params, doseq=True)
                 parsed = parsed._replace(query=new_query)
             else:
                 parsed = parsed._replace(query="")
-        
+
         return urlunparse(parsed)
     except Exception:
         # If normalization fails, return original URL
@@ -53,7 +67,7 @@ def normalize_url(url: str) -> str:
 class WebAnalyzer:
     """Fetches page text with HTTP-first then Selenium; persists results under url_cache."""
 
-    def __init__(self, max_cache_files: Optional[int] = 10000):
+    def __init__(self, max_cache_files: int | None = 10000):
         """
         Initialize WebAnalyzer.
 
@@ -88,22 +102,22 @@ class WebAnalyzer:
         url: str,
         task: str = "summarize",
         timeout: int = 15,
-        auto_close: Optional[bool] = None,
+        auto_close: bool | None = None,
     ) -> dict[str, Any]:
         """
         Main public entry point. Handles the lifecycle and top-level error catching.
-        
+
         Args:
             url: URL to process
             task: Task type (currently unused, kept for backward compatibility)
             timeout: Overall timeout in seconds for processing this URL (default: 15)
             auto_close: Whether to close driver after this call. If None, uses instance default.
-        
+
         Returns:
             dict with url, success, text, error fields
         """
         start_time = time.time()
-        
+
         # Normalize URL for better cache hits
         normalized_url = normalize_url(url)
         cache_key = deterministic_hash_sha256(normalized_url)
@@ -114,6 +128,7 @@ class WebAnalyzer:
 
         # Check cache first
         from infrastructure.cache import read_json_cache
+
         cached_result = read_json_cache(filename)
         if cached_result:
             elapsed = time.time() - start_time
@@ -162,9 +177,10 @@ class WebAnalyzer:
                 "text": result["text"],
             }
             from infrastructure.cache import write_json_cache
+
             write_json_cache(filename, cache_data)
             self._log.debug("url_cache_saved", cache_file=filename)
-            
+
             # Optional: Rotate cache if it's too large
             if self.max_cache_files is not None:
                 self._rotate_cache_if_needed()
@@ -176,7 +192,7 @@ class WebAnalyzer:
             # Only close if auto_close is enabled
             if should_close:
                 self._close_driver()
-        
+
         elapsed = time.time() - start_time
         self._log.debug(
             "process_url_complete",
@@ -284,7 +300,7 @@ class WebAnalyzer:
                 let id = window.setTimeout(function() {}, 0);
                 while (id--) { window.clearTimeout(id); window.clearInterval(id); }
             """)
-        except:
+        except Exception:
             pass
 
     def _wait_for_stable_content(self, timeout: int = 10) -> None:
@@ -293,10 +309,7 @@ class WebAnalyzer:
         assert self.driver
         while time.time() - start < timeout:
             try:
-                if (
-                    self.driver.execute_script("return document.readyState")
-                    == "complete"
-                ):
+                if self.driver.execute_script("return document.readyState") == "complete":
                     # If ready, check stability quickly
                     curr_len = len(self._parse_html(self.driver.page_source))
                     if curr_len == last_len and curr_len > 0:
@@ -318,7 +331,7 @@ class WebAnalyzer:
                         break
 
                 time.sleep(0.5)
-            except:
+            except Exception:
                 break
 
     def _try_fast_http_fetch(self, url: str, min_len: int = 100, timeout: int = 5) -> str:
@@ -332,16 +345,16 @@ class WebAnalyzer:
             }
             response = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
             response.raise_for_status()
-            
+
             # Parse with BeautifulSoup
             text = self._parse_html(response.text)
-            
+
             if len(text) >= min_len:
                 return text
         except Exception:
             # Silently fail - we'll fall back to Selenium
             pass
-        
+
         return ""
 
     def _extract_text_content(self, url: str, min_len: int = 50, timeout: int = 12) -> str:
@@ -398,7 +411,7 @@ class WebAnalyzer:
             # Check timeout before each strategy
             if time.time() - overall_start > timeout:
                 break
-                
+
             try:
                 raw_content = strategy()
                 # If strategy returned raw HTML, clean it; if text, clean it lightly
@@ -425,9 +438,7 @@ class WebAnalyzer:
         if len(best_text) >= min_len:
             return best_text
 
-        raise RuntimeError(
-            f"Failed to extract sufficient content. Got {len(best_text)} chars."
-        )
+        raise RuntimeError(f"Failed to extract sufficient content. Got {len(best_text)} chars.")
 
     def _extract_from_selectors(self) -> str:
         """Internal: Fallback specific selector extraction."""
@@ -446,11 +457,11 @@ class WebAnalyzer:
         """Rotate cache by deleting oldest files if cache size exceeds max_cache_files."""
         if self.max_cache_files is None:
             return
-        
+
         cache_dir = "./datasets/url_cache"
         if not os.path.exists(cache_dir):
             return
-        
+
         try:
             # Get all cache files with their modification times
             cache_files = []
@@ -459,18 +470,18 @@ class WebAnalyzer:
                     filepath = os.path.join(cache_dir, filename)
                     mtime = os.path.getmtime(filepath)
                     cache_files.append((mtime, filepath))
-            
+
             # If we're under the limit, nothing to do
             if len(cache_files) <= self.max_cache_files:
                 return
-            
+
             # Sort by modification time (oldest first)
             cache_files.sort()
-            
+
             # Delete oldest files until we're under the limit
             files_to_delete = len(cache_files) - self.max_cache_files
             deleted = 0
-            for mtime, filepath in cache_files[:files_to_delete]:
+            for _mtime, filepath in cache_files[:files_to_delete]:
                 try:
                     os.remove(filepath)
                     deleted += 1

@@ -1,4 +1,5 @@
 """Key-value store routes."""
+
 from flask import Blueprint, jsonify, request
 
 from services.kv_service import get_value, init_db, migrate_json_to_sqlite, set_value
@@ -14,13 +15,13 @@ init_db()
 def set_value_route():
     """POST endpoint to set a key-value pair."""
     data = request.get_json(force=True, silent=True)
-    
+
     if not data or "key" not in data or "value" not in data:
         return jsonify({"error": 'Missing "key" or "value" in request body'}), 400
-    
+
     key = str(data["key"])
     value = data["value"]
-    
+
     try:
         result = set_value(key, value)
         return jsonify(result), 201

@@ -1,9 +1,8 @@
 """Search service for external search APIs."""
-import logging
-import os
-from typing import Any, Dict, List
 
-import dotenv
+import logging
+from typing import Any
+
 import ollama
 import requests
 
@@ -12,23 +11,24 @@ from infrastructure.config import get_env, get_env_required
 logger = logging.getLogger(__name__)
 
 
-def search_news_api(query: str) -> Dict[str, Any]:
+def search_news_api(query: str) -> dict[str, Any]:
     """
     Search using News API (deprecated endpoint logic).
-    
+
     Args:
         query: Search query
-        
+
     Returns:
         Dict with 'results' list or error info
     """
+    from typing import cast
+
     from integrations.news_api import (
         EverythingParams,
         NewsApiErrorResponse,
         NewsApiSuccessResponse,
         fetch_everything,
     )
-    from typing import cast
 
     search_params: EverythingParams = {
         "q": query,
@@ -63,27 +63,27 @@ def search_news_api(query: str) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-def search_ollama(query: str) -> List[Dict[str, str]]:
+def search_ollama(query: str) -> list[dict[str, str]]:
     """
     Search using Ollama web search.
-    
+
     Args:
         query: Search query
-        
+
     Returns:
         List of search results with title, url, content
-        
+
     Raises:
         ValueError: If query is missing
     """
     if not query:
         raise ValueError("No query")
-    
+
     ollama_api_key = get_env_required("OLLAMA_API_KEY")
     client = ollama.Client(
         host="https://ollama.com", headers={"Authorization": "Bearer " + ollama_api_key}
     )
-    
+
     logger.info(
         "search_ollama",
         extra={"event": "search", "provider": "ollama", "query": query},
@@ -95,24 +95,24 @@ def search_ollama(query: str) -> List[Dict[str, str]]:
     ]
 
 
-def search_bing(query: str, first: int = 1, count: int = 10) -> Dict[str, List[Dict[str, str]]]:
+def search_bing(query: str, first: int = 1, count: int = 10) -> dict[str, list[dict[str, str]]]:
     """
     Search using Bing via ScrapingDog API.
-    
+
     Args:
         query: Search query
         first: Starting index
         count: Number of results
-        
+
     Returns:
         Dict with 'results' list
-        
+
     Raises:
         ValueError: If query is missing or API key not configured
     """
     if not query:
         raise ValueError("Missing 'query' parameter")
-    
+
     api_key = get_env("SCRAPINGDOG_API_KEY")
     if not api_key:
         raise ValueError("ScrapingDog API key not configured")
@@ -130,9 +130,7 @@ def search_bing(query: str, first: int = 1, count: int = 10) -> Dict[str, List[D
         },
     )
     try:
-        resp = requests.get(
-            "https://api.scrapingdog.com/bing/search", params=params, timeout=20
-        )
+        resp = requests.get("https://api.scrapingdog.com/bing/search", params=params, timeout=20)
         resp.raise_for_status()
         data = resp.json()
         return {
@@ -142,27 +140,27 @@ def search_bing(query: str, first: int = 1, count: int = 10) -> Dict[str, List[D
             ]
         }
     except requests.RequestException as e:
-        raise ValueError(f"Bing search failed: {str(e)}")
+        raise ValueError(f"Bing search failed: {str(e)}") from e
 
 
-def search_google(query: str, first: int = 1, count: int = 10) -> Dict[str, List[Dict[str, str]]]:
+def search_google(query: str, first: int = 1, count: int = 10) -> dict[str, list[dict[str, str]]]:
     """
     Search using Google Custom Search API.
-    
+
     Args:
         query: Search query
         first: Starting index
         count: Number of results
-        
+
     Returns:
         Dict with 'results' list
-        
+
     Raises:
         ValueError: If query is missing or API keys not configured
     """
     if not query:
         raise ValueError("Missing 'query' parameter")
-    
+
     cse_id = get_env("GOOGLE_CSE_ID")
     if not cse_id:
         raise ValueError("Google Custom Search Engine ID not configured")
@@ -266,6 +264,4 @@ def search_google(query: str, first: int = 1, count: int = 10) -> Dict[str, List
             )
             continue
 
-    raise ValueError(
-        f"All {len(api_keys)} Google keys failed to fetch results. Errors: {errors}"
-    )
+    raise ValueError(f"All {len(api_keys)} Google keys failed to fetch results. Errors: {errors}")

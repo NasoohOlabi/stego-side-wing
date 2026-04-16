@@ -1,12 +1,14 @@
 """Optional JSONL debug logs for research term and SERP relevance heuristics."""
+
 from __future__ import annotations
 
 import json
 import os
 import re
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 _RE_TOKEN = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -14,7 +16,7 @@ _DEBUG_COMPONENT = "ResearchRelevanceDebug"
 _MAX_SNIPPET_CHARS = 400
 
 
-def research_debug_log_dir() -> Optional[Path]:
+def research_debug_log_dir() -> Path | None:
     raw = (os.environ.get("RESEARCH_DEBUG_LOG_DIR") or "").strip()
     if not raw:
         return None
@@ -22,9 +24,7 @@ def research_debug_log_dir() -> Optional[Path]:
 
 
 def _iso_utc_z() -> str:
-    return (
-        datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    )
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_lower(s: str) -> str:
@@ -91,10 +91,10 @@ def _snippet_preview(snippet: str) -> str:
 def _hit_row_if_selected(
     rank: int,
     term: str,
-    result: Dict[str, Any],
+    result: dict[str, Any],
     seen_links: set[str],
     corpus_tokens: frozenset[str],
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     link = result.get("link", "") or ""
     if not link or link.endswith(".pdf") or link in seen_links:
         return None
@@ -116,18 +116,18 @@ def _hit_row_if_selected(
 
 def iter_selected_hit_debug_rows(
     term: str,
-    raw_results: List[Dict[str, Any]],
+    raw_results: list[dict[str, Any]],
     seen_links: set[str],
     *,
     corpus_tokens: frozenset[str],
-) -> Iterable[Dict[str, Any]]:
+) -> Iterable[dict[str, Any]]:
     for rank, result in enumerate(raw_results, start=1):
         row = _hit_row_if_selected(rank, term, result, seen_links, corpus_tokens)
         if row is not None:
             yield row
 
 
-def _terms_report_summary(terms_report: Dict[str, Any]) -> dict[str, Any]:
+def _terms_report_summary(terms_report: dict[str, Any]) -> dict[str, Any]:
     return {
         "used_cache": terms_report.get("used_cache"),
         "cache_hit": terms_report.get("cache_hit"),
@@ -137,10 +137,13 @@ def _terms_report_summary(terms_report: Dict[str, Any]) -> dict[str, Any]:
 
 
 def _per_term_metric_rows(
-    search_terms: List[str], corpus_tokens: frozenset[str], title_tokens: frozenset[str]
-) -> List[dict[str, Any]]:
+    search_terms: list[str], corpus_tokens: frozenset[str], title_tokens: frozenset[str]
+) -> list[dict[str, Any]]:
     return [
-        {"term": t, **term_overlap_metrics(t, corpus_tokens=corpus_tokens, title_tokens=title_tokens)}
+        {
+            "term": t,
+            **term_overlap_metrics(t, corpus_tokens=corpus_tokens, title_tokens=title_tokens),
+        }
         for t in search_terms
     ]
 
@@ -149,10 +152,10 @@ def _build_terms_payload(
     *,
     trace_id: str,
     post_id: Any,
-    search_terms: List[str],
-    terms_report: Dict[str, Any],
-    post_title: Optional[str],
-    post_text: Optional[str],
+    search_terms: list[str],
+    terms_report: dict[str, Any],
+    post_title: str | None,
+    post_text: str | None,
 ) -> dict[str, Any]:
     title, body = post_title or "", post_text or ""
     corpus_tokens = tokenize(f"{title}\n{body}")
@@ -176,10 +179,10 @@ def write_research_terms_debug(
     log_dir: Path,
     trace_id: str,
     post_id: Any,
-    search_terms: List[str],
-    terms_report: Dict[str, Any],
-    post_title: Optional[str],
-    post_text: Optional[str],
+    search_terms: list[str],
+    terms_report: dict[str, Any],
+    post_title: str | None,
+    post_text: str | None,
 ) -> None:
     payload = _build_terms_payload(
         trace_id=trace_id,
@@ -193,19 +196,19 @@ def write_research_terms_debug(
 
 
 def _collect_selected_hit_rows(
-    search_terms: List[str],
-    raw_results_by_term: List[List[Dict[str, Any]]],
+    search_terms: list[str],
+    raw_results_by_term: list[list[dict[str, Any]]],
     corpus_tokens: frozenset[str],
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     seen: set[str] = set()
-    hits: List[Dict[str, Any]] = []
-    for term, raw in zip(search_terms, raw_results_by_term):
+    hits: list[dict[str, Any]] = []
+    for term, raw in zip(search_terms, raw_results_by_term, strict=True):
         for row in iter_selected_hit_debug_rows(term, raw, seen, corpus_tokens=corpus_tokens):
             hits.append(row)
     return hits
 
 
-def _mean_snippet_jaccard(hits: List[Dict[str, Any]]) -> float:
+def _mean_snippet_jaccard(hits: list[dict[str, Any]]) -> float:
     if not hits:
         return 0.0
     overlaps = [float(h["snippet_vs_corpus_jaccard"]) for h in hits]
@@ -217,8 +220,8 @@ def write_research_results_debug(
     log_dir: Path,
     trace_id: str,
     post_id: Any,
-    search_terms: List[str],
-    raw_results_by_term: List[List[Dict[str, Any]]],
+    search_terms: list[str],
+    raw_results_by_term: list[list[dict[str, Any]]],
     corpus_tokens: frozenset[str],
     raw_hits_total: int,
     selected_unique_urls: int,

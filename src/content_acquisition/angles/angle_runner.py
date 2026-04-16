@@ -6,7 +6,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 from requests.exceptions import (
@@ -62,9 +62,7 @@ MAX_CHARS_PER_TEXT = 30_000
 SEPARATOR = "\n\n---\n\n"
 
 # On HTTP errors that look like context limits, re-send as N overlapping chunks (no trimming).
-CONTEXT_RETRY_NUM_CHUNKS = max(
-    1, int(get_env("ANGLES_CONTEXT_RETRY_CHUNKS", "3") or "3")
-)
+CONTEXT_RETRY_NUM_CHUNKS = max(1, int(get_env("ANGLES_CONTEXT_RETRY_CHUNKS", "3") or "3"))
 CONTEXT_RETRY_OVERLAP_CHARS = max(
     0, int(get_env("ANGLES_CONTEXT_RETRY_OVERLAP_CHARS", "5000") or "5000")
 )
@@ -130,7 +128,7 @@ def _llm_http_timeout() -> float | None:
     return float(raw)
 
 
-def _chat_payload(messages: List[Dict[str, str]]) -> dict[str, Any]:
+def _chat_payload(messages: list[dict[str, str]]) -> dict[str, Any]:
     return {
         "model": angles_model_name(),
         "messages": messages,
@@ -219,7 +217,7 @@ def _log_transient_http_response(
 
 def _log_retry_exhausted(
     *,
-    retry_history: List[Dict[str, Any]],
+    retry_history: list[dict[str, Any]],
     final_error: BaseException | None,
     response: requests.Response | None = None,
 ) -> None:
@@ -249,7 +247,7 @@ def _retry_after_delay(attempt_idx: int, *, reason: str) -> None:
 def _quarantine_cache_file(cache_file: Path, reason: str) -> None:
     quarantine_dir = cache_file.parent / "_quarantine"
     quarantine_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S_%f")
     quarantined = quarantine_dir / f"{cache_file.stem}.{stamp}{cache_file.suffix}"
     try:
         cache_file.replace(quarantined)
@@ -344,7 +342,7 @@ def _run_post_retry_loop(
     timeout: float | None,
 ) -> str:
     attempts = _llm_max_attempts()
-    retry_history: List[Dict[str, Any]] = []
+    retry_history: list[dict[str, Any]] = []
     last_err: BaseException | None = None
     final_failure_logged = False
     for attempt in range(1, attempts + 1):
@@ -373,9 +371,7 @@ def _run_post_retry_loop(
                         "body_snippet": _safe_response_body_snippet(response),
                     }
                 )
-                _log_transient_http_response(
-                    response, attempt=attempt, attempts_max=attempts
-                )
+                _log_transient_http_response(response, attempt=attempt, attempts_max=attempts)
                 if attempt >= attempts:
                     last_err = HTTPError(
                         f"Transient HTTP {response.status_code} from {CHAT_ENDPOINT}"
@@ -450,7 +446,7 @@ def _run_post_retry_loop(
     raise RuntimeError("angles LLM request failed with no exception recorded")
 
 
-def _post_chat_response_or_retry(messages: List[Dict[str, str]]) -> str:
+def _post_chat_response_or_retry(messages: list[dict[str, str]]) -> str:
     return _run_post_retry_loop(
         _chat_payload(messages),
         _chat_headers(),
@@ -458,12 +454,12 @@ def _post_chat_response_or_retry(messages: List[Dict[str, str]]) -> str:
     )
 
 
-def _chunk_text_at_boundaries(text: str, max_chars: int) -> List[str]:
+def _chunk_text_at_boundaries(text: str, max_chars: int) -> list[str]:
     """Slice `text` into segments at most `max_chars` without trimming content."""
     if not text:
         return []
 
-    segments: List[str] = []
+    segments: list[str] = []
     start = 0
     length = len(text)
 
@@ -521,9 +517,9 @@ def _is_context_window_error(response: requests.Response) -> bool:
     return any(n in blob for n in needles)
 
 
-def _make_batches(segments: List[str], max_chars: int) -> List[List[str]]:
-    batches: List[List[str]] = []
-    current_batch: List[str] = []
+def _make_batches(segments: list[str], max_chars: int) -> list[list[str]]:
+    batches: list[list[str]] = []
+    current_batch: list[str] = []
     current_len = 0
 
     for segment in segments:
@@ -551,11 +547,8 @@ def _make_batches(segments: List[str], max_chars: int) -> List[List[str]]:
 def _log_prompt(
     prompt_text: str, chunk_index: int, total_chunks: int, label: str = "angles"
 ) -> None:
-    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    header = (
-        f"[{timestamp}] {label} chunk {chunk_index}/{total_chunks} "
-        f"(chars={len(prompt_text)})"
-    )
+    timestamp = datetime.datetime.now(datetime.UTC).isoformat()
+    header = f"[{timestamp}] {label} chunk {chunk_index}/{total_chunks} (chars={len(prompt_text)})"
     log_entry = f"{header}\n{prompt_text}\n\n{'-' * 80}\n\n"
 
     PROMPTS_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -577,7 +570,7 @@ def _emit_status(message: str) -> None:
         return
 
 
-def _build_user_prompt(batch: List[str]) -> str:
+def _build_user_prompt(batch: list[str]) -> str:
     combined = SEPARATOR.join(batch).strip()
     if "{{ }}" not in USER_PROMPT_TEMPLATE:
         raise ValueError("user prompt template missing '{{ }}' placeholder")
@@ -603,8 +596,8 @@ def _json_loads_angles_payload(text: str, *, phase: str) -> Any:
     return json.loads(stripped)
 
 
-def _schema_errors(data: Any) -> List[str]:
-    errors: List[str] = []
+def _schema_errors(data: Any) -> list[str]:
+    errors: list[str] = []
     if not isinstance(data, list):
         return ["Root must be a JSON array."]
 
@@ -623,7 +616,7 @@ def _schema_errors(data: Any) -> List[str]:
     return errors
 
 
-def _call_llm_with_messages(messages: List[Dict[str, str]]) -> str:
+def _call_llm_with_messages(messages: list[dict[str, str]]) -> str:
     return _post_chat_response_or_retry(messages)
 
 
@@ -636,16 +629,14 @@ def _call_llm(prompt_text: str) -> str:
     )
 
 
-def _transport_sub_batches(batch: List[str]) -> List[List[str]]:
+def _transport_sub_batches(batch: list[str]) -> list[list[str]]:
     if len(batch) > 1:
         mid = max(1, len(batch) // 2)
         return [batch[:mid], batch[mid:]]
     text = batch[0]
     min_len = _min_chars_to_split_segment()
     if len(text) <= min_len:
-        raise ValueError(
-            f"segment too small to split further (len={len(text)} max={min_len})"
-        )
+        raise ValueError(f"segment too small to split further (len={len(text)} max={min_len})")
     target = max(min_len, (len(text) + 1) // 2)
     parts = _chunk_text_at_boundaries(text, target)
     if len(parts) < 2:
@@ -653,27 +644,25 @@ def _transport_sub_batches(batch: List[str]) -> List[List[str]]:
     return [[p] for p in parts]
 
 
-def _run_context_window_split(
-    batch: List[str], batch_index: int
-) -> List[Dict[str, str]]:
+def _run_context_window_split(batch: list[str], batch_index: int) -> list[dict[str, str]]:
     combined = SEPARATOR.join(batch)
     parts = chunk_text_equal_overlap(
         combined,
         CONTEXT_RETRY_NUM_CHUNKS,
         CONTEXT_RETRY_OVERLAP_CHARS,
     )
-    merged: List[Dict[str, str]] = []
+    merged: list[dict[str, str]] = []
     for j, part in enumerate(parts, start=1):
         merged.extend(_run_angle_llm_on_batch([part], j, len(parts), _depth=0))
     return merged
 
 
 def _merge_transport_splits(
-    sub_batches: List[List[str]],
+    sub_batches: list[list[str]],
     batch_index: int,
     batch_total: int,
     depth: int,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     _LOG.info(
         "angles_transport_split",
         extra={
@@ -684,7 +673,7 @@ def _merge_transport_splits(
             "sub_batches": len(sub_batches),
         },
     )
-    merged: List[Dict[str, str]] = []
+    merged: list[dict[str, str]] = []
     for sub in sub_batches:
         merged.extend(
             _run_angle_llm_on_batch(
@@ -698,12 +687,12 @@ def _merge_transport_splits(
 
 
 def _run_angle_llm_on_batch(
-    batch: List[str],
+    batch: list[str],
     batch_index: int,
     batch_total: int,
     *,
     _depth: int = 0,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     user_prompt = _build_user_prompt(batch)
     _log_prompt(user_prompt, batch_index, batch_total, label="angles")
     try:
@@ -719,7 +708,7 @@ def _run_angle_llm_on_batch(
         try:
             sub_batches = _transport_sub_batches(batch)
         except ValueError:
-            raise exc
+            raise exc from None
         return _merge_transport_splits(sub_batches, batch_index, batch_total, _depth)
 
 
@@ -749,7 +738,7 @@ def _repair_json(raw_text: str, error_message: str, attempt: int) -> str:
     )
 
 
-def _parse_or_repair(raw_text: str) -> List[Dict[str, str]]:
+def _parse_or_repair(raw_text: str) -> list[dict[str, str]]:
     cleaned = _strip_code_fences(raw_text)
     try:
         data = json.loads(cleaned)
@@ -772,10 +761,10 @@ def _parse_or_repair(raw_text: str) -> List[Dict[str, str]]:
 
 
 def _tag_source_document(
-    angles: List[Dict[str, Any]], source_document: int
-) -> List[Dict[str, Any]]:
+    angles: list[dict[str, Any]], source_document: int
+) -> list[dict[str, Any]]:
     """Attach 0-based index into the caller's text dictionary (see build_post_text_dictionary)."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for a in angles:
         row = dict(a)
         row["source_document"] = source_document
@@ -829,7 +818,7 @@ def _parse_or_repair_workflow(
     provider: str,
     model: str,
     raw_text: str,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     cleaned = _strip_code_fences(raw_text)
     try:
         data = json.loads(cleaned)
@@ -870,10 +859,10 @@ def _run_workflow_angle_batch(
     *,
     provider: str,
     model: str,
-    batch: List[str],
+    batch: list[str],
     batch_index: int,
     batch_total: int,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     user_prompt = _build_user_prompt(batch)
     _log_prompt(user_prompt, batch_index, batch_total, label="angles_workflow")
     answer = llm.call_llm(
@@ -888,18 +877,18 @@ def _run_workflow_angle_batch(
 
 
 def analyze_angles_from_texts_via_workflow_llm(
-    texts: List[str],
+    texts: list[str],
     *,
     use_cache: bool = True,
-    llm: Optional[LLMAdapter] = None,
-) -> List[Dict[str, Any]]:
+    llm: LLMAdapter | None = None,
+) -> list[dict[str, Any]]:
     """
     Same outputs as ``analyze_angles_from_texts`` but uses ``LLMAdapter`` (Google when configured).
 
     Disk cache lives under ``angles_cache/workflow_google/`` so LM Studio cache files are not mixed.
     """
     analyze_t0 = time.perf_counter()
-    all_responses: List[Dict[str, Any]] = []
+    all_responses: list[dict[str, Any]] = []
     adapter = llm or LLMAdapter()
     cfg = get_config()
     provider, model = resolve_workflow_llm_provider_and_model(
@@ -962,7 +951,7 @@ def analyze_angles_from_texts_via_workflow_llm(
                 continue
 
             batches = _make_batches(segments, _effective_max_chars_per_prompt())
-            text_responses: List[Dict[str, str]] = []
+            text_responses: list[dict[str, str]] = []
 
             for idx, batch in enumerate(batches, start=1):
                 validated = _run_workflow_angle_batch(
@@ -1005,13 +994,11 @@ def analyze_angles_from_texts_via_workflow_llm(
     return all_responses
 
 
-def analyze_angles_from_texts(
-    texts: List[str], *, use_cache: bool = True
-) -> List[Dict[str, Any]]:
+def analyze_angles_from_texts(texts: list[str], *, use_cache: bool = True) -> list[dict[str, Any]]:
     if get_workflow_llm_backend() == "google":
         return analyze_angles_from_texts_via_workflow_llm(texts, use_cache=use_cache)
     analyze_t0 = time.perf_counter()
-    all_responses: List[Dict[str, Any]] = []
+    all_responses: list[dict[str, Any]] = []
 
     cache_root = get_angles_cache_dir()
     try:
@@ -1068,7 +1055,7 @@ def analyze_angles_from_texts(
                 continue
 
             batches = _make_batches(segments, _effective_max_chars_per_prompt())
-            text_responses: List[Dict[str, str]] = []
+            text_responses: list[dict[str, str]] = []
 
             for idx, batch in enumerate(batches, start=1):
                 validated = _run_angle_llm_on_batch(batch, idx, len(batches))

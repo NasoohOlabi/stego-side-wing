@@ -69,6 +69,7 @@ class ValidatePostWorkflowRequest(BaseModel):
         if isinstance(v, str):
             return v.strip()
         return v
+
     use_terms_cache: bool = False
     persist_terms_cache: bool = False
     use_fetch_cache: bool = False

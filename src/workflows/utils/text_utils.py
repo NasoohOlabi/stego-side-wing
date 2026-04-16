@@ -1,23 +1,24 @@
 """Shared text helpers used across workflow pipelines."""
+
 from __future__ import annotations
 
 import json
 import math
-from typing import Any, Dict, List
+from typing import Any
 
 
 def chunk_text_equal_overlap(
     text: str,
     num_chunks: int,
     overlap_chars: int,
-) -> List[str]:
+) -> list[str]:
     """
     Split `text` into `num_chunks` windows of equal nominal width with a fixed
     character overlap between consecutive windows. Every character of `text`
     appears in at least one chunk; no content is trimmed or dropped.
 
-    Window width W is chosen so that (n-1)*(W - O) + W >= len(text), i.e.
-    n*W - (n-1)*O >= L, using W = ceil((L + (n-1)*O) / n), capped by L.
+    Window width W is chosen so that (n-1)*(W - overlap) + W >= len(text), i.e.
+    n*W - (n-1)*overlap >= L, using W = ceil((L + (n-1)*overlap) / n), capped by L.
 
     Args:
         text: Full string to partition (empty -> []).
@@ -38,17 +39,17 @@ def chunk_text_equal_overlap(
 
     L = len(text)
     n = num_chunks
-    O = overlap_chars
+    overlap = overlap_chars
 
-    numer = L + (n - 1) * O
+    numer = L + (n - 1) * overlap
     win = max(1, math.ceil(numer / n))
     win = min(win, L)
-    stride = win - O
+    stride = win - overlap
     if stride < 1:
         stride = 1
-        win = min(L, stride + O)
+        win = min(L, stride + overlap)
 
-    chunks: List[str] = []
+    chunks: list[str] = []
     for i in range(n):
         start = i * stride
         if start >= L:
@@ -61,11 +62,11 @@ def chunk_text_equal_overlap(
     return chunks if chunks else [text]
 
 
-def flatten_comments(comments: Any) -> List[Dict[str, Any]]:
+def flatten_comments(comments: Any) -> list[dict[str, Any]]:
     """Flatten nested comment trees into a simple list."""
     if not isinstance(comments, list):
         return []
-    flattened: List[Dict[str, Any]] = []
+    flattened: list[dict[str, Any]] = []
 
     def walk(comment: Any) -> None:
         if not isinstance(comment, dict):
@@ -81,9 +82,9 @@ def flatten_comments(comments: Any) -> List[Dict[str, Any]]:
     return flattened
 
 
-def build_post_text_dictionary(post: Dict[str, Any]) -> List[str]:
+def build_post_text_dictionary(post: dict[str, Any]) -> list[str]:
     """Collect searchable text chunks from post body, search results, and comments."""
-    dictionary: List[str] = []
+    dictionary: list[str] = []
     selftext = post.get("selftext") or post.get("text", "")
     if isinstance(selftext, str) and selftext:
         dictionary.append(selftext)
@@ -106,7 +107,7 @@ def build_post_text_dictionary(post: Dict[str, Any]) -> List[str]:
     return dictionary
 
 
-def parse_json_array_response(response: str) -> List[Any]:
+def parse_json_array_response(response: str) -> list[Any]:
     """Parse list-like LLM output with markdown/extra text tolerance."""
     candidate = response.strip()
     if candidate.startswith("```"):

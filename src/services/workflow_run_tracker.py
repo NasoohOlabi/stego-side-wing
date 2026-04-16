@@ -1,19 +1,21 @@
 """In-process registry of workflow runs (API process only)."""
+
 from __future__ import annotations
 
 import logging
 import threading
 import time
 import uuid
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from contextvars import ContextVar, Token
-from typing import Any, Generator, Iterator
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _lock = threading.RLock()
-_runs: dict[str, "_RunRecord"] = {}
+_runs: dict[str, _RunRecord] = {}
 _run_id_ctx: ContextVar[str | None] = ContextVar("workflow_run_id", default=None)
 
 
@@ -89,7 +91,7 @@ def iter_snapshot() -> Iterator[dict[str, Any]]:
 
 
 @contextmanager
-def track_workflow(command: str) -> Generator[str, None, None]:
+def track_workflow(command: str) -> Generator[str]:
     run_id = register_run(command, "sync")
     token = bind_run_id(run_id)
     try:

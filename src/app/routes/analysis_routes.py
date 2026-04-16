@@ -1,9 +1,14 @@
 """Analysis and URL fetching routes."""
+
 from flask import Blueprint, jsonify
 
 from app.schemas.validators import get_json_body, get_query_param
 from infrastructure.config import STEPS
-from services.analysis_service import fetch_url_content, fetch_url_content_crawl4ai, process_post_file
+from services.analysis_service import (
+    fetch_url_content,
+    fetch_url_content_crawl4ai,
+    process_post_file,
+)
 
 bp = Blueprint("analysis", __name__)
 
@@ -15,22 +20,22 @@ def process_file_endpoint():
     if err:
         return err
     assert data is not None
-    
+
     if "name" not in data:
         return jsonify({"error": "Missing 'name' in request body"}), 400
     if "step" not in data:
         return jsonify({"error": "Missing 'step' in request body"}), 400
-    
+
     filename = data["name"]
     step = data["step"]
     if not isinstance(filename, str):
         return jsonify({"error": "'name' must be a string"}), 400
     if not isinstance(step, str):
         return jsonify({"error": "'step' must be a string"}), 400
-    
+
     if step not in STEPS:
         return jsonify({"error": f"Invalid step: {step}"}), 400
-    
+
     try:
         result = process_post_file(filename, step)
         return jsonify(result)
@@ -46,7 +51,7 @@ def fetch_url_content_route():
     """Fetch URL content using WebAnalyzer."""
     url, _ = get_query_param("url", str, required=False)
     normalized_url = (url or "").strip()
-    
+
     try:
         result = fetch_url_content(normalized_url)
         return jsonify(result), 200
@@ -59,7 +64,7 @@ def fetch_url_content_crawl4ai_route():
     """Fetch URL content using crawl4ai."""
     url, _ = get_query_param("url", str, required=False)
     normalized_url = (url or "").strip()
-    
+
     try:
         result = fetch_url_content_crawl4ai(normalized_url)
         return jsonify(result), 200

@@ -1,4 +1,5 @@
 """Semantic search routes."""
+
 from flask import Blueprint, jsonify
 
 from app.schemas.validators import get_json_body
@@ -14,7 +15,7 @@ def semantic_search_route():
     if err:
         return err
     assert data is not None
-    
+
     query_text = data.get("text")
     objects_list = data.get("objects")
     n = data.get("n")
@@ -22,7 +23,7 @@ def semantic_search_route():
         return jsonify({"error": "Missing or invalid 'text' field (must be a string)"}), 400
     if not isinstance(objects_list, list):
         return jsonify({"error": "Missing or invalid 'objects' field (must be a list)"}), 400
-    
+
     try:
         result = semantic_search(query_text, objects_list, n)
         return jsonify(result), 200
@@ -40,14 +41,16 @@ def needle_finder():
     if err:
         return err
     assert data is not None
-    
+
     needle = data.get("needle")
     haystack = data.get("haystack")
     if not isinstance(needle, str):
         return jsonify({"error": "Missing or invalid 'needle' field (must be a string)"}), 400
     if not isinstance(haystack, list) or not all(isinstance(item, str) for item in haystack):
-        return jsonify({"error": "Missing or invalid 'haystack' field (must be a list of strings)"}), 400
-    
+        return jsonify(
+            {"error": "Missing or invalid 'haystack' field (must be a list of strings)"}
+        ), 400
+
     try:
         result = find_best_match(needle, haystack)
         return jsonify(result), 200
@@ -66,16 +69,16 @@ def needle_finder_batch():
     if err:
         return err
     assert data is not None
-    
+
     needles = data.get("needles")
     haystack = data.get("haystack")
-    
+
     if not needles or not isinstance(needles, list):
         return jsonify({"error": "Missing or invalid 'needles' field (must be a list)"}), 400
-    
+
     if not haystack or not isinstance(haystack, list):
         return jsonify({"error": "Missing or invalid 'haystack' field (must be a list)"}), 400
-    
+
     results: list[dict[str, str] | dict[str, object]] = []
     for needle in needles:
         if not isinstance(needle, str):
@@ -88,5 +91,5 @@ def needle_finder_batch():
             results.append({"error": f"Failed to process needle '{needle}': {str(e)}"})
         except Exception as e:
             results.append({"error": f"Unexpected error processing needle '{needle}': {str(e)}"})
-    
+
     return jsonify({"results": results}), 200

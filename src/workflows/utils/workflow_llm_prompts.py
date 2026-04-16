@@ -1,14 +1,14 @@
 """Versioned workflow LLM prompt templates loaded from repo JSON with in-process cache."""
+
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, Field, validate_call
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError, validate_call
 
 from infrastructure.config import REPO_ROOT
 
@@ -198,7 +198,7 @@ def default_workflow_llm_prompts() -> WorkflowLlmPromptsDocument:
     )
 
 
-_cache: Optional[WorkflowLlmPromptsDocument] = None
+_cache: WorkflowLlmPromptsDocument | None = None
 
 
 def reload_prompts() -> None:

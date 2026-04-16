@@ -1,4 +1,5 @@
 """Event loop management - re-export from event_loop_manager for consistency."""
+
 from event_loop_manager import (
     get_event_loop,
     is_event_loop_running,

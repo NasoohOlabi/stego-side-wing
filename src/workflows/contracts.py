@@ -1,26 +1,28 @@
 """Type definitions for workflow payloads and state."""
+
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
 class PostPayload:
     """Post data structure used across workflows."""
+
     id: str
-    title: Optional[str] = None
-    text: Optional[str] = None
-    url: Optional[str] = None
-    post_id: Optional[str] = None
-    post_title: Optional[str] = None
-    post_text: Optional[str] = None
-    post_url: Optional[str] = None
-    search_results: Optional[List[Dict[str, Any]]] = None
-    angles: Optional[List[Dict[str, Any]]] = None
-    options_count: Optional[int] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
+    title: str | None = None
+    text: str | None = None
+    url: str | None = None
+    post_id: str | None = None
+    post_title: str | None = None
+    post_text: str | None = None
+    post_url: str | None = None
+    search_results: list[dict[str, Any]] | None = None
+    angles: list[dict[str, Any]] | None = None
+    options_count: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
         if self.id:
             result["id"] = self.id
         if self.title:
@@ -44,9 +46,9 @@ class PostPayload:
         if self.options_count is not None:
             result["options_count"] = self.options_count
         return result
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PostPayload":
+    def from_dict(cls, data: dict[str, Any]) -> "PostPayload":
         """Create from dictionary."""
         return cls(
             id=data.get("id", ""),
@@ -66,11 +68,12 @@ class PostPayload:
 @dataclass
 class SearchResult:
     """Search result structure."""
+
     title: str
     link: str
     snippet: str
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         return {
             "title": self.title,
             "link": self.link,
@@ -81,14 +84,15 @@ class SearchResult:
 @dataclass
 class FetchUrlResult:
     """URL fetch result structure."""
+
     url: str
     success: bool
-    text: Optional[str] = None
-    content_type: Optional[str] = None
-    error: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
+    text: str | None = None
+    content_type: str | None = None
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "url": self.url,
             "success": self.success,
         }
@@ -104,14 +108,15 @@ class FetchUrlResult:
 @dataclass
 class AngleResult:
     """Angle analysis result."""
+
     source_quote: str
     tangent: str
     category: str
-    source_document: Optional[int] = None
-    idx: Optional[int] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
+    source_document: int | None = None
+    idx: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "source_quote": self.source_quote,
             "tangent": self.tangent,
             "category": self.category,
@@ -126,12 +131,13 @@ class AngleResult:
 @dataclass
 class StegoResult:
     """Steganographic encoding result."""
+
     stego_text: str
-    post: Dict[str, Any]
-    embedding_metadata: Optional[Dict[str, Any]] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
+    post: dict[str, Any]
+    embedding_metadata: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "stego_text": self.stego_text,
             "post": self.post,
         }

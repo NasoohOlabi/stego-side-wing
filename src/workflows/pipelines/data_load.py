@@ -1,6 +1,7 @@
 """DataLoad pipeline: fetch URL content for unresolved posts."""
+
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -12,7 +13,7 @@ from workflows.pipelines.fetch_url_content import FetchUrlContentPipeline
 from workflows.utils.protocol_utils import stable_hash, text_preview
 
 
-def _url_host(url: str) -> Optional[str]:
+def _url_host(url: str) -> str | None:
     try:
         netloc = urlparse(url).netloc
         return netloc or None
@@ -52,7 +53,7 @@ class DataLoadPipeline:
         operation_id: str,
         file_name: str,
         step: str,
-    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         t_fetch = time.perf_counter()
         post = self.backend.get_post_local(file_name, step)
         pid = post.get("id")
@@ -92,10 +93,10 @@ class DataLoadPipeline:
     def _process_batch_files(
         self,
         operation_id: str,
-        batch: List[str],
+        batch: list[str],
         step: str,
-    ) -> List[Dict[str, Any]]:
-        batch_results: List[Dict[str, Any]] = []
+    ) -> list[dict[str, Any]]:
+        batch_results: list[dict[str, Any]] = []
         for file_name in batch:
             try:
                 merged, _ = self._fetch_and_merge_post(operation_id, file_name, step)
@@ -116,8 +117,8 @@ class DataLoadPipeline:
     def _persist_batch(
         self,
         operation_id: str,
-        batch_results: List[Dict[str, Any]],
-        processed_posts: List[Dict[str, Any]],
+        batch_results: list[dict[str, Any]],
+        processed_posts: list[dict[str, Any]],
     ) -> None:
         for post in batch_results:
             post_id = post.get("id")
@@ -149,7 +150,7 @@ class DataLoadPipeline:
         step: str,
         count: int,
         offset: int,
-    ) -> Tuple[List[str], int]:
+    ) -> tuple[list[str], int]:
         t_list = time.perf_counter()
         posts_list = self.backend.posts_list(step=step, count=count, offset=offset)
         list_ms = int((time.perf_counter() - t_list) * 1000)
@@ -160,7 +161,7 @@ class DataLoadPipeline:
         operation_id: str,
         step: str,
         t_run: float,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         total_ms = int((time.perf_counter() - t_run) * 1000)
         _log_event(
             self._log,
@@ -179,10 +180,10 @@ class DataLoadPipeline:
         operation_id: str,
         step: str,
         t_run: float,
-        processed_posts: List[Dict[str, Any]],
+        processed_posts: list[dict[str, Any]],
         files_done: int,
         n_batches: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         total_ms = int((time.perf_counter() - t_run) * 1000)
         _log_event(
             self._log,
@@ -199,9 +200,9 @@ class DataLoadPipeline:
     def _time_batch_fetch(
         self,
         operation_id: str,
-        batch: List[str],
+        batch: list[str],
         step: str,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         t_batch = time.perf_counter()
         batch_results = self._process_batch_files(operation_id, batch, step)
         return batch_results, int((time.perf_counter() - t_batch) * 1000)
@@ -209,11 +210,11 @@ class DataLoadPipeline:
     def _drive_post_batches(
         self,
         operation_id: str,
-        file_names: List[str],
+        file_names: list[str],
         batch_size: int,
         step: str,
-    ) -> Tuple[List[Dict[str, Any]], int, int]:
-        processed: List[Dict[str, Any]] = []
+    ) -> tuple[list[dict[str, Any]], int, int]:
+        processed: list[dict[str, Any]] = []
         batch_count = 0
         files_processed = 0
         for i in range(0, len(file_names), batch_size):
@@ -239,7 +240,7 @@ class DataLoadPipeline:
         batch_size: int = 5,
         count: int = 100,
         offset: int = 0,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         self._ensure_log()
         operation_id = str(uuid4())
         t_run = time.perf_counter()
@@ -266,10 +267,10 @@ class DataLoadPipeline:
 
     def preview_post(
         self,
-        post: Dict,
+        post: dict,
         *,
         use_cache: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Fetch URL content for an in-memory post dict (receiver / object workflows)."""
         self._ensure_log()
         post_id = post.get("id")
@@ -283,7 +284,7 @@ class DataLoadPipeline:
         t0 = time.perf_counter()
         fetch_result = self.fetch_pipeline.fetch(url.strip(), use_cache=use_cache)
         fetch_ms = int((time.perf_counter() - t0) * 1000)
-        report: Dict[str, Any] = {
+        report: dict[str, Any] = {
             "post_id": str(post_id),
             "step": None,
             "url": url.strip(),
@@ -333,7 +334,7 @@ class DataLoadPipeline:
         post_id: str,
         step: str = "filter-url-unresolved",
         use_cache: bool = True,
-    ) -> Dict:
+    ) -> dict:
         """Fetch one post live without mutating step artifacts."""
         self._ensure_log()
         file_name = f"{post_id}.json"
@@ -346,7 +347,7 @@ class DataLoadPipeline:
         t0 = time.perf_counter()
         fetch_result = self.fetch_pipeline.fetch(url.strip(), use_cache=use_cache)
         fetch_ms = int((time.perf_counter() - t0) * 1000)
-        report: Dict[str, Any] = {
+        report: dict[str, Any] = {
             "post_id": post_id,
             "step": step,
             "url": url.strip(),
@@ -395,7 +396,7 @@ class DataLoadPipeline:
         post_id: str,
         step: str = "filter-url-unresolved",
         use_cache: bool = True,
-    ) -> Dict:
+    ) -> dict:
         """
         Process a single post by ID and persist the DataLoad output.
 

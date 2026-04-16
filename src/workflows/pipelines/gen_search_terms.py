@@ -1,9 +1,10 @@
 """Generate search terms from post content."""
+
 import json
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -22,11 +23,11 @@ class GenSearchTermsPipeline:
     def __init__(self) -> None:
         self.config = get_config()
         self.llm = LLMAdapter()
-        self._last_cache_error: Optional[str] = None
-        self._last_parse_mode: Optional[str] = None
+        self._last_cache_error: str | None = None
+        self._last_parse_mode: str | None = None
         self._log = logger.bind(component="GenSearchTermsPipeline")
         self._init_cache_db()
-    
+
     def _sync_research_terms_cache_binding(self) -> None:
         """Rebind terms DB to current :func:`get_config` (e.g. under isolated workflow config)."""
         self.config = get_config()
@@ -50,13 +51,11 @@ class GenSearchTermsPipeline:
         conn.commit()
         conn.close()
         self.cache_db_path = cache_db
-    
-    def _get_cached_terms(self, post_id: str) -> Optional[List[str]]:
+
+    def _get_cached_terms(self, post_id: str) -> list[str] | None:
         """Get cached search terms for a post."""
         if not hasattr(self, "_log"):
-            object.__setattr__(
-                self, "_log", logger.bind(component="GenSearchTermsPipeline")
-            )
+            object.__setattr__(self, "_log", logger.bind(component="GenSearchTermsPipeline"))
         self._last_cache_error = None
         try:
             conn = sqlite3.connect(self.cache_db_path)
@@ -103,13 +102,11 @@ class GenSearchTermsPipeline:
                 cache_error=self._last_cache_error,
             )
             return None
-    
-    def _cache_terms(self, post_id: str, terms: List[str]) -> None:
+
+    def _cache_terms(self, post_id: str, terms: list[str]) -> None:
         """Cache search terms for a post."""
         if not hasattr(self, "_log"):
-            object.__setattr__(
-                self, "_log", logger.bind(component="GenSearchTermsPipeline")
-            )
+            object.__setattr__(self, "_log", logger.bind(component="GenSearchTermsPipeline"))
         try:
             conn = sqlite3.connect(self.cache_db_path)
             try:
@@ -130,9 +127,9 @@ class GenSearchTermsPipeline:
 
     @staticmethod
     def _build_prompt(
-        post_title: Optional[str] = None,
-        post_text: Optional[str] = None,
-        post_url: Optional[str] = None,
+        post_title: str | None = None,
+        post_text: str | None = None,
+        post_url: str | None = None,
     ) -> str:
         return format_gen_search_terms_user_prompt(
             post_title=post_title,
@@ -141,23 +138,21 @@ class GenSearchTermsPipeline:
         )
 
     @staticmethod
-    def _normalize_terms(terms: List[str]) -> List[str]:
+    def _normalize_terms(terms: list[str]) -> list[str]:
         return unique_preserve_order(str(term) for term in terms if str(term).strip())
 
     def preview_generation(
         self,
         post_id: str,
-        post_title: Optional[str] = None,
-        post_text: Optional[str] = None,
-        post_url: Optional[str] = None,
+        post_title: str | None = None,
+        post_text: str | None = None,
+        post_url: str | None = None,
         use_cache: bool = True,
         persist_cache: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate search terms and return protocol metadata."""
         if not hasattr(self, "_log"):
-            object.__setattr__(
-                self, "_log", logger.bind(component="GenSearchTermsPipeline")
-            )
+            object.__setattr__(self, "_log", logger.bind(component="GenSearchTermsPipeline"))
         self._sync_research_terms_cache_binding()
         t_start = time.perf_counter()
         prompt = self._build_prompt(
@@ -171,7 +166,7 @@ class GenSearchTermsPipeline:
         )
         cache_hit = False
         cache_error = None
-        cached_terms: Optional[List[str]] = None
+        cached_terms: list[str] | None = None
         cache_db_path = str(getattr(self, "cache_db_path", "") or "") or None
         # region agent log
         write_debug_probe(
@@ -363,25 +358,25 @@ class GenSearchTermsPipeline:
                 "terms_hash": stable_hash([]),
                 "error": str(e),
             }
-    
+
     def generate(
         self,
         post_id: str,
-        post_title: Optional[str] = None,
-        post_text: Optional[str] = None,
-        post_url: Optional[str] = None,
+        post_title: str | None = None,
+        post_text: str | None = None,
+        post_url: str | None = None,
         use_cache: bool = True,
         persist_cache: bool = True,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Generate search terms for a post.
-        
+
         Args:
             post_id: Post identifier
             post_title: Post title
             post_text: Post text content
             post_url: Post URL
-        
+
         Returns:
             List of search term strings
         """
@@ -394,14 +389,14 @@ class GenSearchTermsPipeline:
             persist_cache=persist_cache,
         )
         return list(report.get("terms", []))
-    
-    def _parse_terms(self, response: str) -> List[str]:
+
+    def _parse_terms(self, response: str) -> list[str]:
         """Parse search terms from LLM response."""
         terms = parse_json_array_response(response)
         if terms:
             self._last_parse_mode = "json_array"
             return [str(t) for t in terms if t]
-        
+
         # Last resort: split by newlines and commas
         terms = []
         for line in response.split("\n"):
@@ -409,7 +404,7 @@ class GenSearchTermsPipeline:
             if not line:
                 continue
             # Remove quotes and brackets
-            line = line.strip('"\'[]')
+            line = line.strip("\"'[]")
             if line:
                 terms.append(line)
         self._last_parse_mode = "line_fallback" if terms else "empty"

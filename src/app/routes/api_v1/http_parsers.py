@@ -39,7 +39,9 @@ def query_bool(name: str, default: bool = False) -> bool:
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
-def body_int(body: dict[str, Any], key: str, default: int) -> tuple[int | None, tuple[Any, int] | None]:
+def body_int(
+    body: dict[str, Any], key: str, default: int
+) -> tuple[int | None, tuple[Any, int] | None]:
     value = body.get(key, default)
     try:
         return int(value), None

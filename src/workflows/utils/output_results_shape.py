@@ -1,17 +1,18 @@
 """Classify and normalize stego artifacts under ``output-results`` (n8n array shape)."""
+
 from __future__ import annotations
 
 import json
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Dict, List, Literal
+from typing import Any, Literal
 
 MigrateOutcome = Literal["ok", "would_migrate", "migrated", "other", "error"]
 
 N8N_ARTIFACT_KEYS = frozenset({"stegoText", "embedding", "post"})
 
 
-class OutputResultsShapeKind(str, Enum):
+class OutputResultsShapeKind(StrEnum):
     """Root JSON classification for migration."""
 
     OK = "ok"
@@ -28,7 +29,7 @@ def classify_output_results_root(data: Any) -> OutputResultsShapeKind:
     return OutputResultsShapeKind.OTHER
 
 
-def n8n_save_object_body(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+def n8n_save_object_body(result: dict[str, Any]) -> list[dict[str, Any]]:
     """Same shape as n8n Save node: one-element array, camelCase keys."""
     stego = result.get("stego_text")
     stego_str = stego if isinstance(stego, str) else ""

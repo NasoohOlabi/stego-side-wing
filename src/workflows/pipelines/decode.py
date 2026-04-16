@@ -7,7 +7,7 @@ HTTP semantic_search with n=20, then G Decode agent with model gpt-oss-20b
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -34,7 +34,7 @@ _DECODE_LOG_BASE: dict[str, str] = {
 _DECODE_MAX_TOKENS = 128
 
 
-def _angle_signature(angle: Dict[str, Any]) -> Tuple[str, str, str]:
+def _angle_signature(angle: dict[str, Any]) -> tuple[str, str, str]:
     return (
         str(angle.get("category", "")),
         str(angle.get("source_quote", "")),
@@ -43,10 +43,10 @@ def _angle_signature(angle: Dict[str, Any]) -> Tuple[str, str, str]:
 
 
 def _labeled_angle_candidates(
-    top_candidates: List[Dict[str, Any]], angles: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+    top_candidates: list[dict[str, Any]], angles: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """Angles shown to the decode LLM with canonical global ``idx`` (matches ``angles`` index)."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for c in top_candidates:
         i = c.get("index")
         if isinstance(i, int) and 0 <= i < len(angles):
@@ -66,7 +66,7 @@ def _strip_code_fence(text: str) -> str:
     return s
 
 
-def _try_labeled_or_json_idx(raw: str, allowed: set[int]) -> Tuple[Optional[int], str]:
+def _try_labeled_or_json_idx(raw: str, allowed: set[int]) -> tuple[int | None, str]:
     m_json = re.search(r'"idx"\s*:\s*(\d+)', raw)
     if m_json:
         n = int(m_json.group(1))
@@ -85,7 +85,7 @@ def _try_labeled_or_json_idx(raw: str, allowed: set[int]) -> Tuple[Optional[int]
     return None, "none"
 
 
-def _try_last_line_digits(raw: str, allowed: set[int]) -> Tuple[Optional[int], str]:
+def _try_last_line_digits(raw: str, allowed: set[int]) -> tuple[int | None, str]:
     lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
     if not lines:
         return None, "none"
@@ -100,8 +100,8 @@ def _try_last_line_digits(raw: str, allowed: set[int]) -> Tuple[Optional[int], s
 def _extract_decode_index(
     response: str,
     allowed_indices: set[int],
-    top_candidates: List[Dict[str, Any]],
-) -> Tuple[Optional[int], str]:
+    top_candidates: list[dict[str, Any]],
+) -> tuple[int | None, str]:
     """Prefer structured / final-line digits over the first number in verbose prose."""
     raw = _strip_code_fence(response)
     for fn in (_try_labeled_or_json_idx, _try_last_line_digits):
@@ -131,19 +131,19 @@ class DecodePipeline:
 
     def _find_angle_index(
         self,
-        target: Dict[str, Any],
-        lookup: Dict[Tuple[str, str, str], List[int]],
-    ) -> Optional[int]:
+        target: dict[str, Any],
+        lookup: dict[tuple[str, str, str], list[int]],
+    ) -> int | None:
         indices = lookup.get(_angle_signature(target), [])
         return indices[0] if indices else None
 
     def decode(
         self,
         stego_text: str,
-        angles: List[Dict[str, Any]],
-        few_shots: Optional[List[Dict[str, Any]]] = None,
-        base_url: Optional[str] = None,
-    ) -> Optional[int]:
+        angles: list[dict[str, Any]],
+        few_shots: list[dict[str, Any]] | None = None,
+        base_url: str | None = None,
+    ) -> int | None:
         """
         Decode stego text to angle index.
 
@@ -189,11 +189,11 @@ class DecodePipeline:
                 )
                 return None
 
-            lookup: Dict[Tuple[str, str, str], List[int]] = {}
+            lookup: dict[tuple[str, str, str], list[int]] = {}
             for idx, angle in enumerate(angles):
                 lookup.setdefault(_angle_signature(angle), []).append(idx)
 
-            top_candidates: List[Dict[str, Any]] = []
+            top_candidates: list[dict[str, Any]] = []
             unmapped_semantic = 0
             for rank, result in enumerate(results[:DECODE_SEMANTIC_TOP_N], start=1):
                 obj = result.get("object", {})
@@ -275,8 +275,8 @@ class DecodePipeline:
                 prompt_body=prompt,
             )
 
-            response: Optional[str] = None
-            last_exc: Optional[BaseException] = None
+            response: str | None = None
+            last_exc: BaseException | None = None
             provider, model = resolve_workflow_llm_provider_and_model(DECODE_LLM_MODEL)
             for attempt in range(1, DECODE_LLM_MAX_TRIES + 1):
                 try:
@@ -338,9 +338,7 @@ class DecodePipeline:
                     response_chars=len(response or ""),
                 )
 
-            picked, how = _extract_decode_index(
-                response, allowed_indices, top_candidates
-            )
+            picked, how = _extract_decode_index(response, allowed_indices, top_candidates)
             if picked is not None and how != "rank_fallback":
                 self._log.info(
                     "decode_index_resolved",

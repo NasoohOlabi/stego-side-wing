@@ -1,12 +1,11 @@
 """Request validation helpers."""
 
-from typing import Any, TypeVar
+from typing import Any
 
 from flask import Response, jsonify, request
 
 JSONDict = dict[str, Any]
 ErrorResponse = tuple[Response, int]
-T = TypeVar("T")
 
 
 def get_json_body() -> tuple[JSONDict | None, ErrorResponse | None]:
@@ -23,7 +22,7 @@ def get_json_body() -> tuple[JSONDict | None, ErrorResponse | None]:
     return data, None
 
 
-def get_query_param(
+def get_query_param[T](
     key: str,
     param_type: type[T] = str,
     required: bool = False,

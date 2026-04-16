@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Iterator, Optional
 
 from infrastructure.config import REPO_ROOT
 
 DEFAULT_ANGLES_CACHE_DIR = REPO_ROOT / "datasets" / "angles_cache"
 
-_angles_cache_dir_var: ContextVar[Optional[Path]] = ContextVar("angles_cache_dir", default=None)
+_angles_cache_dir_var: ContextVar[Path | None] = ContextVar("angles_cache_dir", default=None)
 
 
 def get_angles_cache_dir() -> Path:

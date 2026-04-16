@@ -1,4 +1,5 @@
 """API v1: health, state, filesystem, workflow LLM prompts, artifacts."""
+
 from __future__ import annotations
 
 import logging
@@ -33,6 +34,7 @@ from services.state_service import (
 from services.workflow_facade import WorkflowLlmPromptsDocument
 
 logger = logging.getLogger(__name__)
+
 
 @bp.route("/health", methods=["GET"])
 def health() -> tuple[Any, int]:

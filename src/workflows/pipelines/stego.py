@@ -1,9 +1,12 @@
 """Steganographic encoding pipeline with n8n parity logic."""
+
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from uuid import uuid4
+
+from loguru import logger
 
 from infrastructure.config import resolve_workflow_llm_provider_and_model
 from workflows.adapters.backend_api import BackendAPIAdapter
@@ -11,8 +14,6 @@ from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
 from workflows.llm_temperatures import STEGO_CYCLE_LLM_TEMPERATURE
 from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
-from loguru import logger
-
 from workflows.utils import stego_codec
 from workflows.utils.output_results_shape import (
     assert_valid_n8n_stego_artifact,
@@ -20,10 +21,20 @@ from workflows.utils.output_results_shape import (
 )
 from workflows.utils.stego_codec import (
     augment_post as codec_augment_post,
+)
+from workflows.utils.stego_codec import (
     build_dictionary as codec_build_dictionary,
+)
+from workflows.utils.stego_codec import (
     compress_payload as codec_compress_payload,
+)
+from workflows.utils.stego_codec import (
     embed_in_angle_selection as codec_embed_in_angle_selection,
+)
+from workflows.utils.stego_codec import (
     embed_in_comment_selection as codec_embed_in_comment_selection,
+)
+from workflows.utils.stego_codec import (
     flatten_comments,
 )
 from workflows.utils.workflow_llm_prompts import get_prompts
@@ -51,13 +62,13 @@ def _stego_log_bind(
     log_area: str,
     *,
     log_op: str = "encode",
-    prompt_role: Optional[str] = None,
-    llm_stage: Optional[str] = None,
-    process_event: Optional[str] = None,
-    timing_phase: Optional[str] = None,
+    prompt_role: str | None = None,
+    llm_stage: str | None = None,
+    process_event: str | None = None,
+    timing_phase: str | None = None,
 ) -> Any:
     """Structured stego log context (log_domain / log_area / log_op); message stays prefix-free."""
-    fields: Dict[str, Any] = {
+    fields: dict[str, Any] = {
         "log_domain": "stego",
         "log_area": log_area,
         "log_op": log_op,
@@ -77,13 +88,13 @@ def _stego_log_bind(
 STEGO_LLM_JSON_STRING_COUNT = 3
 
 
-def _stego_clean_json_string_list(items: Any) -> List[str]:
+def _stego_clean_json_string_list(items: Any) -> list[str]:
     if not isinstance(items, list):
         return []
     return [str(x).strip() for x in items if isinstance(x, str) and str(x).strip()]
 
 
-def _stego_comment_strings_from_parsed(parsed: Any) -> Optional[List[str]]:
+def _stego_comment_strings_from_parsed(parsed: Any) -> list[str] | None:
     """Three non-empty strings: top-level array or dict texts/comments/items/output."""
     direct = _stego_clean_json_string_list(parsed)
     if direct:
@@ -96,7 +107,7 @@ def _stego_comment_strings_from_parsed(parsed: Any) -> Optional[List[str]]:
     return None
 
 
-def _eq_angle(lhs: Optional[Dict[str, Any]], rhs: Optional[Dict[str, Any]]) -> bool:
+def _eq_angle(lhs: dict[str, Any] | None, rhs: dict[str, Any] | None) -> bool:
     if lhs is None and rhs is None:
         return True
     if lhs is None or rhs is None:
@@ -108,7 +119,7 @@ def _eq_angle(lhs: Optional[Dict[str, Any]], rhs: Optional[Dict[str, Any]]) -> b
     )
 
 
-def _angle_summary(angle: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _angle_summary(angle: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(angle, dict):
         return None
     return {
@@ -171,7 +182,7 @@ class StegoPipeline:
         self.decode_pipeline = DecodePipeline()
         self.config = get_config()
 
-    def _load_default_payload_and_tag(self) -> Tuple[Optional[str], Optional[str]]:
+    def _load_default_payload_and_tag(self) -> tuple[str | None, str | None]:
         """Load default payload/tag from the n8n Stego workflow SetSecretData node."""
         workflow_path = (
             Path(__file__).resolve().parents[3] / "workflows" / f"{STEGO_WORKFLOW_ID}.json"
@@ -189,15 +200,11 @@ class StegoPipeline:
         if not isinstance(nodes, list):
             return None, None
 
-        payload_value: Optional[str] = None
+        payload_value: str | None = None
         for node in nodes:
             if not isinstance(node, dict) or node.get("name") != "SetSecretData":
                 continue
-            assignments = (
-                node.get("parameters", {})
-                .get("assignments", {})
-                .get("assignments", [])
-            )
+            assignments = node.get("parameters", {}).get("assignments", {}).get("assignments", [])
             if not isinstance(assignments, list):
                 continue
             for assignment in assignments:
@@ -234,35 +241,29 @@ class StegoPipeline:
             return parsed, None
         return None, None
 
-    def _build_dictionary(self, post: Dict[str, Any]) -> List[str]:
+    def _build_dictionary(self, post: dict[str, Any]) -> list[str]:
         return codec_build_dictionary(post)
 
-    def _compress_payload(self, payload: str, dictionary: List[str]) -> Dict[str, Any]:
+    def _compress_payload(self, payload: str, dictionary: list[str]) -> dict[str, Any]:
         return codec_compress_payload(payload, dictionary)
 
-    def _embed_in_comment_selection(
-        self, bits: str, post: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _embed_in_comment_selection(self, bits: str, post: dict[str, Any]) -> dict[str, Any]:
         return codec_embed_in_comment_selection(bits, post)
 
     def _embed_in_angle_selection(
-        self, bits: str, nested_angles: List[List[Dict[str, Any]]]
-    ) -> Dict[str, Any]:
+        self, bits: str, nested_angles: list[list[dict[str, Any]]]
+    ) -> dict[str, Any]:
         return codec_embed_in_angle_selection(bits, nested_angles)
 
-    def _augment_post(self, payload: str, post: Dict[str, Any]) -> Dict[str, Any]:
+    def _augment_post(self, payload: str, post: dict[str, Any]) -> dict[str, Any]:
         return codec_augment_post(payload, post)
 
     def _build_samples(
-        self, post_augmentation: Dict[str, Any], post: Dict[str, Any]
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        self, post_augmentation: dict[str, Any], post: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         angle_embedding = post_augmentation.get("angleEmbedding", {})
         candidate_angles = angle_embedding.get("totalAnglesSelectedFirst", [])[:4]
-        needles = [
-            str(a.get("source_quote", ""))
-            for a in candidate_angles
-            if isinstance(a, dict)
-        ]
+        needles = [str(a.get("source_quote", "")) for a in candidate_angles if isinstance(a, dict)]
         haystack = post.get("search_results", [])
         if not isinstance(haystack, list):
             haystack = []
@@ -270,16 +271,12 @@ class StegoPipeline:
         source_response = self.backend.needle_finder_batch(needles=needles, haystack=haystack)
         source_results = source_response.get("results", [])
 
-        samples: List[Dict[str, Any]] = []
+        samples: list[dict[str, Any]] = []
         for idx, angle in enumerate(candidate_angles):
             if not isinstance(angle, dict):
                 continue
             match_data = source_results[idx] if idx < len(source_results) else {}
-            best_match = (
-                match_data.get("best_match", "")
-                if isinstance(match_data, dict)
-                else ""
-            )
+            best_match = match_data.get("best_match", "") if isinstance(match_data, dict) else ""
             sample = dict(angle)
             sample["best_match"] = best_match
             samples.append(sample)
@@ -290,8 +287,8 @@ class StegoPipeline:
         return samples, tangents_db
 
     def _build_prompt(
-        self, sample: Dict[str, Any], comment_embedding: Dict[str, Any]
-    ) -> Tuple[str, str]:
+        self, sample: dict[str, Any], comment_embedding: dict[str, Any]
+    ) -> tuple[str, str]:
         context = comment_embedding.get("context", {})
         title = context.get("title", "")
         author = context.get("author", "")
@@ -303,7 +300,7 @@ class StegoPipeline:
         picked_chain = comment_embedding.get("pickedCommentChain", [])
         chain_section = ""
         if isinstance(picked_chain, list) and picked_chain:
-            rendered: List[str] = []
+            rendered: list[str] = []
             for comment in picked_chain:
                 if not isinstance(comment, dict):
                     continue
@@ -336,12 +333,12 @@ class StegoPipeline:
 
     def _generate_stego_texts(
         self,
-        sample: Dict[str, Any],
-        comment_embedding: Dict[str, Any],
+        sample: dict[str, Any],
+        comment_embedding: dict[str, Any],
         *,
         sample_index: int = 0,
         encode_run_id: str = "",
-    ) -> List[str]:
+    ) -> list[str]:
         def _extract_json_block(raw: str) -> str:
             stripped = raw.strip()
             if not stripped.startswith("```"):
@@ -433,16 +430,16 @@ class StegoPipeline:
 
     def _cross_validate(
         self,
-        candidate_texts: List[str],
-        few_shots: List[Dict[str, Any]],
-        tangents_db: List[Dict[str, Any]],
-        selected_angle: Dict[str, Any],
+        candidate_texts: list[str],
+        few_shots: list[dict[str, Any]],
+        tangents_db: list[dict[str, Any]],
+        selected_angle: dict[str, Any],
         *,
         encode_run_id: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         t_cv = time.perf_counter()
-        decoded_indices: List[Optional[int]] = []
-        decodeds: List[Optional[Dict[str, Any]]] = []
+        decoded_indices: list[int | None] = []
+        decodeds: list[dict[str, Any] | None] = []
         for idx, text in enumerate(candidate_texts):
             t_dec = time.perf_counter()
             decoded_idx = self.decode_pipeline.decode(
@@ -469,7 +466,7 @@ class StegoPipeline:
             else:
                 decodeds.append(None)
 
-        validation_candidates: List[Dict[str, Any]] = []
+        validation_candidates: list[dict[str, Any]] = []
         selected_summary = _angle_summary(selected_angle)
         for idx, text in enumerate(candidate_texts):
             decoded_obj = decodeds[idx] if idx < len(decodeds) else None
@@ -516,7 +513,7 @@ class StegoPipeline:
                 },
             }
 
-        breakdown: Dict[str, Any] = {}
+        breakdown: dict[str, Any] = {}
         for idx, text in enumerate(candidate_texts):
             breakdown[text] = decodeds[idx]
         return {
@@ -532,10 +529,10 @@ class StegoPipeline:
     def encode(
         self,
         payload: str,
-        post: Dict[str, Any],
-        tag: Optional[str] = None,
+        post: dict[str, Any],
+        tag: str | None = None,
         max_retries: int = 4,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Encode payload into post using steganography.
 
@@ -615,7 +612,7 @@ class StegoPipeline:
         selected_angle = post_augmentation["angleEmbedding"].get("selectedAngle", {})
         selected_idx = selected_angle.get("idx")
         retry_count = 0
-        last_breakdown: Dict[str, Any] = {}
+        last_breakdown: dict[str, Any] = {}
 
         while retry_count <= max_retries:
             try:
@@ -627,7 +624,7 @@ class StegoPipeline:
                     max_retries + 1,
                     selected_idx,
                 )
-                encoded_results: List[Dict[str, Any]] = []
+                encoded_results: list[dict[str, Any]] = []
                 t_gen = time.perf_counter()
                 for sidx, sample in enumerate(samples):
                     texts = self._generate_stego_texts(
@@ -812,17 +809,18 @@ class StegoPipeline:
 
     def process_post(
         self,
-        post_id: Optional[str] = None,
-        payload: Optional[str] = None,
-        tag: Optional[str] = None,
+        post_id: str | None = None,
+        payload: str | None = None,
+        tag: str | None = None,
         step: str = "final-step",
         list_offset: int = STEGO_DEFAULT_OFFSET,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Process one post and persist output on success.
 
         If post_id is not provided, select one unprocessed final-step post using tag.
         If payload is not provided, load default payload/tag from Stego workflow JSON.
         """
+
         def _select_next_post_id() -> str:
             posts_list = self.backend.posts_list(
                 step="final-step",
@@ -856,7 +854,9 @@ class StegoPipeline:
         workflow_payload, workflow_tag = self._load_default_payload_and_tag()
         using_workflow_payload = not (isinstance(payload, str) and payload)
         resolved_payload = payload if isinstance(payload, str) and payload else workflow_payload
-        resolved_tag = tag if tag is not None else (workflow_tag if using_workflow_payload else None)
+        resolved_tag = (
+            tag if tag is not None else (workflow_tag if using_workflow_payload else None)
+        )
 
         if not resolved_payload:
             raise ValueError(
@@ -897,9 +897,7 @@ class StegoPipeline:
         result = self.encode(payload=resolved_payload, post=post, tag=resolved_tag)
         result_post_id = str(post.get("id") or resolved_post_id)
         filename = (
-            f"{result_post_id}_{resolved_tag}.json"
-            if resolved_tag
-            else f"{result_post_id}.json"
+            f"{result_post_id}_{resolved_tag}.json" if resolved_tag else f"{result_post_id}.json"
         )
         stego_text = result.get("stego_text")
         should_save = bool(result.get("succeeded")) and _is_non_empty_string(stego_text)

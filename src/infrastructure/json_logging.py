@@ -1,34 +1,30 @@
 """JSON Lines (JSONL) structured logging for the API process."""
+
 from __future__ import annotations
 
 import json
 import logging
 import os
-import sys
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar, Token
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 # Canonical tag list (descriptions + ids). Exposed via GET /api/v1/logging/tags.
 STRUCTURED_LOG_TAG_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "api",
-        "description": (
-            "Default tag on every API JSON log line (StructuredContextFilter)."
-        ),
+        "description": ("Default tag on every API JSON log line (StructuredContextFilter)."),
     },
     {
         "id": "trace",
-        "description": (
-            "Added when trace_id is bound (e.g. during an HTTP request)."
-        ),
+        "description": ("Added when trace_id is bound (e.g. during an HTTP request)."),
     },
     {
         "id": "function",
         "description": (
-            "Function boundary logs; often with event function.start "
-            "(see log_function_start)."
+            "Function boundary logs; often with event function.start (see log_function_start)."
         ),
     },
     {
@@ -208,9 +204,7 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
-_JSON_TOP_KEYS = frozenset(
-    {"trace_id", "tags", "event", "process_pid"}
-)
+_JSON_TOP_KEYS = frozenset({"trace_id", "tags", "event", "process_pid"})
 
 
 class JsonFormatter(logging.Formatter):
@@ -218,9 +212,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
-            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z"),
+            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat().replace("+00:00", "Z"),
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
@@ -233,9 +225,7 @@ class JsonFormatter(logging.Formatter):
         event = getattr(record, "event", None)
         if event:
             payload["event"] = _json_safe(event)
-        payload["process_pid"] = _json_safe(
-            getattr(record, "process_pid", os.getpid())
-        )
+        payload["process_pid"] = _json_safe(getattr(record, "process_pid", os.getpid()))
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         for key, value in record.__dict__.items():

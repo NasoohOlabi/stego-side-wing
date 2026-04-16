@@ -1,8 +1,9 @@
 """Configuration management."""
+
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Set, Tuple
+from typing import Literal
 
 import dotenv
 
@@ -11,10 +12,10 @@ ENV_FILE_PATH = REPO_ROOT / ".env"
 
 # Load .env file once at module level.
 dotenv.load_dotenv(dotenv_path=ENV_FILE_PATH if ENV_FILE_PATH.exists() else None)
-_dotenv_values_cache: Optional[Dict[str, Optional[str]]] = None
+_dotenv_values_cache: dict[str, str | None] | None = None
 
 
-def _load_dotenv_values() -> Dict[str, Optional[str]]:
+def _load_dotenv_values() -> dict[str, str | None]:
     """Load and cache .env key-values without printing missing-key warnings."""
     global _dotenv_values_cache
     if _dotenv_values_cache is None:
@@ -24,14 +25,14 @@ def _load_dotenv_values() -> Dict[str, Optional[str]]:
     return _dotenv_values_cache
 
 
-def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
+def get_env(key: str, default: str | None = None) -> str | None:
     """
     Get environment variable, checking both os.environ and .env file.
-    
+
     Args:
         key: Environment variable name
         default: Default value if not found
-        
+
     Returns:
         Environment variable value or default
     """
@@ -46,13 +47,13 @@ def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
 def get_env_required(key: str) -> str:
     """
     Get required environment variable, raising error if not found.
-    
+
     Args:
         key: Environment variable name
-        
+
     Returns:
         Environment variable value
-        
+
     Raises:
         ValueError: If key is not found
     """
@@ -62,7 +63,7 @@ def get_env_required(key: str) -> str:
     return value
 
 
-def get_lm_studio_url(default: Optional[str] = None) -> str:
+def get_lm_studio_url(default: str | None = None) -> str:
     """
     Get LM Studio base URL normalized to include /v1.
 
@@ -111,22 +112,22 @@ def get_google_ai_studio_model() -> str:
     return explicit or DEFAULT_GOOGLE_AI_STUDIO_MODEL
 
 
-def _parse_api_key_list(raw: Optional[str]) -> list[str]:
+def _parse_api_key_list(raw: str | None) -> list[str]:
     """Split comma- or whitespace-separated API key tokens."""
     if not raw:
         return []
     return [p for p in (s.strip() for s in re.split(r"[\s,]+", raw.strip())) if p]
 
 
-def get_google_generative_language_api_keys() -> List[str]:
+def get_google_generative_language_api_keys() -> list[str]:
     """
     API keys for ``generativelanguage.googleapis.com`` (AI Studio / Gemini), in try order.
 
     Order: ``GOOGLE_PALM_API_KEY`` (if set), then ``GOOGLE_AI_API_KEYS``, then
     ``GOOGLE_AI_API_KEY`` (each of the latter may be comma-separated). Duplicates removed.
     """
-    seen: Set[str] = set()
-    out: List[str] = []
+    seen: set[str] = set()
+    out: list[str] = []
     for chunk in (
         _parse_api_key_list(get_env("GOOGLE_PALM_API_KEY"))
         + _parse_api_key_list(get_env("GOOGLE_AI_API_KEYS"))
@@ -138,13 +139,13 @@ def get_google_generative_language_api_keys() -> List[str]:
     return out
 
 
-def get_google_generative_language_api_key() -> Optional[str]:
+def get_google_generative_language_api_key() -> str | None:
     """First Generative Language API key (backward compatible)."""
     keys = get_google_generative_language_api_keys()
     return keys[0] if keys else None
 
 
-def resolve_workflow_llm_provider_and_model(lm_model: str) -> Tuple[str, str]:
+def resolve_workflow_llm_provider_and_model(lm_model: str) -> tuple[str, str]:
     """``(provider, model)`` for :meth:`workflows.adapters.llm.LLMAdapter.call_llm`."""
     if get_workflow_llm_backend() == "google":
         return "gemini", get_google_ai_studio_model()
@@ -173,6 +174,7 @@ STEPS = {
         "dest_dir": "./output-results",
     },
 }
+
 
 def resolve_path(path_str: str) -> Path:
     """Resolve a project-relative path to absolute Path."""

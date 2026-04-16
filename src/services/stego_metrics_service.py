@@ -6,9 +6,10 @@ import json
 import math
 import re
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 from loguru import logger
 
@@ -74,7 +75,7 @@ def metrics_cli_progress(label: str, current: int, total: int) -> None:
 
 def save_perplexity_report(metrics_dir: Path, report: dict[str, Any]) -> Path:
     metrics_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     report_path = metrics_dir / f"perplexity_metrics_{timestamp}.json"
     report_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
     return report_path
@@ -82,7 +83,7 @@ def save_perplexity_report(metrics_dir: Path, report: dict[str, Any]) -> Path:
 
 def save_divergence_report(metrics_dir: Path, report: dict[str, Any]) -> Path:
     metrics_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     report_path = metrics_dir / f"divergence_metrics_{timestamp}.json"
     report_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
     return report_path
@@ -282,7 +283,7 @@ def run_perplexity_metrics(
     output_files = sorted(output_dir.glob("*.json"))
     avg_ppl = sum(perplexities) / len(perplexities)
     report = {
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "created_at_utc": datetime.now(UTC).isoformat(),
         "config": {
             "output_dir": str(output_dir.resolve()),
             "metrics_dir": str(metrics_dir.resolve()),
@@ -374,7 +375,9 @@ def load_global_stats(
     return total_posts, global_counter, nonempty_bodies
 
 
-def _smoothed_prob(counter: Counter, token: str, total: int, vocab_size: int, alpha: float) -> float:
+def _smoothed_prob(
+    counter: Counter, token: str, total: int, vocab_size: int, alpha: float
+) -> float:
     denom = total + alpha * vocab_size
     return (counter.get(token, 0) + alpha) / denom
 
@@ -533,7 +536,7 @@ def run_divergence_metrics(
         elif not primary_counters[post_id]:
             skipped_empty_primary += 1
     report = {
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "created_at_utc": datetime.now(UTC).isoformat(),
         "config": {
             "output_dir": str(output_dir.resolve()),
             "dataset_dir": str(dataset_dir.resolve()),
@@ -657,9 +660,7 @@ def run_single_post_metrics(
             warnings.append("Primary baseline: matched post has no comment tokens.")
     else:
         warnings.append(f"Primary baseline: missing dataset file {post_id}.json")
-    ppl, resolved_dev, ppl_warn = _perplexity_one_text(
-        stego_text, model_name, stride, device
-    )
+    ppl, resolved_dev, ppl_warn = _perplexity_one_text(stego_text, model_name, stride, device)
     if ppl_warn:
         warnings.append(ppl_warn)
     kl_p, jsd_p = _kl_jsd_pair(stego_counter, primary_counter, alpha)
@@ -715,7 +716,7 @@ def _metrics_file_row(path: Path, kind: str, repo_root: Path) -> dict[str, Any]:
         "filename": path.name,
         "path": _repo_relative_path(path, repo_root),
         "size_bytes": st.st_size,
-        "updated_at_utc": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+        "updated_at_utc": datetime.fromtimestamp(st.st_mtime, tz=UTC).isoformat(),
     }
 
 

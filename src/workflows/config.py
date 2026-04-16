@@ -1,15 +1,18 @@
 """Centralized configuration for workflows."""
+
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Iterator, Optional
 
 from infrastructure.config import (
     REPO_ROOT,
     get_env,
     get_google_generative_language_api_key,
-    get_step_dirs as get_global_step_dirs,
     resolve_path,
+)
+from infrastructure.config import (
+    get_step_dirs as get_global_step_dirs,
 )
 
 
@@ -19,9 +22,9 @@ class WorkflowConfig:
     def __init__(
         self,
         *,
-        url_cache_dir: Optional[Path] = None,
-        research_terms_db_path: Optional[Path] = None,
-        angles_cache_dir: Optional[Path] = None,
+        url_cache_dir: Path | None = None,
+        research_terms_db_path: Path | None = None,
+        angles_cache_dir: Path | None = None,
     ) -> None:
         self.base_url = get_env("BASE_URL", "http://127.0.0.1:5001")
         self.base_url_lap = get_env("BASE_URL_LAP", "http://127.0.0.1:5000")
@@ -33,9 +36,7 @@ class WorkflowConfig:
         self.groq_api_key = get_env("GROQ_API_KEY")
 
         # Dataset directories (single-source from infrastructure.config/STEPS)
-        self.posts_directory, self.url_fetched_dir = get_global_step_dirs(
-            "filter-url-unresolved"
-        )
+        self.posts_directory, self.url_fetched_dir = get_global_step_dirs("filter-url-unresolved")
         _, self.researched_dir = get_global_step_dirs("filter-researched")
         _, self.angles_dir = get_global_step_dirs("angles-step")
         _, self.output_results_dir = get_global_step_dirs("final-step")
@@ -46,7 +47,9 @@ class WorkflowConfig:
             else (self.posts_directory.parent / "research_terms_cache.db")
         ).resolve()
         self.angles_cache_dir = (
-            angles_cache_dir if angles_cache_dir is not None else (REPO_ROOT / "datasets" / "angles_cache")
+            angles_cache_dir
+            if angles_cache_dir is not None
+            else (REPO_ROOT / "datasets" / "angles_cache")
         ).resolve()
 
         # Ensure directories exist
@@ -61,16 +64,16 @@ class WorkflowConfig:
         ]:
             dir_path.mkdir(parents=True, exist_ok=True)
         self.research_terms_db_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     def get_step_dirs(self, step: str) -> tuple[Path, Path]:
         """Get source and destination directories for a workflow step."""
         return get_global_step_dirs(step)
 
 
 # Global config instance
-_config: Optional[WorkflowConfig] = None
+_config: WorkflowConfig | None = None
 
-_workflow_config_ctx: ContextVar[Optional[WorkflowConfig]] = ContextVar(
+_workflow_config_ctx: ContextVar[WorkflowConfig | None] = ContextVar(
     "workflow_config_override", default=None
 )
 

@@ -15,8 +15,16 @@ jobs:
           version: "latest"
       - name: Sync
         run: uv sync --all-groups
-      - name: Ruff (incremental scope)
-        run: uv run ruff check src/app/routes/api_v1 src/app/schemas
+      - name: Ruff check (Pyright-aligned roots)
+        run: >-
+          uv run ruff check
+          src/app src/services src/content_acquisition
+          src/integrations src/infrastructure src/workflows
+      - name: Ruff format
+        run: >-
+          uv run ruff format --check
+          src/app src/services src/content_acquisition
+          src/integrations src/infrastructure src/workflows
       - name: Pyright
         run: uv run pyright
       - name: Pytest

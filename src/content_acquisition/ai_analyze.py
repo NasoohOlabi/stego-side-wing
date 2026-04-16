@@ -3,14 +3,13 @@ import json
 import os
 import sys
 from datetime import datetime
-from typing import Any, Dict, List, cast
+from typing import Any, cast
 
 import httpx
 from icecream import ic  # Import icecream for colorful logging
 
-from infrastructure.config import resolve_workflow_llm_provider_and_model
 from content_acquisition.headless_browser_analyzer import WebAnalyzer
-from workflows.adapters.llm import LLMAdapter
+from infrastructure.config import resolve_workflow_llm_provider_and_model
 from integrations.news_api import (
     Article,
     EverythingParams,
@@ -18,6 +17,7 @@ from integrations.news_api import (
     NewsApiSuccessResponse,
     fetch_everything,
 )
+from workflows.adapters.llm import LLMAdapter
 
 # Configure icecream to include timestamps
 ic.configureOutput(prefix="[{time}] | ")
@@ -42,9 +42,7 @@ _TOPIC_SYSTEM_MESSAGE = """You are an expert at extracting specific, detailed li
 """
 
 
-def llm_topic_list_from_article_json(
-    post: str, *, adapter: LLMAdapter | None = None
-) -> List[str]:
+def llm_topic_list_from_article_json(post: str, *, adapter: LLMAdapter | None = None) -> list[str]:
     """Resolve WORKFLOW_LLM_BACKEND and return parsed topic list from LLM text."""
     provider, model = resolve_workflow_llm_provider_and_model(_DEFAULT_AI_ANALYZE_LM_MODEL)
     prompt = f"""
@@ -71,7 +69,7 @@ def llm_topic_list_from_article_json(
     return json.loads(bracket_slice)
 
 
-async def process_file(post_data: Dict[str, Any]) -> Dict[str, Any]:
+async def process_file(post_data: dict[str, Any]) -> dict[str, Any]:
     """Process a single JSON file for analysis"""
 
     # Store comments separately before removing them
@@ -120,13 +118,11 @@ async def process_file(post_data: Dict[str, Any]) -> Dict[str, Any]:
 
             result = fetch_everything(search_params)
 
-            search_results: List[Article] = []
+            search_results: list[Article] = []
             if result["status"] == "ok":
                 # Use cast() to narrow the type for Pylance after the runtime check
                 success_result = cast(NewsApiSuccessResponse, result)
-                print(
-                    f"\nSuccessfully retrieved {success_result['totalResults']} results."
-                )
+                print(f"\nSuccessfully retrieved {success_result['totalResults']} results.")
                 for article in success_result["articles"]:
                     search_results.append(article)
             else:
@@ -146,7 +142,7 @@ async def process_file(post_data: Dict[str, Any]) -> Dict[str, Any]:
                 print(f"   📄 Sample: {first_result['title'][:60]}...")
 
             # Fetch and analyze content from URLs
-            print(f"   🌐 Fetching content from URLs...")
+            print("   🌐 Fetching content from URLs...")
             # Process top 3 results
             augmented_results = []
             for j, result in enumerate(search_results[:3], 1):
@@ -167,14 +163,11 @@ async def process_file(post_data: Dict[str, Any]) -> Dict[str, Any]:
 
                 except Exception as e:
                     print(f"      ❌ Error fetching content: {str(e)}")
-                    augmented_results.append(
-                        {"content_fetched": False, "url": result})
+                    augmented_results.append({"content_fetched": False, "url": result})
 
                     # If it's a localhost redirect issue, try a different approach
                     if "localhost" in str(e) or "127.0.0.1" in str(e):
-                        print(
-                            f"      🔄 Localhost redirect detected, skipping this URL"
-                        )
+                        print("      🔄 Localhost redirect detected, skipping this URL")
                         continue
 
         except Exception as e:
@@ -212,9 +205,7 @@ async def process_file(post_data: Dict[str, Any]) -> Dict[str, Any]:
 
                 # Show fetched content analysis if available
                 if result.get("content_fetched"):
-                    print(
-                        f"      🤖 AI Analysis: {result['content_analysis'][:200]}..."
-                    )
+                    print(f"      🤖 AI Analysis: {result['content_analysis'][:200]}...")
                 elif result.get("fetch_error"):
                     print(f"      ❌ Fetch Error: {result['fetch_error']}")
                 print()
@@ -260,7 +251,7 @@ async def main():
     # Process each file
     for i, file_path in enumerate(json_files, 1):
         ic(f"\n🔄 Processing file {i}/{len(json_files)}")
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             post = json.load(f)
         await process_file(post)
 

@@ -30,7 +30,7 @@ from services.state_service import (
     read_json_file,
     write_json_file,
 )
-from workflows.utils.workflow_llm_prompts import WorkflowLlmPromptsDocument
+from services.workflow_facade import WorkflowLlmPromptsDocument
 
 logger = logging.getLogger(__name__)
 

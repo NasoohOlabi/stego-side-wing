@@ -12,7 +12,7 @@ from app.routes.api_v1.constants import TRUE_VALUES
 from app.schemas.responses import fail
 from infrastructure.config import METRICS_DIR, POSTS_DIRECTORY
 from services.state_service import safe_repo_path
-from workflows.utils.protocol_utils import stable_hash, text_preview
+from services.workflow_facade import stable_hash, text_preview
 
 
 def json_body() -> tuple[dict[str, Any] | None, tuple[Any, int] | None]:

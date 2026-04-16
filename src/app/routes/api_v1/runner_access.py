@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 from flask import Flask
 
 if TYPE_CHECKING:
-    from workflows.runner import WorkflowRunner
+    from services.workflow_facade import WorkflowRunner
 
-from workflows.runner import WorkflowRunner
+from services.workflow_facade import WorkflowRunner
 
 runner: WorkflowRunner = WorkflowRunner()
 

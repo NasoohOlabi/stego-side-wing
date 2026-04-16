@@ -10,7 +10,7 @@ from services.stego_metrics_service import (
     run_perplexity_metrics,
     run_single_post_metrics,
 )
-from workflows.utils.workflow_llm_prompts import (
+from services.workflow_facade import (
     default_workflow_llm_prompts,
     get_prompts,
     reload_prompts,

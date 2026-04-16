@@ -34,7 +34,6 @@ def get_paths_map() -> Dict[str, str]:
     paths["cache.angles"] = str(resolve_path("./datasets/angles_cache"))
     paths["db.kv"] = str(resolve_path("./kv_store.db"))
     paths["db.research_terms"] = str(resolve_path("./datasets/research_terms_cache.db"))
-    paths["log.workflow_cli"] = str(resolve_path("./logs/workflow_cli.log"))
     paths["log.api"] = str(resolve_path("./logs/api.jsonl"))
     paths["log.prompts"] = str(resolve_path("./prompts.log"))
     paths["log.workflow_prompts_dir"] = str(resolve_path("./logs"))

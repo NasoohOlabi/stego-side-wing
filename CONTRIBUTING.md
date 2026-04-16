@@ -5,7 +5,6 @@
 | Purpose | Command / path |
 |--------|------------------|
 | HTTP API | `uv run python src/API.py` (see `src/app/app_factory.py`) |
-| Workflow CLI | `uv run python src/scripts/workflow_cli.py` |
 | Operator HTTP contract | [docs/api-spec.md](docs/api-spec.md) |
 
 `src` is on `PYTHONPATH` for normal `uv run` usage (see [AGENTS.md](AGENTS.md)).

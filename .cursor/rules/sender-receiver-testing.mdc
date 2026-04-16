@@ -18,7 +18,7 @@ Framing changes as **sender produces X → receiver must recover X** keeps behav
 1. **Targeted pytest**: Run `uv run pytest -q` on the tests that cover edited modules (e.g. `src/tests/test_stego_codec.py`, `test_receiver_pipeline.py`, `test_pipeline_*`, `test_api_v1_*`).
 2. **Round-trip / invariants**: For codec, embedding, or angle-selection changes, assert existing round-trip or recover tests still pass; add a minimal test if you introduce new branches or edge cases.
 3. **Receiver alignment**: If sender-side output format or comment/angle selection changes, update or add receiver tests (`ReceiverPipeline`, `locate_sender_stego_comment`, mocked `rebuild_context` / `decode_payload`).
-4. **API or CLI**: If `src/app/routes/api_v1_routes.py` or `src/scripts/workflow_cli.py` changes, run the matching API/workflow tests and smoke the endpoints described in `AGENTS.md` when the change is user-visible.
+4. **API**: If `src/app/routes/api_v1_routes.py` changes, run the matching API/workflow tests and smoke the endpoints described in `AGENTS.md` when the change is user-visible.
 5. **Gate before wrap-up**: For non-trivial edits, run full `uv run pytest -q` and `uv run pyright` (strict scope per `AGENTS.md`).
 
 ## Anti-patterns

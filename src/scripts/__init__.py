@@ -1,1 +1,1 @@
-"""CLI scripts and data processing utilities."""
+"""Optional standalone scripts and data utilities."""

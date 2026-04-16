@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Sync
+        run: uv sync --all-groups
+      - name: Ruff (incremental scope)
+        run: uv run ruff check src/app/routes/api_v1 src/app/schemas
+      - name: Pyright
+        run: uv run pyright
+      - name: Pytest
+        run: uv run pytest

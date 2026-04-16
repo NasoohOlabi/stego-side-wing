@@ -27,6 +27,13 @@ class GenSearchTermsPipeline:
         self._log = logger.bind(component="GenSearchTermsPipeline")
         self._init_cache_db()
     
+    def _sync_research_terms_cache_binding(self) -> None:
+        """Rebind terms DB to current :func:`get_config` (e.g. under isolated workflow config)."""
+        self.config = get_config()
+        new_path = self.config.research_terms_db_path
+        if getattr(self, "cache_db_path", None) != new_path:
+            self._init_cache_db()
+
     def _init_cache_db(self):
         """Initialize SQLite cache database (replacing n8n datatable)."""
         cache_db = self.config.research_terms_db_path
@@ -151,6 +158,7 @@ class GenSearchTermsPipeline:
             object.__setattr__(
                 self, "_log", logger.bind(component="GenSearchTermsPipeline")
             )
+        self._sync_research_terms_cache_binding()
         t_start = time.perf_counter()
         prompt = self._build_prompt(
             post_title=post_title,

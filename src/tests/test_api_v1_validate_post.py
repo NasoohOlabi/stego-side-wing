@@ -67,3 +67,4 @@ def test_validate_post_streaming(client, monkeypatch):
     assert "event: status" in body
     assert "event: result" in body
     assert "event: done" in body
+    assert "event: heartbeat" not in body

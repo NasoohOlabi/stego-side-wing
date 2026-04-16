@@ -112,6 +112,7 @@ def create_app(
     )
     
     app.register_blueprint(api_v1_routes.bp)
+    api_v1_routes.init_workflow_runner(app)
     app.register_blueprint(posts_routes.bp)
     app.register_blueprint(search_routes.bp)
     app.register_blueprint(analysis_routes.bp)

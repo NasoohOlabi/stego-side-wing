@@ -266,7 +266,7 @@ def test_run_double_process_new_post_main_then_validation_cache():
     assert p1s["persist_terms_cache"] is True
     assert p1s["use_fetch_cache"] is True
     assert p1s["allow_angles_fallback"] is False
-    assert p1s["cache_profile"] == "main"
+    assert p1s["cache_profile"] == "pass_1"
     assert set(p1s["cache_paths"]) == {
         "url_cache_dir",
         "research_terms_db_path",
@@ -278,13 +278,17 @@ def test_run_double_process_new_post_main_then_validation_cache():
     assert p2s["persist_terms_cache"] is True
     assert p2s["use_fetch_cache"] is True
     assert p2s["allow_angles_fallback"] is False
-    assert p2s["cache_profile"] == "validation"
+    assert p2s["cache_profile"] == "pass_2"
     assert set(p2s["cache_paths"]) == {
         "url_cache_dir",
         "research_terms_db_path",
         "angles_cache_dir",
     }
-    assert "double_process_validation" in p2s["cache_paths"]["url_cache_dir"].replace("\\", "/")
+    p1u = p1s["cache_paths"]["url_cache_dir"].replace("\\", "/")
+    p2u = p2s["cache_paths"]["url_cache_dir"].replace("\\", "/")
+    assert "double_process_validation/pass_1/url_cache" in p1u
+    assert "double_process_validation/pass_2/url_cache" in p2u
+    assert p1u != p2u
 
     assert calls == [
         ("posts_list", "filter-url-unresolved", 1, 0, None),
@@ -389,6 +393,83 @@ def test_run_double_process_new_post_retries_same_post_until_fetch_succeeds(monk
     assert result["source_file"] == "bad.json"
     assert runner._fetch_fail_counts == {}
     assert calls == [("bad", True), ("bad", True), ("bad", True)]
+
+
+def test_run_double_process_new_post_resumes_from_claim_without_requeue(monkeypatch, tmp_path):
+    root = tmp_path / "dpv"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("workflows.runner._double_process_cache_base_root", lambda: root.resolve())
+
+    from workflows.runner import _write_double_process_claim
+
+    _write_double_process_claim("held", "held.json")
+
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    calls: list[str] = []
+
+    class _DummyBackend:
+        def posts_list(self, step, count=1, offset=0, tag=None):
+            calls.append("posts_list")
+            return {"fileNames": ["other.json"]}
+
+    runner.backend = _DummyBackend()
+    runner._run_three_stage_post = lambda **kwargs: {
+        "settings": {
+            "use_terms_cache": kwargs["use_terms_cache"],
+            "persist_terms_cache": kwargs["persist_terms_cache"],
+            "use_fetch_cache": kwargs["use_fetch_cache"],
+            "allow_angles_fallback": kwargs["allow_angles_fallback"],
+        },
+        "steps": {
+            "data_load": {"hash": "a"},
+            "research": {"hash": "b"},
+            "gen_angles": {"hash": "c"},
+        },
+    }
+
+    result = runner.run_double_process_new_post()
+
+    assert result["post_id"] == "held"
+    assert result["source_file"] == "held.json"
+    assert calls == []
+    assert not (root / "active_post_claim.json").is_file()
+
+
+def test_run_double_process_new_post_leaves_claim_after_exception(monkeypatch, tmp_path):
+    root = tmp_path / "dpv2"
+    root.mkdir()
+    monkeypatch.setattr("workflows.runner._double_process_cache_base_root", lambda: root.resolve())
+
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    posts_list_calls = 0
+
+    class _DummyBackend:
+        def posts_list(self, step, count=1, offset=0, tag=None):
+            nonlocal posts_list_calls
+            posts_list_calls += 1
+            return {"fileNames": ["n1.json"]}
+
+    attempts = {"n": 0}
+
+    def boom(**kwargs):
+        attempts["n"] += 1
+        raise RuntimeError("research exploded")
+
+    runner.backend = _DummyBackend()
+    runner._run_three_stage_post = boom
+
+    with pytest.raises(RuntimeError, match="research exploded"):
+        runner.run_double_process_new_post()
+
+    assert (root / "active_post_claim.json").is_file()
+    assert posts_list_calls == 1
+    assert attempts["n"] == 1
+
+    with pytest.raises(RuntimeError, match="research exploded"):
+        runner.run_double_process_new_post()
+
+    assert posts_list_calls == 1
+    assert attempts["n"] == 2
 
 
 def test_run_batch_angles_determinism_empty_post_ids_raises():

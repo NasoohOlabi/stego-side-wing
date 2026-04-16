@@ -121,7 +121,8 @@ class BackendAPIAdapter:
 
     def __init__(self, base_url: Optional[str] = None):
         self.config = get_config()
-        self.base_url = base_url or self.config.base_url
+        resolved = base_url or self.config.base_url or "http://127.0.0.1:5001"
+        self.base_url: str = resolved
         self.local = LocalBackendClient(self.config)
         self.http = HttpBackendClient(self.base_url)
 

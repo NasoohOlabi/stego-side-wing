@@ -2,6 +2,8 @@
 
 Python backend and workflow runtime for the stego pipelines.
 
+Contributor notes: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+
 ## Requirements
 
 - Python `3.13+`
@@ -22,7 +24,7 @@ uv run python src/API.py
 ```
 
 `src/API.py` is a compatibility wrapper over the app factory in `src/app/app_factory.py`.
-Defaults: `API_HOST=192.168.100.136`, `API_PORT=5001`.
+Defaults: `API_HOST=127.0.0.1`, `API_PORT=5001` (overridable with env vars or `--host` / `--port`).
 
 ### API dev mode
 
@@ -47,12 +49,19 @@ uv run python src/scripts/workflow_cli.py -h
 - **Reports directory:** `<repo>/metrics` — timestamped JSON files from perplexity and divergence runs.
 - **CLI (repo root):** `uv run python scripts/avg_perplexity.py` and `uv run python scripts/avg_kld.py` (`-h` for options). Defaults write under `metrics/`.
 - **API:** `POST /api/v1/tools/metrics/perplexity`, `POST /api/v1/tools/metrics/divergence`, `GET /api/v1/tools/metrics/history` — see **[docs/api-spec.md](docs/api-spec.md)** (Tools → metrics). `GET /api/v1/state/paths` includes `metrics.dir`.
-- **Note:** Perplexity evaluation needs `torch` and `transformers` installed in the venv (optional extras; divergence does not).
+- **Note:** Perplexity evaluation needs `torch` and `transformers` — install with `uv sync --extra metrics` (see `pyproject.toml` `[project.optional-dependencies]`; divergence does not need them).
 
 ## Run tests
 
 ```bash
-uv run pytest -q
+uv run pytest
+```
+
+## Lint and format
+
+```bash
+uv run ruff check src/app/routes/api_v1 src/app/schemas
+uv run ruff format src
 ```
 
 ## Strict type checking
@@ -94,6 +103,6 @@ Some endpoints/pipelines require provider credentials (for example):
 - `SCRAPINGDOG_API_KEY`
 - `OLLAMA_API_KEY`
 - `NEWS_API_KEY`
-- `DOUBLE_PROCESS_VALIDATION_ROOT` — optional root directory for the isolated URL/terms/angles caches used in `POST /workflows/double-process-new-post` pass 2 (default: `datasets/double_process_validation` under the repo)
+- `DOUBLE_PROCESS_VALIDATION_ROOT` — optional base directory for double-process dedicated caches: `pass_1/` and `pass_2/` each contain their own `url_cache/`, `angles_cache/`, and `research_terms_cache.db` (default: `datasets/double_process_validation` under the repo)
 
 Use a local `.env` file (loaded by `python-dotenv`) for development.

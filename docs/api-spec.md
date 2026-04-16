@@ -25,14 +25,14 @@ No auth is currently enforced in this service. Frontend should treat this API as
 - **File logs:** `GET /state/logs` and `DELETE /state/logs` expose the API JSONL log file path, on-disk size, and truncation. Truncation frees disk space and does not remove stderr logging; `DELETE` returns `400` when file logging is disabled (e.g. `--no-log-file`).
 - **Structured tags:** `GET /logging/tags` returns the canonical list of structured log tag ids and descriptions used in JSONL output so clients and operators can align filters, dashboards, or docs with actual log fields.
 - **Live runs:** `GET /workflows/runs` lists workflow runs currently executing in this API process (`id`, `command`, `mode`, timing).
-- **Streaming (SSE):** Workflow routes that support streaming default to `text/event-stream` with events `status`, `progress`, `log`, `heartbeat`, `result`, `error`, `done`. Disable with `?stream=0` or body `{ "stream": false }` for a normal JSON envelope—useful for scripts or when a single response is enough.
+- **Streaming (SSE):** Workflow routes that support streaming default to `text/event-stream` with events `status`, `progress`, `log`, `result`, `error`, `done`. Disable with `?stream=0` or body `{ "stream": false }` for a normal JSON envelope—useful for scripts or when a single response is enough.
 
 ### Testing and protocol QA
 
 These endpoints support **reproducibility**, **main vs isolated-cache** comparison, and **LLM determinism** checks. They are documented in detail under **Workflows** and **Tools**; this section only maps intent:
 
 - `**POST /workflows/validate-post`** — Replays data-load → research → gen-angles **in memory**, compares each stage’s live output to **saved** artifacts (strict JSON equality). Does **not** overwrite artifacts.
-- `**POST /workflows/double-process-new-post`** — Picks one new post from the data-load queue, runs the three-stage pipeline **twice** (main caches vs isolated validation caches; cache **flags** stay enabled on both passes), **writes** artifacts each time, and reports per-stage hash match between passes.
+- `**POST /workflows/double-process-new-post`** — Picks one new post from the data-load queue, runs the three-stage pipeline **twice** (each pass uses its own persistent dedicated URL/terms/angles cache tree; cache **flags** stay enabled on both passes), **writes** artifacts each time, and reports per-stage hash match between passes.
 - `**POST /workflows/batch-angles-determinism`** — For each `post_id`, runs angle extraction **twice** with angles disk cache disabled and compares normalized angle lists; measures same-host repeatability, not cross-machine parity.
 - **Protocol previews** (`POST /tools/protocol/data-load-preview`, `research-preview`, `angles-preview`, `gen-terms`) — Live protocol steps with controlled persistence for inspecting behavior before full pipeline runs.
 - `**POST /workflows/gen-angles`** — Batch angle generation over the `angles-step` queue (`count` / `offset`); persists via `GenAnglesPipeline.process_posts`.
@@ -153,7 +153,7 @@ Posts, previews, and tool responses may include an `angles` array. Each angle in
   - For `command: "full"`, optional `payload` (string or JSON) is accepted and reported on the run as `payload_provided` in progress events; omit to use defaults where applicable.
   - For `command: "research"`, optional `include_breakdown` (bool, default `false`) matches `POST /workflows/research` (see below). Sync response `data` is `{ "command": "research", "result": <list> }` by default, or `{ "command": "research", "result": { "posts", "breakdown" } }` when `include_breakdown` is true. Streaming: final `result` event uses the same `result` shape.
   - Streaming:
-    - Defaults to `text/event-stream` (SSE) with events: `status`, `progress`, `log`, `heartbeat`, `result`, `error`, `done`.
+    - Defaults to `text/event-stream` (SSE) with events: `status`, `progress`, `log`, `result`, `error`, `done`.
     - Disable streaming with `?stream=0` or body `{ "stream": false }` to get standard JSON envelope.
 - `POST /workflows/data-load`
   - Body: `count?`, `offset?`, `batch_size?`
@@ -240,16 +240,17 @@ Posts, previews, and tool responses may include an `angles` array. Each angle in
       - `error?`: stage failure reason; downstream stages are marked as skipped if an upstream stage fails
   - **Note:** This endpoint is now protocol-oriented. It does **not** overwrite saved artifacts during validation. LLM calls in this path use temperature 0 where applicable, but live web/search/provider drift can still cause `valid: false`.
 - `POST /workflows/double-process-new-post`
-  - **Purpose:** Pick one **new** post (same queue as data-load: JSON in `datasets/news_cleaned` with no matching `{id}.json` yet in `datasets/news_url_fetched`), then run the full three-stage pipeline **twice** on that same `post_id` to compare **main** URL/terms/angles caches vs an **isolated validation** cache namespace (both passes keep `use_fetch_cache` / `use_terms_cache` / `persist_terms_cache` **true**).
+  - **Purpose:** Pick one **new** post (same queue as data-load: JSON in `datasets/news_cleaned` with no matching `{id}.json` yet in `datasets/news_url_fetched`), then run the full three-stage pipeline **twice** on that same `post_id` to compare outputs when each pass uses its **own** persistent dedicated URL/terms/angles cache namespace (both passes keep `use_fetch_cache` / `use_terms_cache` / `persist_terms_cache` **true**).
   - Body: `stream?` (bool; same SSE default as other workflow routes), `allow_angles_fallback?` (bool, default `false`) — passed through to gen-angles (same semantics as `validate-post` / `angles-preview`).
-  - **Pass 1 (`pass_1_cached`):** Default workflow config — main `datasets/url_cache`, `datasets/research_terms_cache.db`, `datasets/angles_cache`.
-  - **Pass 2 (`pass_2_validation`):** Same cache **flags** as pass 1, but the run is executed under `isolated_workflow_config` pointing at a dedicated tree: default `datasets/double_process_validation/` (`url_cache/`, `angles_cache/`, `research_terms_cache.db` under that root), or override the root with env `**DOUBLE_PROCESS_VALIDATION_ROOT`** (absolute or repo-relative path as resolved by the app). Pass 2 does not read pass 1’s cache files; an empty validation store yields cache misses and full fetch/LLM work while using the same code paths as a normal cached run.
+  - **Base cache root:** Default `datasets/double_process_validation/`, or override with env `**DOUBLE_PROCESS_VALIDATION_ROOT**` (absolute or repo-relative path as resolved by the app). Under that root, each pass uses `isolated_workflow_config` with a separate subtree that warms up across runs:
+    - **Pass 1 (`pass_1_cached`):** `{base}/pass_1/` with `url_cache/`, `angles_cache/`, `research_terms_cache.db`.
+    - **Pass 2 (`pass_2_validation`):** `{base}/pass_2/` with the same layout. Pass 2 does not read pass 1’s cache files; an empty `pass_2` store yields cache misses and full fetch/LLM work while using the same code paths as a normal cached run.
   - **Persistence:** Unlike `validate-post`, this **writes** stage outputs to disk each time (same as running data-load → research → gen-angles manually). The second pass overwrites artifacts for that `post_id` in `filter-url-unresolved`, `filter-researched`, and `angles-step` destinations.
   - Response `data` shape (summary):
     - `mode`: `double_process_new_post`
     - `post_id`: string (stem of selected file)
     - `source_file`: e.g. `{post_id}.json` as listed by the queue
-    - `passes.pass_1_cached` / `passes.pass_2_validation`: each has `settings` with the four cache flags above plus `cache_profile` (`main` | `validation`) and `cache_paths` (`url_cache_dir`, `research_terms_db_path`, `angles_cache_dir`), and `steps` with per-stage summaries (`data_load`, `research`, `gen_angles`) including stable `hash` and stage-specific fields (same summarizer as other workflow reports)
+    - `passes.pass_1_cached` / `passes.pass_2_validation`: each has `settings` with the four cache flags above plus `cache_profile` (`pass_1` | `pass_2`) and `cache_paths` (`url_cache_dir`, `research_terms_db_path`, `angles_cache_dir`), and `steps` with per-stage summaries (`data_load`, `research`, `gen_angles`) including stable `hash` and stage-specific fields (same summarizer as other workflow reports)
     - `stage_hash_match`: `{ "data_load": bool, "research": bool, "gen_angles": bool }` — whether the full-post hash for each stage matched between the two passes (search/API non-determinism often makes `research` differ between passes even on the same day)
   - Also available as `POST /workflows/run` with `"command": "double-process-new-post"` and the same body fields.
 - `POST /workflows/batch-angles-determinism`

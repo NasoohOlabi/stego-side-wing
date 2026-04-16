@@ -2,31 +2,11 @@
 
 from pathlib import Path
 
-import dotenv
 import pytest
 
 import infrastructure.config as infra_config
 from workflows.adapters.llm import LLMAdapter
 from workflows.cache_context import angles_cache_context
-
-
-@pytest.fixture
-def clear_llm_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    strip_keys = (
-        "WORKFLOW_LLM_BACKEND",
-        "GOOGLE_AI_STUDIO_MODEL",
-        "GOOGLE_PALM_API_KEY",
-        "GOOGLE_AI_API_KEYS",
-        "GOOGLE_AI_API_KEY",
-    )
-    for key in strip_keys:
-        monkeypatch.delenv(key, raising=False)
-    loaded: dict[str, str | None] = {}
-    if infra_config.ENV_FILE_PATH.exists():
-        loaded = dict(dotenv.dotenv_values(str(infra_config.ENV_FILE_PATH)))
-    for key in strip_keys:
-        loaded.pop(key, None)
-    monkeypatch.setattr(infra_config, "_dotenv_values_cache", loaded)
 
 
 @pytest.mark.usefixtures("clear_llm_backend_env")

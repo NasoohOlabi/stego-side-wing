@@ -200,7 +200,7 @@ class ContentAdapter:
     def _get_cached_content(self, url: str) -> Optional[FetchUrlResult]:
         normalized_url = normalize_url(url)
         cache_key = deterministic_hash_sha256(normalized_url)
-        cache_file = self.config.url_cache_dir / f"{cache_key}.json"
+        cache_file = get_config().url_cache_dir / f"{cache_key}.json"
         if not cache_file.exists():
             return None
         try:
@@ -219,7 +219,7 @@ class ContentAdapter:
     def _cache_content(self, url: str, api_response: Dict[str, Any]) -> None:
         normalized_url = normalize_url(url)
         cache_key = deterministic_hash_sha256(normalized_url)
-        cache_file = self.config.url_cache_dir / f"{cache_key}.json"
+        cache_file = get_config().url_cache_dir / f"{cache_key}.json"
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(api_response, f, indent=2, ensure_ascii=False)

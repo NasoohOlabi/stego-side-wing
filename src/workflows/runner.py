@@ -3,7 +3,7 @@ import json
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from loguru import logger
@@ -22,6 +22,8 @@ from workflows.pipelines.stego import StegoPipeline
 from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash
 from services.workflow_run_tracker import get_run_id
+from workflows.runner_diff_utils import collect_diff_paths
+from workflows.runner_validate_post import validation_outcome_from_report
 
 _LOG = logger.bind(component="WorkflowRunner")
 
@@ -82,18 +84,59 @@ def _workflow_cache_paths(cfg: WorkflowConfig) -> Dict[str, str]:
     }
 
 
-def _double_process_validation_workflow_config() -> WorkflowConfig:
+def _double_process_cache_base_root() -> Path:
+    """Shared parent for pass_1 and pass_2 dedicated cache trees (see DOUBLE_PROCESS_VALIDATION_ROOT)."""
     raw = (get_env("DOUBLE_PROCESS_VALIDATION_ROOT") or "").strip()
     if raw:
         root = resolve_path(raw).resolve()
     else:
         root = (REPO_ROOT / "datasets" / "double_process_validation").resolve()
     root.mkdir(parents=True, exist_ok=True)
-    return WorkflowConfig(
-        url_cache_dir=root / "url_cache",
-        research_terms_db_path=root / "research_terms_cache.db",
-        angles_cache_dir=root / "angles_cache",
+    return root
+
+
+_DOUBLE_PROCESS_CLAIM_NAME = "active_post_claim.json"
+
+
+def _double_process_claim_path() -> Path:
+    return _double_process_cache_base_root() / _DOUBLE_PROCESS_CLAIM_NAME
+
+
+def _try_read_double_process_claim() -> Optional[Tuple[str, str]]:
+    """Return (post_id, file_name) if a prior run reserved a post and did not finish."""
+    path = _double_process_claim_path()
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    pid = raw.get("post_id")
+    if not isinstance(pid, str) or not pid.strip():
+        return None
+    pid = pid.strip()
+    fname = raw.get("file_name")
+    if not isinstance(fname, str) or not fname.strip():
+        fname = f"{pid}.json"
+    return pid, fname.strip()
+
+
+def _write_double_process_claim(post_id: str, file_name: str) -> None:
+    path = _double_process_claim_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"post_id": post_id, "file_name": file_name}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
     )
+
+
+def _clear_double_process_claim() -> None:
+    try:
+        _double_process_claim_path().unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _is_receiver_data_load_failure(exc: Exception) -> bool:
@@ -383,53 +426,6 @@ class WorkflowRunner:
         post = source_post or self.backend.get_post_local(file_name, "angles-step")
         return self.gen_angles.preview_post(post=post, allow_fallback=allow_fallback)
 
-    @classmethod
-    def _collect_diff_paths(
-        cls,
-        left: Any,
-        right: Any,
-        prefix: str = "",
-        limit: int = 50,
-    ) -> List[str]:
-        diffs: List[str] = []
-
-        def walk(a: Any, b: Any, path: str) -> None:
-            if len(diffs) >= limit:
-                return
-            if type(a) is not type(b):
-                diffs.append(path or "$")
-                return
-            if isinstance(a, dict):
-                a_keys = set(a.keys())
-                b_keys = set(b.keys())
-                for key in sorted(a_keys - b_keys):
-                    if len(diffs) >= limit:
-                        return
-                    next_path = f"{path}.{key}" if path else key
-                    diffs.append(next_path)
-                for key in sorted(b_keys - a_keys):
-                    if len(diffs) >= limit:
-                        return
-                    next_path = f"{path}.{key}" if path else key
-                    diffs.append(next_path)
-                for key in sorted(a_keys & b_keys):
-                    next_path = f"{path}.{key}" if path else key
-                    walk(a[key], b[key], next_path)
-                return
-            if isinstance(a, list):
-                if len(a) != len(b):
-                    diffs.append(path or "$")
-                    return
-                for idx, (a_item, b_item) in enumerate(zip(a, b)):
-                    next_path = f"{path}[{idx}]" if path else f"[{idx}]"
-                    walk(a_item, b_item, next_path)
-                return
-            if a != b:
-                diffs.append(path or "$")
-
-        walk(left, right, prefix)
-        return diffs
-    
     def run_data_load(
         self,
         count: int = 100,
@@ -1091,7 +1087,7 @@ class WorkflowRunner:
             rerun_payload = rerun_payloads[stage_name]
             baseline_payload = baseline[stage_name]
             matches = baseline_payload == rerun_payload
-            changed_keys = [] if matches else self._collect_diff_paths(
+            changed_keys = [] if matches else collect_diff_paths(
                 baseline_payload, rerun_payload
             )
             steps_report[stage_name] = {
@@ -1114,28 +1110,11 @@ class WorkflowRunner:
             }
             valid = valid and matches
 
-        outcome: str
-        if valid:
-            outcome = "protocol_match"
-            validation_explanation = (
-                "All three stages completed and each live rerun matched its saved artifact."
-            )
-        elif any(
-            steps_report[s].get("comparison") == "mismatch" for s in stage_steps
-        ):
-            outcome = "protocol_mismatch"
-            validation_explanation = (
-                "At least one stage finished rerunning but the live payload differed from the saved "
-                "artifact. That is a true baseline-vs-rerun mismatch (see comparison / changed_keys on "
-                "those stages)."
-            )
-        else:
-            outcome = "rerun_incomplete"
-            validation_explanation = (
-                "A stage failed during rerun or was skipped, so validation could not establish whether "
-                "the protocol still matches baselines. This is not labeled as a protocol mismatch; "
-                "fix the failing stage and retry."
-            )
+        outcome, validation_explanation = validation_outcome_from_report(
+            valid=valid,
+            steps_report=steps_report,
+            stage_order=tuple(stage_steps.keys()),
+        )
 
         result = {
             "post_id": post_id,
@@ -1432,9 +1411,13 @@ class WorkflowRunner:
         """
         Process one new post twice through data_load -> research -> gen_angles.
 
-        Pass 1 uses the main URL/terms/angles caches. Pass 2 uses the same cache
-        flags but binds an isolated validation cache namespace (see
-        ``DOUBLE_PROCESS_VALIDATION_ROOT``).
+        Each pass uses the same cache flags but its own persistent dedicated cache
+        tree under ``DOUBLE_PROCESS_VALIDATION_ROOT`` (``pass_1/`` and ``pass_2/``).
+
+        Writes ``active_post_claim.json`` under that root when dequeuing a post and
+        removes it only after a full successful run. If the process stops mid-run
+        (for example after data-load wrote ``news_url_fetched``), the next call
+        resumes the same ``post_id`` instead of taking the next queue entry.
         """
         self._emit(
             on_progress,
@@ -1453,7 +1436,14 @@ class WorkflowRunner:
             data={"allow_angles_fallback": allow_angles_fallback},
         )
         # endregion
-        post_id, file_name = self._select_next_new_post()
+        claimed = _try_read_double_process_claim()
+        if claimed is not None:
+            post_id, file_name = claimed
+            resumed_from_claim = True
+        else:
+            post_id, file_name = self._select_next_new_post()
+            _write_double_process_claim(post_id, file_name)
+            resumed_from_claim = False
         self._emit(
             on_progress,
             "stage_progress",
@@ -1463,217 +1453,228 @@ class WorkflowRunner:
                 "post_id": post_id,
                 "file_name": file_name,
                 "offset": 0,
+                "resumed_from_claim": resumed_from_claim,
             },
         )
-        self._emit(
-            on_progress,
-            "stage_progress",
-            {
-                "stage": "double-process-new-post",
-                "event": "pass_1_cached_start",
-                "post_id": post_id,
-            },
-        )
-        # region agent log
-        write_debug_probe(
-            run_id=str(get_run_id() or ""),
-            hypothesis_id="H4",
-            location="workflows/runner.py:run_double_process_new_post:pass1_start",
-            message="double-process pass 1 started",
-            data={"post_id": post_id, "cache_mode": "main"},
-        )
-        # endregion
-        t_pass1 = time.perf_counter()
-        while True:
-            try:
-                first_pass = self._run_three_stage_post(
-                    post_id=post_id,
-                    use_terms_cache=True,
-                    persist_terms_cache=True,
-                    use_fetch_cache=True,
-                    allow_angles_fallback=allow_angles_fallback,
-                    on_progress=on_progress,
-                    pass_num=1,
-                    cache_mode="main",
-                )
-                self._clear_fetch_failure(post_id)
-                break
-            except Exception as exc:
-                if not self._is_data_load_fetch_failure(exc):
-                    raise
-                fail_count = self._record_fetch_failure(post_id)
-                self._emit(
-                    on_progress,
-                    "stage_progress",
-                    {
-                        "stage": "double-process-new-post",
-                        "event": "fetch_failed",
-                        "pass": 1,
-                        "post_id": post_id,
-                        "file_name": file_name,
-                        "failure_count": fail_count,
-                    },
-                )
-                _LOG.info(
-                    "double_process_new_post pass 1 fetch failed post_id={} attempt={}; retrying",
-                    post_id,
-                    fail_count,
-                )
-                time.sleep(1.0)
+        completed = False
+        try:
+            dp_base = _double_process_cache_base_root()
+            pass1_cfg = _isolated_workflow_config_for_side(dp_base, "pass_1")
+            pass2_cfg = _isolated_workflow_config_for_side(dp_base, "pass_2")
 
-        pass1_total_ms = int((time.perf_counter() - t_pass1) * 1000)
-        # region agent log
-        write_debug_probe(
-            run_id=str(get_run_id() or ""),
-            hypothesis_id="H4",
-            location="workflows/runner.py:run_double_process_new_post:pass1_end",
-            message="double-process pass 1 finished",
-            data={"post_id": post_id, "elapsed_ms": pass1_total_ms},
-        )
-        # endregion
-        self._emit(
-            on_progress,
-            "stage_progress",
-            {
-                "stage": "double-process-new-post",
-                "event": "pass_1_finished",
-                "post_id": post_id,
-                "pass": 1,
-                "cache_mode": "main",
-                "elapsed_ms": pass1_total_ms,
-            },
-        )
-        _LOG.bind(post_id=post_id, pass_num=1, elapsed_ms=pass1_total_ms).info(
-            "workflow_progress_double_process_pass_finished"
-        )
-        first_pass["settings"]["cache_profile"] = "main"
-        first_pass["settings"]["cache_paths"] = _workflow_cache_paths(WorkflowConfig())
-
-        self._emit(
-            on_progress,
-            "stage_progress",
-            {
-                "stage": "double-process-new-post",
-                "event": "pass_2_validation_start",
-                "post_id": post_id,
-            },
-        )
-        # region agent log
-        write_debug_probe(
-            run_id=str(get_run_id() or ""),
-            hypothesis_id="H4",
-            location="workflows/runner.py:run_double_process_new_post:pass2_start",
-            message="double-process pass 2 started",
-            data={"post_id": post_id, "cache_mode": "validation"},
-        )
-        # endregion
-        t_pass2 = time.perf_counter()
-        validation_cfg = _double_process_validation_workflow_config()
-        while True:
-            try:
-                with isolated_workflow_config(validation_cfg):
-                    second_pass = self._run_three_stage_post(
-                        post_id=post_id,
-                        use_terms_cache=True,
-                        persist_terms_cache=True,
-                        use_fetch_cache=True,
-                        allow_angles_fallback=allow_angles_fallback,
-                        on_progress=on_progress,
-                        pass_num=2,
-                        cache_mode="validation",
+            self._emit(
+                on_progress,
+                "stage_progress",
+                {
+                    "stage": "double-process-new-post",
+                    "event": "pass_1_cached_start",
+                    "post_id": post_id,
+                },
+            )
+            # region agent log
+            write_debug_probe(
+                run_id=str(get_run_id() or ""),
+                hypothesis_id="H4",
+                location="workflows/runner.py:run_double_process_new_post:pass1_start",
+                message="double-process pass 1 started",
+                data={"post_id": post_id, "cache_mode": "pass_1"},
+            )
+            # endregion
+            t_pass1 = time.perf_counter()
+            while True:
+                try:
+                    with isolated_workflow_config(pass1_cfg):
+                        first_pass = self._run_three_stage_post(
+                            post_id=post_id,
+                            use_terms_cache=True,
+                            persist_terms_cache=True,
+                            use_fetch_cache=True,
+                            allow_angles_fallback=allow_angles_fallback,
+                            on_progress=on_progress,
+                            pass_num=1,
+                            cache_mode="pass_1",
+                        )
+                    self._clear_fetch_failure(post_id)
+                    break
+                except Exception as exc:
+                    if not self._is_data_load_fetch_failure(exc):
+                        raise
+                    fail_count = self._record_fetch_failure(post_id)
+                    self._emit(
+                        on_progress,
+                        "stage_progress",
+                        {
+                            "stage": "double-process-new-post",
+                            "event": "fetch_failed",
+                            "pass": 1,
+                            "post_id": post_id,
+                            "file_name": file_name,
+                            "failure_count": fail_count,
+                        },
                     )
-                break
-            except Exception as exc:
-                if not self._is_data_load_fetch_failure(exc):
-                    raise
-                fail_count = self._record_fetch_failure(post_id)
-                self._emit(
-                    on_progress,
-                    "stage_progress",
-                    {
-                        "stage": "double-process-new-post",
-                        "event": "fetch_failed",
-                        "pass": 2,
-                        "post_id": post_id,
-                        "file_name": file_name,
-                        "failure_count": fail_count,
-                    },
-                )
-                _LOG.info(
-                    "double_process_new_post pass 2 fetch failed post_id={} attempt={}; retrying",
-                    post_id,
-                    fail_count,
-                )
-                time.sleep(1.0)
+                    _LOG.info(
+                        "double_process_new_post pass 1 fetch failed post_id={} attempt={}; retrying",
+                        post_id,
+                        fail_count,
+                    )
+                    time.sleep(1.0)
 
-        pass2_total_ms = int((time.perf_counter() - t_pass2) * 1000)
-        # region agent log
-        write_debug_probe(
-            run_id=str(get_run_id() or ""),
-            hypothesis_id="H4",
-            location="workflows/runner.py:run_double_process_new_post:pass2_end",
-            message="double-process pass 2 finished",
-            data={"post_id": post_id, "elapsed_ms": pass2_total_ms},
-        )
-        # endregion
-        self._emit(
-            on_progress,
-            "stage_progress",
-            {
-                "stage": "double-process-new-post",
-                "event": "pass_2_finished",
-                "post_id": post_id,
-                "pass": 2,
-                "cache_mode": "validation",
-                "elapsed_ms": pass2_total_ms,
-            },
-        )
-        _LOG.bind(post_id=post_id, pass_num=2, elapsed_ms=pass2_total_ms).info(
-            "workflow_progress_double_process_pass_finished"
-        )
-        second_pass["settings"]["cache_profile"] = "validation"
-        second_pass["settings"]["cache_paths"] = _workflow_cache_paths(validation_cfg)
+            pass1_total_ms = int((time.perf_counter() - t_pass1) * 1000)
+            # region agent log
+            write_debug_probe(
+                run_id=str(get_run_id() or ""),
+                hypothesis_id="H4",
+                location="workflows/runner.py:run_double_process_new_post:pass1_end",
+                message="double-process pass 1 finished",
+                data={"post_id": post_id, "elapsed_ms": pass1_total_ms},
+            )
+            # endregion
+            self._emit(
+                on_progress,
+                "stage_progress",
+                {
+                    "stage": "double-process-new-post",
+                    "event": "pass_1_finished",
+                    "post_id": post_id,
+                    "pass": 1,
+                    "cache_mode": "pass_1",
+                    "elapsed_ms": pass1_total_ms,
+                },
+            )
+            _LOG.bind(post_id=post_id, pass_num=1, elapsed_ms=pass1_total_ms).info(
+                "workflow_progress_double_process_pass_finished"
+            )
+            first_pass["settings"]["cache_profile"] = "pass_1"
+            first_pass["settings"]["cache_paths"] = _workflow_cache_paths(pass1_cfg)
 
-        comparison = {
-            stage: first_pass["steps"][stage]["hash"] == second_pass["steps"][stage]["hash"]
-            for stage in ("data_load", "research", "gen_angles")
-        }
-        result = {
-            "mode": "double_process_new_post",
-            "post_id": post_id,
-            "source_file": file_name,
-            "passes": {
-                "pass_1_cached": first_pass,
-                "pass_2_validation": second_pass,
-            },
-            "stage_hash_match": comparison,
-        }
-        # region agent log
-        write_debug_probe(
-            run_id=str(get_run_id() or ""),
-            hypothesis_id="H4",
-            location="workflows/runner.py:run_double_process_new_post:compare",
-            message="double-process stage comparison computed",
-            data={"post_id": post_id, **comparison},
-        )
-        # endregion
-        _LOG.info(
-            "double_process_new_post post_id={} data_load_match={} research_match={} gen_angles_match={}",
-            post_id,
-            comparison["data_load"],
-            comparison["research"],
-            comparison["gen_angles"],
-        )
-        self._emit(
-            on_progress,
-            "workflow_done",
-            {
-                "workflow": "double-process-new-post",
+            self._emit(
+                on_progress,
+                "stage_progress",
+                {
+                    "stage": "double-process-new-post",
+                    "event": "pass_2_validation_start",
+                    "post_id": post_id,
+                },
+            )
+            # region agent log
+            write_debug_probe(
+                run_id=str(get_run_id() or ""),
+                hypothesis_id="H4",
+                location="workflows/runner.py:run_double_process_new_post:pass2_start",
+                message="double-process pass 2 started",
+                data={"post_id": post_id, "cache_mode": "pass_2"},
+            )
+            # endregion
+            t_pass2 = time.perf_counter()
+            while True:
+                try:
+                    with isolated_workflow_config(pass2_cfg):
+                        second_pass = self._run_three_stage_post(
+                            post_id=post_id,
+                            use_terms_cache=True,
+                            persist_terms_cache=True,
+                            use_fetch_cache=True,
+                            allow_angles_fallback=allow_angles_fallback,
+                            on_progress=on_progress,
+                            pass_num=2,
+                            cache_mode="pass_2",
+                        )
+                    break
+                except Exception as exc:
+                    if not self._is_data_load_fetch_failure(exc):
+                        raise
+                    fail_count = self._record_fetch_failure(post_id)
+                    self._emit(
+                        on_progress,
+                        "stage_progress",
+                        {
+                            "stage": "double-process-new-post",
+                            "event": "fetch_failed",
+                            "pass": 2,
+                            "post_id": post_id,
+                            "file_name": file_name,
+                            "failure_count": fail_count,
+                        },
+                    )
+                    _LOG.info(
+                        "double_process_new_post pass 2 fetch failed post_id={} attempt={}; retrying",
+                        post_id,
+                        fail_count,
+                    )
+                    time.sleep(1.0)
+
+            pass2_total_ms = int((time.perf_counter() - t_pass2) * 1000)
+            # region agent log
+            write_debug_probe(
+                run_id=str(get_run_id() or ""),
+                hypothesis_id="H4",
+                location="workflows/runner.py:run_double_process_new_post:pass2_end",
+                message="double-process pass 2 finished",
+                data={"post_id": post_id, "elapsed_ms": pass2_total_ms},
+            )
+            # endregion
+            self._emit(
+                on_progress,
+                "stage_progress",
+                {
+                    "stage": "double-process-new-post",
+                    "event": "pass_2_finished",
+                    "post_id": post_id,
+                    "pass": 2,
+                    "cache_mode": "pass_2",
+                    "elapsed_ms": pass2_total_ms,
+                },
+            )
+            _LOG.bind(post_id=post_id, pass_num=2, elapsed_ms=pass2_total_ms).info(
+                "workflow_progress_double_process_pass_finished"
+            )
+            second_pass["settings"]["cache_profile"] = "pass_2"
+            second_pass["settings"]["cache_paths"] = _workflow_cache_paths(pass2_cfg)
+
+            comparison = {
+                stage: first_pass["steps"][stage]["hash"] == second_pass["steps"][stage]["hash"]
+                for stage in ("data_load", "research", "gen_angles")
+            }
+            result = {
+                "mode": "double_process_new_post",
                 "post_id": post_id,
+                "source_file": file_name,
+                "passes": {
+                    "pass_1_cached": first_pass,
+                    "pass_2_validation": second_pass,
+                },
                 "stage_hash_match": comparison,
-            },
-        )
-        return result
+            }
+            # region agent log
+            write_debug_probe(
+                run_id=str(get_run_id() or ""),
+                hypothesis_id="H4",
+                location="workflows/runner.py:run_double_process_new_post:compare",
+                message="double-process stage comparison computed",
+                data={"post_id": post_id, **comparison},
+            )
+            # endregion
+            _LOG.info(
+                "double_process_new_post post_id={} data_load_match={} research_match={} gen_angles_match={}",
+                post_id,
+                comparison["data_load"],
+                comparison["research"],
+                comparison["gen_angles"],
+            )
+            self._emit(
+                on_progress,
+                "workflow_done",
+                {
+                    "workflow": "double-process-new-post",
+                    "post_id": post_id,
+                    "stage_hash_match": comparison,
+                },
+            )
+            completed = True
+            return result
+        finally:
+            if completed:
+                _clear_double_process_claim()
 
     def run_batch_angles_determinism(
         self,

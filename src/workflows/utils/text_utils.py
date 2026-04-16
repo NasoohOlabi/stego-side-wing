@@ -41,19 +41,19 @@ def chunk_text_equal_overlap(
     O = overlap_chars
 
     numer = L + (n - 1) * O
-    W = max(1, math.ceil(numer / n))
-    W = min(W, L)
-    stride = W - O
+    win = max(1, math.ceil(numer / n))
+    win = min(win, L)
+    stride = win - O
     if stride < 1:
         stride = 1
-        W = min(L, stride + O)
+        win = min(L, stride + O)
 
     chunks: List[str] = []
     for i in range(n):
         start = i * stride
         if start >= L:
             break
-        end = min(L, start + W)
+        end = min(L, start + win)
         chunks.append(text[start:end])
         if end >= L:
             break

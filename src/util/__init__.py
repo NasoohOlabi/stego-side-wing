@@ -21,13 +21,6 @@ from integrations.duckduckgo_api import (
 # ScrapingDog API
 from integrations.scrapingdog_api import searchGoogle
 
-# Lumen API
-from integrations.lumen_api import (
-    Article as LumenArticle,
-    ArticlesResponse,
-    Meta as LumenMeta,
-)
-
 __all__ = [
     # News API
     "Article",
@@ -43,8 +36,4 @@ __all__ = [
     "search_sync",
     # ScrapingDog
     "searchGoogle",
-    # Lumen
-    "LumenArticle",
-    "ArticlesResponse",
-    "LumenMeta",
 ]

@@ -295,6 +295,8 @@ def configure_api_logging(
 
     logging.captureWarnings(True)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    # google-genai logs noisy INFO (e.g. "AFC is enabled with max remote calls: 10") at import/use time.
+    logging.getLogger("google_genai").setLevel(logging.WARNING)
 
     _configured = True
 

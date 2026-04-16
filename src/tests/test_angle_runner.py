@@ -2,7 +2,7 @@ from io import StringIO
 
 import pytest
 
-from pipelines.angles.angle_runner import _emit_status, _parse_or_repair_workflow
+from content_acquisition.angles.angle_runner import _emit_status, _parse_or_repair_workflow
 
 
 class _AsciiOnlyStream(StringIO):
@@ -14,7 +14,7 @@ class _AsciiOnlyStream(StringIO):
 
 def test_emit_status_falls_back_to_ascii(monkeypatch):
     stream = _AsciiOnlyStream()
-    monkeypatch.setattr("pipelines.angles.angle_runner.sys.stdout", stream)
+    monkeypatch.setattr("content_acquisition.angles.angle_runner.sys.stdout", stream)
 
     _emit_status("cache hit 📂")
 

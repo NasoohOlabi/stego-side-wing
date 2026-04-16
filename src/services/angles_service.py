@@ -2,7 +2,7 @@
 import logging
 from typing import Any
 
-from pipelines.angles.angle_runner import analyze_angles_from_texts
+from content_acquisition.angles.angle_runner import analyze_angles_from_texts
 
 logger = logging.getLogger(__name__)
 

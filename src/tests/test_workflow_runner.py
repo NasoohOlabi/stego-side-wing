@@ -1,8 +1,9 @@
 import json
+from pathlib import Path
 
 import pytest
 
-import pipelines.angles.angle_runner as angle_runner_mod
+import content_acquisition.angles.angle_runner as angle_runner_mod
 from workflows.runner import WorkflowRunner
 
 
@@ -206,7 +207,13 @@ def test_run_stego_run_all_max_posts_one_caps_batch():
     assert runner.stego.calls == 1
 
 
-def test_run_double_process_new_post_main_then_validation_cache():
+def test_run_double_process_new_post_main_then_validation_cache(monkeypatch, tmp_path):
+    dp_root = (tmp_path / "datasets" / "double_process_validation").resolve()
+    dp_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        "workflows.runner_orchestration_utils.double_process_cache_base_root",
+        lambda: dp_root,
+    )
     runner = WorkflowRunner.__new__(WorkflowRunner)
     calls = []
 
@@ -259,6 +266,8 @@ def test_run_double_process_new_post_main_then_validation_cache():
 
     result = runner.run_double_process_new_post(allow_angles_fallback=False)
 
+    assert result["succeeded"] is True
+    assert result["comparison_completed"] is True
     assert result["post_id"] == "n1"
     assert result["source_file"] == "n1.json"
     p1s = result["passes"]["pass_1_cached"]["settings"]
@@ -347,6 +356,7 @@ def test_run_double_process_new_post_first_fetch_failure_retries_until_success(m
     runner._run_three_stage_post = _fail_then_ok
 
     result = runner.run_double_process_new_post()
+    assert result["succeeded"] is True
     assert result["post_id"] == "n1"
     assert attempts["n"] == 3
     assert runner._fetch_fail_counts == {}
@@ -389,6 +399,7 @@ def test_run_double_process_new_post_retries_same_post_until_fetch_succeeds(monk
 
     result = runner.run_double_process_new_post()
 
+    assert result["succeeded"] is True
     assert result["post_id"] == "bad"
     assert result["source_file"] == "bad.json"
     assert runner._fetch_fail_counts == {}
@@ -398,11 +409,14 @@ def test_run_double_process_new_post_retries_same_post_until_fetch_succeeds(monk
 def test_run_double_process_new_post_resumes_from_claim_without_requeue(monkeypatch, tmp_path):
     root = tmp_path / "dpv"
     root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("workflows.runner._double_process_cache_base_root", lambda: root.resolve())
+    monkeypatch.setattr(
+        "workflows.runner_orchestration_utils.double_process_cache_base_root",
+        lambda: root.resolve(),
+    )
 
-    from workflows.runner import _write_double_process_claim
+    from workflows.runner_orchestration_utils import write_double_process_claim
 
-    _write_double_process_claim("held", "held.json")
+    write_double_process_claim("held", "held.json")
 
     runner = WorkflowRunner.__new__(WorkflowRunner)
     calls: list[str] = []
@@ -429,6 +443,8 @@ def test_run_double_process_new_post_resumes_from_claim_without_requeue(monkeypa
 
     result = runner.run_double_process_new_post()
 
+    assert result["succeeded"] is True
+    assert result["comparison_completed"] is True
     assert result["post_id"] == "held"
     assert result["source_file"] == "held.json"
     assert calls == []
@@ -438,7 +454,10 @@ def test_run_double_process_new_post_resumes_from_claim_without_requeue(monkeypa
 def test_run_double_process_new_post_leaves_claim_after_exception(monkeypatch, tmp_path):
     root = tmp_path / "dpv2"
     root.mkdir()
-    monkeypatch.setattr("workflows.runner._double_process_cache_base_root", lambda: root.resolve())
+    monkeypatch.setattr(
+        "workflows.runner_orchestration_utils.double_process_cache_base_root",
+        lambda: root.resolve(),
+    )
 
     runner = WorkflowRunner.__new__(WorkflowRunner)
     posts_list_calls = 0
@@ -458,16 +477,18 @@ def test_run_double_process_new_post_leaves_claim_after_exception(monkeypatch, t
     runner.backend = _DummyBackend()
     runner._run_three_stage_post = boom
 
-    with pytest.raises(RuntimeError, match="research exploded"):
-        runner.run_double_process_new_post()
-
+    r1 = runner.run_double_process_new_post()
+    assert r1["succeeded"] is False
+    assert r1["comparison_completed"] is False
+    assert r1["post_id"] == "n1"
+    assert "report_path" in r1
+    assert Path(r1["report_path"]).is_file()
     assert (root / "active_post_claim.json").is_file()
     assert posts_list_calls == 1
     assert attempts["n"] == 1
 
-    with pytest.raises(RuntimeError, match="research exploded"):
-        runner.run_double_process_new_post()
-
+    r2 = runner.run_double_process_new_post()
+    assert r2["succeeded"] is False
     assert posts_list_calls == 1
     assert attempts["n"] == 2
 

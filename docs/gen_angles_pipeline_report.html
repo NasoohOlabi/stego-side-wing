@@ -121,7 +121,7 @@ BackendAPIAdapter.analyze_angles(texts)
 services.angles_service.analyze_angles
     │
     ▼
-pipelines.angles.angle_runner.analyze_angles_from_texts  ◀── bulk of latency lives here
+content_acquisition.angles.angle_runner.analyze_angles_from_texts  ◀── bulk of latency lives here
     │
     ▼
 List[angle dicts] merged + source_document tags

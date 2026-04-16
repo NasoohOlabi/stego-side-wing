@@ -9,8 +9,8 @@ import pytest
 from pydantic import BaseModel, Field
 
 import infrastructure.config as infra_config
-import pipelines.scraper as scraper_mod
-from pipelines import ai_analyze
+import content_acquisition.scraper as scraper_mod
+from content_acquisition import ai_analyze
 from workflows.adapters.llm import LLMAdapter
 
 

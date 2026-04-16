@@ -9,8 +9,8 @@ from infrastructure.event_loop import run_async
 from pydantic import BaseModel, Field
 
 # Import pipeline functions
-from pipelines.ai_analyze import process_file
-from pipelines.scraper import extract_structured_data
+from content_acquisition.ai_analyze import process_file
+from content_acquisition.scraper import extract_structured_data
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def fetch_url_content_crawl4ai(url: str, *, use_disk_cache: bool = True) -> Dict
         read_json_cache,
         write_json_cache,
     )
-    from pipelines.headless_browser_analyzer import normalize_url
+    from content_acquisition.headless_browser_analyzer import normalize_url
 
     if not url or url.strip() == "":
         return {
@@ -228,7 +228,7 @@ def fetch_url_content(url: str) -> Dict:
     Returns:
         Dict with fetched content
     """
-    from pipelines.headless_browser_analyzer import WebAnalyzer
+    from content_acquisition.headless_browser_analyzer import WebAnalyzer
 
     if not url or url.strip() == "":
         return {

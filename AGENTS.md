@@ -13,7 +13,6 @@
 | Install deps | `uv sync` |
 | API | `uv run python src/API.py` (wrapper → `src/app/app_factory.py`; host/port from env `API_HOST` / `API_PORT` or CLI; defaults **127.0.0.1** / **5001** when unset) |
 | API dev | `uv run python src/API.py --dev --host 127.0.0.1 --port 5001` or `API_DEBUG=1` |
-| Workflow CLI | `uv run python src/scripts/workflow_cli.py -h` |
 | Tests | `uv run pytest -q` (from repo root) |
 | Types | `uv run pyright` (`pyrightconfig.json`) |
 
@@ -21,6 +20,8 @@
 
 - **Cursor rules** (repo-specific standards): read `.cursor/rules/` — especially `sender-receiver-testing.mdc`, **python-architecture** (Pydantic v2, `@validate_call` on critical logic), **maintainability** (e.g. function length), **jsonl-observability** (structured logging, no `print`). For non-trivial edits, finish with full `uv run pytest -q` and `uv run pyright` (see `sender-receiver-testing.mdc` for targeted vs full runs).
 - **Repo root** is the normal cwd for `uv run` commands, pytest, and path resolution (`REPO_ROOT` in `src/infrastructure/config.py`).
+- **Layering**: allowed import direction is documented in [`docs/architecture-layers.md`](docs/architecture-layers.md). API code should use [`src/services/workflow_facade.py`](src/services/workflow_facade.py) instead of importing `workflows.*` directly (except compatibility re-exports on `api_v1_routes`).
+- **Post-refactor checks**: see [`docs/validation-per-phase.md`](docs/validation-per-phase.md).
 
 ## Workflow LLM backend (global)
 
@@ -43,12 +44,11 @@ One switch chooses how most workflow and pipeline code talks to an LLM:
 
 ## Imports and entrypoints
 
-- Library layout is under **`src/`** with imports like `from app...`, `from workflows...`, `from infrastructure...` (no `src.` prefix) when `src` is on `PYTHONPATH` (as in normal test/API runs).
-- **Workflow CLI** canonical path: `src/scripts/workflow_cli.py`. Root `main.py` does `from scripts.workflow_cli import main`; that import expects `src` on `PYTHONPATH`. If `ModuleNotFoundError`, use `uv run python src/scripts/workflow_cli.py` or set `PYTHONPATH=src` for `main.py`.
+- Library layout is under **`src/`** with imports like `from app...`, `from workflows...`, `from infrastructure...` (no `src.` prefix) when `src` is on `PYTHONPATH` (as in normal test/API runs). Use **`uv run python src/API.py`** (or tests) as the primary way to exercise workflows via HTTP; see **`docs/api-spec.md`**.
 
 ## Pyright strict scope
 
-**Strict:** `src/app`, `src/services`, `src/pipelines`, `src/integrations`, `src/infrastructure`, `src/workflows`.
+**Strict:** `src/app`, `src/services`, `src/content_acquisition`, `src/integrations`, `src/infrastructure`, `src/workflows`.
 
 **Excluded (non-strict):** `src/util`, `src/angles`, `src/**/__pycache__`, and these **top-level modules under `src/`:** `ai_analyze.py`, `headless_browser_analyzer.py`, `scraper.py`, `nest.py`.
 
@@ -59,11 +59,11 @@ One switch chooses how most workflow and pipeline code talks to an LLM:
 - `metrics/` — default output for metrics JSON reports (created on first run)
 - `src/app/` — Flask app factory, routes (e.g. `routes/api_v1_routes.py`), schemas
 - `src/workflows/` — workflow runner, pipelines, adapters, contracts; **`src/workflows/utils/`** — stego codec and shared helpers
-- `src/pipelines/` — legacy/angle and scraper-related pipeline code
+- `src/content_acquisition/` — scraping, headless fetch, and angles LLM helpers (legacy package layout)
 - `src/services/` — domain services
 - `src/integrations/` — external APIs
 - `src/infrastructure/` — config, cache, logging, shared infra
 - `src/tests/` — pytest
-- `src/scripts/` — workflow CLI (package with `__init__.py`), distinct from repo-root `scripts/`
+- `src/scripts/` — optional standalone utilities (package with `__init__.py`), distinct from repo-root `scripts/`
 
 Credentials and optional keys: see **README.md** (“Optional env vars”); use `.env` locally (`python-dotenv`).

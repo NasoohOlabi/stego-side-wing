@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from pipelines.headless_browser_analyzer import deterministic_hash_sha256, normalize_url
+from content_acquisition.headless_browser_analyzer import deterministic_hash_sha256, normalize_url
 from workflows.adapters.content import ContentAdapter
 from workflows.config import WorkflowConfig, get_config, isolated_workflow_config
 from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline

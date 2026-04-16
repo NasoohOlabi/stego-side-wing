@@ -9,7 +9,7 @@ import httpx
 from icecream import ic  # Import icecream for colorful logging
 
 from infrastructure.config import resolve_workflow_llm_provider_and_model
-from pipelines.headless_browser_analyzer import WebAnalyzer
+from content_acquisition.headless_browser_analyzer import WebAnalyzer
 from workflows.adapters.llm import LLMAdapter
 from integrations.news_api import (
     Article,

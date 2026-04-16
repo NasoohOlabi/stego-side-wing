@@ -20,6 +20,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from infrastructure.cache import deterministic_hash_sha256
 from infrastructure.config import (
+    REPO_ROOT,
     get_env,
     get_lm_studio_url,
     get_workflow_llm_backend,
@@ -29,21 +30,21 @@ from infrastructure.json_logging import TAG_WORKFLOW, get_trace_id
 from workflows.adapters.llm import LLMAdapter
 from workflows.cache_context import get_angles_cache_dir
 from workflows.config import get_config
+from workflows.utils.angles_llm_config import (
+    SYSTEM_PROMPT,
+    TEMPERATURE,
+    USER_PROMPT_TEMPLATE,
+    angles_model_name,
+)
 from workflows.utils.text_utils import chunk_text_equal_overlap
 
 _LOG = logging.getLogger(__name__)
 
 ANGLES_DIR = Path(__file__).resolve().parent
-REPO_ROOT = ANGLES_DIR.parent.parent
-SYSTEM_PROMPT_PATH = ANGLES_DIR / "systemPrompt.txt"
-USER_PROMPT_PATH = ANGLES_DIR / "userPrompt.txt"
 
 ANGLES_CACHE_DIR = (
     REPO_ROOT / "datasets" / "angles_cache"
 )  # default; live paths use get_angles_cache_dir()
-
-SYSTEM_PROMPT = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-USER_PROMPT_TEMPLATE = USER_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 LM_STUDIO_URL = get_lm_studio_url()
@@ -51,21 +52,8 @@ LM_STUDIO_API_TOKEN = get_env("LM_STUDIO_API_TOKEN", "lm-studio") or "lm-studio"
 CHAT_ENDPOINT = f"{LM_STUDIO_URL.rstrip('/')}/chat/completions"
 
 
-def angles_model_name() -> str:
-    """LLM id for angles chat/completions; ANGLES_MODEL overrides MODEL."""
-    explicit = (get_env("ANGLES_MODEL") or "").strip()
-    if explicit:
-        return explicit
-    fallback = (get_env("MODEL") or "").strip()
-    if fallback:
-        return fallback
-    return "openai/gpt-oss-20b"
-    # return "qwen/qwen3.5-9b"
-
-
 MODEL_NAME = angles_model_name()
 MAX_RESPONSE_TOKENS = 8192
-TEMPERATURE = 0
 
 PROMPTS_LOG_PATH = REPO_ROOT / "prompts.log"
 

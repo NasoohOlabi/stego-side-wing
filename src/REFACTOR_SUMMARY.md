@@ -2,6 +2,14 @@
 
 This document summarizes the structural refactoring of the `src/` directory.
 
+## Current notes (2026)
+
+- Tests live under `src/tests/` (many `test_api_v1_*.py`, pipeline, runner, codec modules)—not only `test_parity.py`.
+- **Layering** and validation checklists: repo root [`docs/architecture-layers.md`](../docs/architecture-layers.md), [`docs/validation-per-phase.md`](../docs/validation-per-phase.md).
+- **`services/workflow_facade.py`**: re-exports workflow runner + prompt/protocol helpers for `app` so routes do not import deep `workflows` modules.
+- **`workflows/utils/angles_llm_config.py`**: angle LLM prompts and model id defaults; `gen_angles` and legacy `angle_runner` both use it (single source of truth).
+- **`workflows/runner_orchestration_utils.py`**: research breakdown, double-process FS claims, live-sim stego/receiver pair, angle normalization—extracted from `runner.py` for clarity.
+
 ## New Structure
 
 ```
@@ -33,7 +41,7 @@ src/
 │   ├── cache.py           # Caching utilities
 │   ├── config.py          # Configuration management
 │   └── event_loop.py      # Event loop management
-├── pipelines/             # Data processing pipelines
+├── content_acquisition/    # Scraping, headless fetch, angles LLM
 │   ├── ai_analyze.py
 │   ├── headless_browser_analyzer.py
 │   ├── scraper.py
@@ -82,12 +90,12 @@ External API clients moved from `util/` to `integrations/`:
 
 Backward compatibility maintained via `util/__init__.py` shims.
 
-### 5. Pipeline Organization
-Data processing modules moved to `pipelines/`:
-- `ai_analyze.py` → `pipelines/ai_analyze.py`
-- `headless_browser_analyzer.py` → `pipelines/headless_browser_analyzer.py`
-- `scraper.py` → `pipelines/scraper.py`
-- `angles/angle_runner.py` → `pipelines/angles/angle_runner.py`
+### 5. Content acquisition package
+Data processing modules live under `content_acquisition/`:
+- `ai_analyze.py` → `content_acquisition/ai_analyze.py`
+- `headless_browser_analyzer.py` → `content_acquisition/headless_browser_analyzer.py`
+- `scraper.py` → `content_acquisition/scraper.py`
+- `angles/angle_runner.py` → `content_acquisition/angles/angle_runner.py`
 
 ### 6. Application Factory
 - **`app/app_factory.py`**: Centralized Flask app creation with blueprint registration
@@ -96,7 +104,7 @@ Data processing modules moved to `pipelines/`:
 ## Dependency Flow
 
 ```
-routes → services → pipelines/integrations
+routes → services → content_acquisition/integrations
          ↓
     infrastructure
 ```
@@ -115,7 +123,6 @@ Services contain business logic and orchestrate:
 
 - **`API.py`**: Maintains the same entrypoint, now a thin wrapper over `app_factory`
 - **`util/__init__.py`**: Provides import shims for old `util.*` imports
-- **CLI compatibility**: `main.py` forwards to `src/scripts/workflow_cli.py`
 
 ## Testing
 
@@ -128,8 +135,8 @@ Basic parity tests added in `tests/test_parity.py` to verify:
 
 1. **Import Updates**:
    - `from util.newsApi import ...` → `from integrations.news_api import ...`
-   - `from ai_analyze import ...` → `from pipelines.ai_analyze import ...`
-   - `from headless_browser_analyzer import ...` → `from pipelines.headless_browser_analyzer import ...`
+   - `from ai_analyze import ...` → `from content_acquisition.ai_analyze import ...`
+   - `from headless_browser_analyzer import ...` → `from content_acquisition.headless_browser_analyzer import ...`
 
 2. **Configuration**: Use `infrastructure.config` for:
    - Environment variables: `get_env()`, `get_env_required()`

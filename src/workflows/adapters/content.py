@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 import requests
 from loguru import logger
 
-from pipelines.headless_browser_analyzer import deterministic_hash_sha256, normalize_url
+from content_acquisition.headless_browser_analyzer import deterministic_hash_sha256, normalize_url
 from workflows.config import WorkflowConfig, get_config
 from workflows.contracts import FetchUrlResult
 

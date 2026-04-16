@@ -36,14 +36,6 @@ You can also enable dev mode with `API_DEBUG=1`.
 
 HTTP contract for `/api/v1/*` (workflows, tools, metrics, state): **[docs/api-spec.md](docs/api-spec.md)**. Workflow LLM templates live in `config/workflow_llm_prompts.json` and are exposed at `GET` / `PUT` / `POST …/reset` under `/api/v1/prompts/workflow-llm` (see **Concepts → Workflow LLM prompts** and **State** in that doc).
 
-## Run workflow CLI
-
-```bash
-uv run python src/scripts/workflow_cli.py -h
-```
-
-`main.py` is a wrapper that forwards to this CLI.
-
 ## Metrics (perplexity, KL/JSD)
 
 - **Reports directory:** `<repo>/metrics` — timestamped JSON files from perplexity and divergence runs.
@@ -76,7 +68,7 @@ Current strict pyright config is in `pyrightconfig.json`.
 
 - `src/app`
 - `src/services`
-- `src/pipelines`
+- `src/content_acquisition`
 - `src/integrations`
 - `src/infrastructure`
 - `src/workflows`

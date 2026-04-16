@@ -17,7 +17,7 @@
   "include": [
     "src/app",
     "src/services",
-    "src/pipelines",
+    "src/content_acquisition",
     "src/integrations",
     "src/infrastructure",
     "src/workflows"

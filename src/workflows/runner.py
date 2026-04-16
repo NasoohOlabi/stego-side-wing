@@ -3,15 +3,14 @@ import json
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from loguru import logger
 
-from infrastructure.config import REPO_ROOT, get_env, resolve_path
 from infrastructure.json_logging import get_trace_id
 from workflows.adapters.backend_api import BackendAPIAdapter
-from workflows.config import WorkflowConfig, isolated_workflow_config
+from workflows.config import isolated_workflow_config
 from workflows.pipelines.data_load import DataLoadPipeline
 from workflows.pipelines.decode import DecodePipeline
 from workflows.pipelines.gen_angles import GenAnglesPipeline
@@ -23,270 +22,22 @@ from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash
 from services.workflow_run_tracker import get_run_id
 from workflows.runner_diff_utils import collect_diff_paths
+from workflows.runner_orchestration_utils import (
+    clear_double_process_claim,
+    double_process_cache_base_root,
+    is_receiver_data_load_failure,
+    isolated_workflow_config_for_side,
+    normalized_angles_from_raw,
+    persist_double_process_final_report,
+    research_run_with_breakdown,
+    run_stego_receiver_live_sim_once,
+    try_read_double_process_claim,
+    workflow_cache_paths,
+    write_double_process_claim,
+)
 from workflows.runner_validate_post import validation_outcome_from_report
 
 _LOG = logger.bind(component="WorkflowRunner")
-
-
-def _sum_research_preview_total_ms(entries: List[Dict[str, Any]]) -> int:
-    total = 0
-    for item in entries:
-        rep = item.get("report")
-        if not isinstance(rep, dict):
-            continue
-        timing = rep.get("timing")
-        if not isinstance(timing, dict):
-            continue
-        v = timing.get("preview_total_ms")
-        if isinstance(v, int):
-            total += v
-    return total
-
-
-def _research_run_with_breakdown(
-    *,
-    posts: List[Dict[str, Any]],
-    breakdown_entries: List[Dict[str, Any]],
-    batch_elapsed_ms: int,
-    requested_count: int,
-    offset: int,
-    runner_trace_id: str,
-) -> Dict[str, Any]:
-    batch = {
-        "elapsed_ms": batch_elapsed_ms,
-        "processed_count": len(posts),
-        "requested_count": requested_count,
-        "offset": offset,
-        "runner_trace_id": runner_trace_id,
-        "preview_total_ms_sum": _sum_research_preview_total_ms(breakdown_entries),
-    }
-    return {
-        "posts": posts,
-        "breakdown": {"batch": batch, "posts": breakdown_entries},
-    }
-
-
-def _isolated_workflow_config_for_side(base: Path, side: str) -> WorkflowConfig:
-    root = (base / side).resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    return WorkflowConfig(
-        url_cache_dir=root / "url_cache",
-        research_terms_db_path=root / "research_terms_cache.db",
-        angles_cache_dir=root / "angles_cache",
-    )
-
-
-def _workflow_cache_paths(cfg: WorkflowConfig) -> Dict[str, str]:
-    return {
-        "url_cache_dir": str(cfg.url_cache_dir),
-        "research_terms_db_path": str(cfg.research_terms_db_path),
-        "angles_cache_dir": str(cfg.angles_cache_dir),
-    }
-
-
-def _double_process_cache_base_root() -> Path:
-    """Shared parent for pass_1 and pass_2 dedicated cache trees (see DOUBLE_PROCESS_VALIDATION_ROOT)."""
-    raw = (get_env("DOUBLE_PROCESS_VALIDATION_ROOT") or "").strip()
-    if raw:
-        root = resolve_path(raw).resolve()
-    else:
-        root = (REPO_ROOT / "datasets" / "double_process_validation").resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-_DOUBLE_PROCESS_CLAIM_NAME = "active_post_claim.json"
-
-
-def _double_process_claim_path() -> Path:
-    return _double_process_cache_base_root() / _DOUBLE_PROCESS_CLAIM_NAME
-
-
-def _try_read_double_process_claim() -> Optional[Tuple[str, str]]:
-    """Return (post_id, file_name) if a prior run reserved a post and did not finish."""
-    path = _double_process_claim_path()
-    if not path.is_file():
-        return None
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(raw, dict):
-        return None
-    pid = raw.get("post_id")
-    if not isinstance(pid, str) or not pid.strip():
-        return None
-    pid = pid.strip()
-    fname = raw.get("file_name")
-    if not isinstance(fname, str) or not fname.strip():
-        fname = f"{pid}.json"
-    return pid, fname.strip()
-
-
-def _write_double_process_claim(post_id: str, file_name: str) -> None:
-    path = _double_process_claim_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"post_id": post_id, "file_name": file_name}, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-
-def _clear_double_process_claim() -> None:
-    try:
-        _double_process_claim_path().unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
-def _is_receiver_data_load_failure(exc: Exception) -> bool:
-    """True when receiver rebuild failed because URL/HTML fetch did not yield usable body."""
-    return "Receiver data-load failed" in str(exc)
-
-
-def _compressed_full_for_live_receiver(
-    stego_out: Dict[str, Any], override: Optional[str]
-) -> Optional[str]:
-    """Prefer explicit API override; else use sender embedding (same bitstring receiver must recover)."""
-    if isinstance(override, str) and override.strip():
-        return override.strip()
-    emb = stego_out.get("embedding")
-    if not isinstance(emb, dict):
-        return None
-    comp = emb.get("compression")
-    if not isinstance(comp, dict):
-        return None
-    c = comp.get("compressed")
-    return c if isinstance(c, str) and c else None
-
-
-def _receiver_post_from_stego(stego_result: Dict[str, Any], sender_user_id: str) -> Dict[str, Any]:
-    """Attach successful stego output as a single comment from ``sender_user_id``."""
-    if not stego_result.get("succeeded"):
-        raise ValueError("stego did not succeed; cannot build receiver post")
-    post = dict(stego_result.get("post") or {})
-    stego_text = stego_result.get("stego_text")
-    if not isinstance(stego_text, str) or not stego_text.strip():
-        raise ValueError("stego_text missing or empty")
-    pid = str(post.get("id") or "unknown")
-    post["comments"] = [
-        {
-            "id": f"sim-stego-{pid}",
-            "author": sender_user_id.strip(),
-            "body": stego_text.strip(),
-            "replies": [],
-        }
-    ]
-    return post
-
-
-def _live_sim_attempt_root(base: Path, attempt_idx: int, multi_post: bool) -> Path:
-    root = (base / f"attempt_{attempt_idx:03d}") if multi_post else base
-    if multi_post:
-        root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _live_sim_simulation_meta(
-    base: Path, attempt_idx: int, sender_cfg: WorkflowConfig, receiver_cfg: WorkflowConfig
-) -> Dict[str, Any]:
-    return {
-        "root": str(base),
-        "attempt_index": attempt_idx,
-        "sender_side": str(sender_cfg.url_cache_dir.parent),
-        "receiver_side": str(receiver_cfg.url_cache_dir.parent),
-    }
-
-
-def _run_stego_receiver_live_sim_once(
-    *,
-    uid: str,
-    post_id: Optional[str],
-    stego_list_offset: int,
-    payload: Optional[str],
-    tag: Optional[str],
-    base: Path,
-    attempt_idx: int,
-    multi_post: bool,
-    allow_fallback: bool,
-    compressed_full: Optional[str],
-    max_padding_bits: int,
-    on_progress: Optional[Callable[[str, Dict[str, Any]], None]],
-) -> Dict[str, Any]:
-    """Single stego + receiver pair; may raise :exc:`RuntimeError` from receiver."""
-    attempt_root = _live_sim_attempt_root(base, attempt_idx, multi_post)
-    sender_cfg = _isolated_workflow_config_for_side(attempt_root, "sender")
-    receiver_cfg = _isolated_workflow_config_for_side(attempt_root, "receiver")
-    sim_meta = _live_sim_simulation_meta(base, attempt_idx, sender_cfg, receiver_cfg)
-
-    with isolated_workflow_config(sender_cfg):
-        sender_runner = WorkflowRunner()
-        stego_out = sender_runner.run_stego(
-            post_id=post_id,
-            payload=payload,
-            tag=tag,
-            list_offset=stego_list_offset,
-            on_progress=on_progress,
-        )
-
-    if not stego_out.get("succeeded"):
-        return {
-            "succeeded": False,
-            "stage": "stego",
-            "stego": stego_out,
-            "receiver": None,
-            "simulation": sim_meta,
-        }
-
-    try:
-        recv_post = _receiver_post_from_stego(stego_out, uid)
-    except ValueError as exc:
-        return {
-            "succeeded": False,
-            "stage": "build_receiver_post",
-            "error": str(exc),
-            "stego": stego_out,
-            "receiver": None,
-            "simulation": sim_meta,
-        }
-
-    effective_compressed = _compressed_full_for_live_receiver(stego_out, compressed_full)
-
-    with isolated_workflow_config(receiver_cfg):
-        rr = WorkflowRunner()
-        recv_out = rr.run_receiver(
-            recv_post,
-            uid,
-            use_fetch_cache=True,
-            use_terms_cache=True,
-            persist_terms_cache=True,
-            use_fetch_cache_research=True,
-            allow_fallback=allow_fallback,
-            compressed_full=effective_compressed,
-            max_padding_bits=max_padding_bits,
-            on_progress=on_progress,
-        )
-
-    return {
-        "succeeded": True,
-        "stego": stego_out,
-        "receiver": recv_out,
-        "simulation": sim_meta,
-    }
-
-
-def _normalized_angles_from_raw(raw: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Same filtering as GenAnglesPipeline.preview_post for comparable hashes."""
-    angles: List[Dict[str, str]] = []
-    for result in raw:
-        angle = {
-            "source_quote": str(result.get("source_quote", "")),
-            "tangent": str(result.get("tangent", "")),
-            "category": str(result.get("category", "")),
-        }
-        if angle["source_quote"] and angle["tangent"] and angle["category"]:
-            angles.append(angle)
-    return angles
 
 
 class WorkflowRunner:
@@ -507,7 +258,7 @@ class WorkflowRunner:
         payload_out: Any = results
         if include_breakdown:
             entries = list(self.research.last_research_breakdown_posts)
-            payload_out = _research_run_with_breakdown(
+            payload_out = research_run_with_breakdown(
                 posts=results,
                 breakdown_entries=entries,
                 batch_elapsed_ms=elapsed_ms,
@@ -830,7 +581,7 @@ class WorkflowRunner:
         for attempt_idx in range(attempts):
             stego_off = list_offset + attempt_idx
             try:
-                one = _run_stego_receiver_live_sim_once(
+                one = run_stego_receiver_live_sim_once(
                     uid=uid,
                     post_id=post_id,
                     stego_list_offset=stego_off if multi else list_offset,
@@ -846,12 +597,12 @@ class WorkflowRunner:
                 )
             except Exception as exc:
                 if multi and (
-                    _is_receiver_data_load_failure(exc)
+                    is_receiver_data_load_failure(exc)
                     or is_likely_google_quota_error(exc)
                 ):
                     stage = (
                         "receiver_data_load"
-                        if _is_receiver_data_load_failure(exc)
+                        if is_receiver_data_load_failure(exc)
                         else "search_quota"
                     )
                     _LOG.info(
@@ -1415,9 +1166,10 @@ class WorkflowRunner:
         tree under ``DOUBLE_PROCESS_VALIDATION_ROOT`` (``pass_1/`` and ``pass_2/``).
 
         Writes ``active_post_claim.json`` under that root when dequeuing a post and
-        removes it only after a full successful run. If the process stops mid-run
-        (for example after data-load wrote ``news_url_fetched``), the next call
-        resumes the same ``post_id`` instead of taking the next queue entry.
+        removes it only after both passes finish and stage hashes are compared.
+        On any error before that, the claim is refreshed so the next call keeps
+        the same ``post_id`` until comparison completes. A JSON report is written
+        under ``reports/`` when the run fails.
         """
         self._emit(
             on_progress,
@@ -1436,13 +1188,13 @@ class WorkflowRunner:
             data={"allow_angles_fallback": allow_angles_fallback},
         )
         # endregion
-        claimed = _try_read_double_process_claim()
+        claimed = try_read_double_process_claim()
         if claimed is not None:
             post_id, file_name = claimed
             resumed_from_claim = True
         else:
             post_id, file_name = self._select_next_new_post()
-            _write_double_process_claim(post_id, file_name)
+            write_double_process_claim(post_id, file_name)
             resumed_from_claim = False
         self._emit(
             on_progress,
@@ -1458,9 +1210,9 @@ class WorkflowRunner:
         )
         completed = False
         try:
-            dp_base = _double_process_cache_base_root()
-            pass1_cfg = _isolated_workflow_config_for_side(dp_base, "pass_1")
-            pass2_cfg = _isolated_workflow_config_for_side(dp_base, "pass_2")
+            dp_base = double_process_cache_base_root()
+            pass1_cfg = isolated_workflow_config_for_side(dp_base, "pass_1")
+            pass2_cfg = isolated_workflow_config_for_side(dp_base, "pass_2")
 
             self._emit(
                 on_progress,
@@ -1545,7 +1297,7 @@ class WorkflowRunner:
                 "workflow_progress_double_process_pass_finished"
             )
             first_pass["settings"]["cache_profile"] = "pass_1"
-            first_pass["settings"]["cache_paths"] = _workflow_cache_paths(pass1_cfg)
+            first_pass["settings"]["cache_paths"] = workflow_cache_paths(pass1_cfg)
 
             self._emit(
                 on_progress,
@@ -1629,7 +1381,7 @@ class WorkflowRunner:
                 "workflow_progress_double_process_pass_finished"
             )
             second_pass["settings"]["cache_profile"] = "pass_2"
-            second_pass["settings"]["cache_paths"] = _workflow_cache_paths(pass2_cfg)
+            second_pass["settings"]["cache_paths"] = workflow_cache_paths(pass2_cfg)
 
             comparison = {
                 stage: first_pass["steps"][stage]["hash"] == second_pass["steps"][stage]["hash"]
@@ -1637,6 +1389,8 @@ class WorkflowRunner:
             }
             result = {
                 "mode": "double_process_new_post",
+                "succeeded": True,
+                "comparison_completed": True,
                 "post_id": post_id,
                 "source_file": file_name,
                 "passes": {
@@ -1667,14 +1421,45 @@ class WorkflowRunner:
                 {
                     "workflow": "double-process-new-post",
                     "post_id": post_id,
+                    "succeeded": True,
+                    "comparison_completed": True,
                     "stage_hash_match": comparison,
                 },
             )
             completed = True
             return result
+        except Exception as exc:
+            dp_base = double_process_cache_base_root()
+            failure: dict[str, Any] = {
+                "mode": "double_process_new_post",
+                "succeeded": False,
+                "comparison_completed": False,
+                "post_id": post_id,
+                "source_file": file_name,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            }
+            failure["report_path"] = persist_double_process_final_report(dp_base, failure)
+            _LOG.bind(post_id=post_id, file_name=file_name).exception(
+                "double_process_new_post_failed"
+            )
+            self._emit(
+                on_progress,
+                "workflow_done",
+                {
+                    "workflow": "double-process-new-post",
+                    "post_id": post_id,
+                    "succeeded": False,
+                    "comparison_completed": False,
+                    "error_type": failure["error_type"],
+                },
+            )
+            return failure
         finally:
             if completed:
-                _clear_double_process_claim()
+                clear_double_process_claim()
+            else:
+                write_double_process_claim(post_id, file_name)
 
     def run_batch_angles_determinism(
         self,
@@ -1690,7 +1475,7 @@ class WorkflowRunner:
         runs ``analyze_angles_from_texts(..., use_cache=False)`` twice, and compares
         normalized angle lists (same rules as production preview_post).
         """
-        from pipelines.angles.angle_runner import analyze_angles_from_texts
+        from content_acquisition.angles.angle_runner import analyze_angles_from_texts
 
         if not post_ids:
             raise ValueError("post_ids must contain at least one post id")
@@ -1803,8 +1588,8 @@ class WorkflowRunner:
                 )
                 continue
 
-            norm_a = _normalized_angles_from_raw(raw_a)
-            norm_b = _normalized_angles_from_raw(raw_b)
+            norm_a = normalized_angles_from_raw(raw_a)
+            norm_b = normalized_angles_from_raw(raw_b)
             h1 = stable_hash(norm_a)
             h2 = stable_hash(norm_b)
             identical = norm_a == norm_b

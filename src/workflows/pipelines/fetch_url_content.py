@@ -100,7 +100,7 @@ class FetchUrlContentPipeline:
         Fetch URL content.
 
         If cached (or first) HTML fails validation, retries up to three times with
-        ``use_cache=False`` (skips adapter and analysis disk cache; live Jina/crawl4ai).
+        ``use_cache=False`` (skips adapter and analysis disk cache; live crawl4ai).
         Raises ``RuntimeError`` if validation still fails.
         """
         t0 = time.perf_counter()

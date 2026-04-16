@@ -6,7 +6,6 @@ from typing import Any, Dict, Optional
 
 from infrastructure.config import STEPS
 from infrastructure.event_loop import run_async
-from integrations.jina_reader import try_jina_reader_result
 from pydantic import BaseModel, Field
 
 # Import pipeline functions
@@ -117,18 +116,10 @@ def _crawl4ai_extract_ok(result: Any) -> bool:
     return True
 
 
-def _fetch_url_after_cache_miss(url: str, normalized_url: str) -> Any:
-    """Try Jina Reader first; on failure, crawl4ai with LLM extraction."""
-    jina_result = try_jina_reader_result(normalized_url)
-    if jina_result is not None and _crawl4ai_extract_ok(jina_result):
-        logger.info(
-            "url_fetch_jina_ok",
-            extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
-        )
-        return jina_result
-
+def _fetch_url_after_cache_miss(url: str) -> Any:
+    """crawl4ai + LLM extraction on cache miss."""
     logger.info(
-        "url_fetch_jina_miss_fallback_crawl4ai",
+        "url_fetch_crawl4ai",
         extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
     )
     return run_async(
@@ -146,12 +137,12 @@ def _fetch_url_after_cache_miss(url: str, normalized_url: str) -> Any:
 
 def fetch_url_content_crawl4ai(url: str, *, use_disk_cache: bool = True) -> Dict:
     """
-    Fetch URL content with caching: Jina Reader first, then crawl4ai + LLM.
+    Fetch URL content with caching: crawl4ai + LLM extraction on cache miss.
 
     Args:
         url: URL to fetch
         use_disk_cache: When False, skip read/write of ``datasets/url_cache`` JSON
-            (forces live Jina / crawl4ai path; successful results are still written).
+            (forces live crawl4ai path; successful results are still written).
 
     Returns:
         Dict with fetched content or cached result
@@ -207,7 +198,7 @@ def fetch_url_content_crawl4ai(url: str, *, use_disk_cache: bool = True) -> Dict
         extra={"event": "analysis", "action": "fetch_url_crawl4ai", "url": url},
     )
 
-    result = _fetch_url_after_cache_miss(url, normalized_url)
+    result = _fetch_url_after_cache_miss(url)
 
     # Prepare API response
     api_response = {"message": "Processed", "result": result}

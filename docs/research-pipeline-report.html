@@ -85,7 +85,7 @@ preview_post / research_post
     │
     └─► FOR each batch of 3 unique URLs (parallel within batch):
             ThreadPoolExecutor(3) × per-URL _fetch_url_with_timeout_retries
-                → FetchUrlContentPipeline.fetch → ContentAdapter → crawl4ai/Jina stack
+                → FetchUrlContentPipeline.fetch → ContentAdapter → crawl4ai stack
 </pre>
 </div>
 
@@ -117,7 +117,7 @@ preview_post / research_post
     <tr>
       <td>URL fetch</td>
       <td class="file">fetch_url_content.py → content.py → analysis_service</td>
-      <td>Chain ends in <code>fetch_url_content_crawl4ai</code>: Jina Reader, then crawl4ai (and related analysis). Heavy I/O; disk cache mitigates repeats.</td>
+      <td>Chain ends in <code>fetch_url_content_crawl4ai</code>: crawl4ai + LLM (and related analysis). Heavy I/O; disk cache mitigates repeats.</td>
     </tr>
     <tr>
       <td>Validation recovery</td>
@@ -148,9 +148,9 @@ preview_post / research_post
   <li>Each attempt wraps <code>fetch</code> in a fresh <code>ThreadPoolExecutor(max_workers=1)</code> to enforce <code>future.result(timeout=…)</code>. That adds thread churn and does not make the underlying fetch faster.</li>
 </ul>
 
-<h3>5.4 Expensive fetch stack (Jina + crawl4ai)</h3>
+<h3>5.4 Expensive fetch stack (crawl4ai + LLM)</h3>
 <ul class="tight">
-  <li><span class="sev-high">High impact.</span> <code>fetch_url_content_crawl4ai</code> is explicitly &ldquo;Jina Reader first, then crawl4ai + LLM&rdquo; in its docstring. Headless or crawler paths are inherently slower than a plain HTTP GET of static HTML.</li>
+  <li><span class="sev-high">High impact.</span> <code>fetch_url_content_crawl4ai</code> uses crawl4ai + LLM extraction on cache miss. Headless or crawler paths are inherently slower than a plain HTTP GET of static HTML.</li>
   <li>Without a warm disk cache (<code>use_fetch_cache=False</code> or cold cache), every URL pays full external latency.</li>
 </ul>
 
@@ -181,7 +181,7 @@ preview_post / research_post
 T_terms   = number of search terms
 U_urls    = unique non-PDF links after dedupe
 t_search  ≈ mean Google/Bing latency per term
-t_fetch   ≈ mean successful fetch time (dominated by Jina/crawl4ai)
+t_fetch   ≈ mean successful fetch time (dominated by crawl4ai)
 
 Time_search  ≈ T_terms × t_search          (sequential)
 Time_fetch   ≈ ceil(U_urls / 3) × t_fetch  (3-wide parallelism, batch barrier)

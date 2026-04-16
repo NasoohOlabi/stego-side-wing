@@ -86,8 +86,7 @@
     └── ContentAdapter.fetch_url_content
         ├── Optional: URL cache hit (read <code>url_cache_dir</code> JSON)
         └── Miss / fallback: LocalContentClient → services.analysis_service.fetch_url_content_crawl4ai
-            ├── Jina Reader (network)
-            └── Fallback: crawl4ai + LLM extraction (async, heavy)</pre>
+            └── crawl4ai + LLM extraction (async, heavy)</pre>
 
   <h2>3. Public methods (summary)</h2>
   <table>
@@ -126,15 +125,14 @@
   <h3>5.1 Dominant cost: each URL is a full content pipeline</h3>
   <p>Every post with a URL triggers <code>FetchUrlContentPipeline.fetch</code>, which delegates to <code>ContentAdapter.fetch_url_content</code>. On a cache miss, the implementation calls <code>fetch_url_content_crawl4ai</code>, which:</p>
   <ul class="tight">
-    <li>Tries <strong>Jina Reader</strong> over the network.</li>
-    <li>On failure or unsuitable extraction, falls back to <strong>crawl4ai</strong> with <strong>structured LLM extraction</strong> (<code>extract_structured_data</code>, configured model in analysis service). That path launches async browser/LLM work and is orders of magnitude slower than reading a local file.</li>
+    <li>Runs <strong>crawl4ai</strong> with <strong>structured LLM extraction</strong> (<code>extract_structured_data</code>, configured model in analysis service). That path launches async browser/LLM work and is orders of magnitude slower than reading a local file.</li>
   </ul>
   <p>Even with <code>use_cache=True</code>, the first visit to a URL pays this full price; subsequent runs can be much faster if both the adapter-level cache and <code>datasets/url_cache</code> layers contain a valid result.</p>
 
   <h3>5.2 Validation retries multiply live fetches</h3>
   <p><code>FetchUrlContentPipeline</code> runs a lightweight <strong>heuristic validation</strong> on fetched text (<code>ContentAdapter.validate_content</code>: error-page indicator strings). If the cached or first result fails validation, the code calls <code>_recover_with_fresh_fetches</code>, which performs up to <strong>three additional</strong> fetches with <code>use_cache=False</code>, bypassing disk cache reads — i.e. up to <strong>four</strong> full fetch attempts per URL in the worst case.</p>
   <div class="warn">
-    <strong>Effect:</strong> “Bad” or noisy HTML (many error keywords) can turn one logical URL into several sequential Jina/crawl4ai round-trips, dramatically increasing latency for that post.
+    <strong>Effect:</strong> “Bad” or noisy HTML (many error keywords) can turn one logical URL into several sequential crawl4ai round-trips, dramatically increasing latency for that post.
   </div>
 
   <h3>5.3 No concurrency</h3>
@@ -151,7 +149,6 @@
     <thead><tr><th>Scenario</th><th>Typical behavior</th></tr></thead>
     <tbody>
       <tr><td>Warm URL cache, validation passes</td><td>Mostly local JSON read + cache read + write — fast per post.</td></tr>
-      <tr><td>Cold cache, Jina succeeds</td><td>One network round-trip per URL; still sequential.</td></tr>
       <tr><td>Cold cache, crawl4ai + LLM</td><td>Very slow per URL; dominates batch runtime.</td></tr>
       <tr><td>Validation failures</td><td>Up to 4× sequential fetches per URL.</td></tr>
     </tbody>
@@ -162,7 +159,7 @@
     <li><code>src/workflows/pipelines/data_load.py</code> — orchestration and batching.</li>
     <li><code>src/workflows/pipelines/fetch_url_content.py</code> — validation and recovery retries.</li>
     <li><code>src/workflows/adapters/content.py</code> — cache layer and adapter normalization.</li>
-    <li><code>src/services/analysis_service.py</code> — <code>fetch_url_content_crawl4ai</code>, Jina vs crawl4ai fallback.</li>
+    <li><code>src/services/analysis_service.py</code> — <code>fetch_url_content_crawl4ai</code> (crawl4ai + LLM on cache miss).</li>
     <li><code>src/workflows/runner.py</code> — <code>run_data_load</code> defaults (<code>count=100</code>, <code>batch_size=5</code>).</li>
   </ul>
 

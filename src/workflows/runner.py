@@ -21,7 +21,7 @@ from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline
 from workflows.pipelines.receiver import ReceiverPipeline
 from workflows.pipelines.research import ResearchPipeline, is_likely_google_quota_error
 from workflows.pipelines.stego import StegoPipeline
-from workflows.runner_diff_utils import collect_diff_paths
+from workflows.runner_diff_utils import collect_diff_paths, collect_mismatch_value_snippets
 from workflows.runner_orchestration_utils import (
     clear_double_process_claim,
     double_process_cache_base_root,
@@ -809,6 +809,7 @@ class WorkflowRunner:
                     "comparison": "skipped",
                     "matches": None,
                     "changed_keys": [],
+                    "changed_key_snippets": [],
                     "comparison_note": (
                         "Not compared: a previous stage failed during rerun, so this stage was skipped. "
                         "This is not a baseline-vs-rerun mismatch."
@@ -824,6 +825,7 @@ class WorkflowRunner:
                     "comparison": "rerun_failed",
                     "matches": None,
                     "changed_keys": [],
+                    "changed_key_snippets": [],
                     "comparison_note": (
                         "Live rerun did not finish successfully, so the saved artifact was not compared "
                         "to a fresh rerun. Treat this as an execution/network/provider failure, not a "
@@ -843,18 +845,24 @@ class WorkflowRunner:
             baseline_payload = baseline[stage_name]
             matches = baseline_payload == rerun_payload
             changed_keys = [] if matches else collect_diff_paths(baseline_payload, rerun_payload)
+            snippets = (
+                []
+                if matches
+                else collect_mismatch_value_snippets(baseline_payload, rerun_payload)
+            )
             steps_report[stage_name] = {
                 "step": step,
                 "comparison": "match" if matches else "mismatch",
                 "matches": matches,
                 "changed_keys": changed_keys,
+                "changed_key_snippets": snippets,
                 "comparison_note": (
                     "Saved artifact and live rerun are byte-for-byte equal."
                     if matches
                     else (
                         "Mismatch: live rerun produced different JSON than the saved workflow artifact "
-                        "for this stage (see changed_keys). This indicates protocol or data drift, not "
-                        "a failed rerun."
+                        "for this stage (see changed_keys and changed_key_snippets). This indicates "
+                        "protocol or data drift, not a failed rerun."
                     )
                 ),
                 "baseline_summary": self._summarize_stage_payload(stage_name, baseline_payload),
@@ -929,6 +937,31 @@ class WorkflowRunner:
         if not post_id:
             raise ValueError(f"Invalid post filename returned by posts_list: {file_name!r}")
         return post_id, file_name
+
+    def _resolve_double_process_post(
+        self, explicit_post_id: str | None
+    ) -> tuple[str, str, bool]:
+        """Return (post_id, file_name, resumed_from_claim). Raises if explicit id conflicts with claim."""
+        claimed = try_read_double_process_claim()
+        if explicit_post_id:
+            if claimed and claimed[0] != explicit_post_id:
+                raise ValueError(
+                    "Active double-process claim exists for post_id="
+                    f"{claimed[0]!r}; cannot target post_id={explicit_post_id!r}. "
+                    "Finish the in-progress run or clear the claim."
+                )
+            if claimed:
+                pid, fn = claimed
+                return pid, fn, True
+            fn = f"{explicit_post_id}.json"
+            write_double_process_claim(explicit_post_id, fn)
+            return explicit_post_id, fn, False
+        if claimed:
+            pid, fn = claimed
+            return pid, fn, True
+        pid, fn = self._select_next_new_post()
+        write_double_process_claim(pid, fn)
+        return pid, fn, False
 
     @staticmethod
     def _is_data_load_fetch_failure(exc: Exception) -> bool:
@@ -1170,12 +1203,16 @@ class WorkflowRunner:
         self,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
         allow_angles_fallback: bool = False,
+        explicit_post_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Process one new post twice through data_load -> research -> gen_angles.
 
         Each pass uses the same cache flags but its own persistent dedicated cache
         tree under ``DOUBLE_PROCESS_VALIDATION_ROOT`` (``pass_1/`` and ``pass_2/``).
+
+        When ``explicit_post_id`` is set, that post is used instead of dequeuing
+        from the new-post queue (unless resuming an existing claim for the same id).
 
         Writes ``active_post_claim.json`` under that root when dequeuing a post and
         removes it only after both passes finish and stage hashes are compared.
@@ -1200,14 +1237,9 @@ class WorkflowRunner:
             data={"allow_angles_fallback": allow_angles_fallback},
         )
         # endregion
-        claimed = try_read_double_process_claim()
-        if claimed is not None:
-            post_id, file_name = claimed
-            resumed_from_claim = True
-        else:
-            post_id, file_name = self._select_next_new_post()
-            write_double_process_claim(post_id, file_name)
-            resumed_from_claim = False
+        post_id, file_name, resumed_from_claim = self._resolve_double_process_post(
+            explicit_post_id
+        )
         self._emit(
             on_progress,
             "stage_progress",

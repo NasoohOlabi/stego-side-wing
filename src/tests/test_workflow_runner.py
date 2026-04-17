@@ -310,7 +310,13 @@ def test_run_double_process_new_post_main_then_validation_cache(monkeypatch, tmp
     ]
 
 
-def test_run_double_process_new_post_raises_when_queue_empty():
+def test_run_double_process_new_post_raises_when_queue_empty(monkeypatch, tmp_path):
+    dp_root = (tmp_path / "datasets" / "double_process_validation").resolve()
+    dp_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        "workflows.runner_orchestration_utils.double_process_cache_base_root",
+        lambda: dp_root,
+    )
     runner = WorkflowRunner.__new__(WorkflowRunner)
 
     class _DummyBackend:
@@ -323,7 +329,15 @@ def test_run_double_process_new_post_raises_when_queue_empty():
         runner.run_double_process_new_post()
 
 
-def test_run_double_process_new_post_first_fetch_failure_retries_until_success(monkeypatch):
+def test_run_double_process_new_post_first_fetch_failure_retries_until_success(
+    monkeypatch, tmp_path
+):
+    dp_root = (tmp_path / "datasets" / "double_process_validation").resolve()
+    dp_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        "workflows.runner_orchestration_utils.double_process_cache_base_root",
+        lambda: dp_root,
+    )
     runner = WorkflowRunner.__new__(WorkflowRunner)
     monkeypatch.setattr("workflows.runner.time.sleep", lambda _s: None)
 
@@ -362,7 +376,13 @@ def test_run_double_process_new_post_first_fetch_failure_retries_until_success(m
     assert runner._fetch_fail_counts == {}
 
 
-def test_run_double_process_new_post_retries_same_post_until_fetch_succeeds(monkeypatch):
+def test_run_double_process_new_post_retries_same_post_until_fetch_succeeds(monkeypatch, tmp_path):
+    dp_root = (tmp_path / "datasets" / "double_process_validation").resolve()
+    dp_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        "workflows.runner_orchestration_utils.double_process_cache_base_root",
+        lambda: dp_root,
+    )
     runner = WorkflowRunner.__new__(WorkflowRunner)
     monkeypatch.setattr("workflows.runner.time.sleep", lambda _s: None)
     calls = []
@@ -449,6 +469,81 @@ def test_run_double_process_new_post_resumes_from_claim_without_requeue(monkeypa
     assert result["source_file"] == "held.json"
     assert calls == []
     assert not (root / "active_post_claim.json").is_file()
+
+
+def test_run_double_process_new_post_explicit_post_id_skips_queue(monkeypatch, tmp_path):
+    dp_root = (tmp_path / "datasets" / "double_process_validation").resolve()
+    dp_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        "workflows.runner_orchestration_utils.double_process_cache_base_root",
+        lambda: dp_root,
+    )
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    queue_calls: list[tuple[str, ...]] = []
+
+    class _DummyBackend:
+        def posts_list(self, step, count=1, offset=0, tag=None):
+            queue_calls.append((step, count))
+            return {"fileNames": ["n1.json"]}
+
+    class _DummyDataLoad:
+        def process_post_id(self, post_id, step="filter-url-unresolved", use_cache=True):
+            return {"id": post_id, "selftext": f"body-{use_cache}"}
+
+    class _DummyResearch:
+        def process_post_id(
+            self,
+            post_id,
+            step="filter-researched",
+            force=False,
+            use_terms_cache=True,
+            persist_terms_cache=True,
+            use_fetch_cache=True,
+        ):
+            return {"id": post_id, "search_results": [f"{use_terms_cache}-{use_fetch_cache}"]}
+
+    class _DummyAngles:
+        def process_post_id(self, post_id, step="angles-step", allow_fallback=False):
+            return {
+                "id": post_id,
+                "angles": [{"source_quote": "q", "tangent": "t", "category": "c"}],
+                "options_count": 1,
+            }
+
+    runner.backend = _DummyBackend()
+    runner.data_load = _DummyDataLoad()
+    runner.research = _DummyResearch()
+    runner.gen_angles = _DummyAngles()
+
+    result = runner.run_double_process_new_post(
+        allow_angles_fallback=False,
+        explicit_post_id="custom1",
+    )
+
+    assert result["succeeded"] is True
+    assert result["post_id"] == "custom1"
+    assert result["source_file"] == "custom1.json"
+    assert queue_calls == []
+    assert not (dp_root / "active_post_claim.json").is_file()
+
+
+def test_run_double_process_new_post_explicit_id_conflicts_with_claim(monkeypatch, tmp_path):
+    root = tmp_path / "dpv_explicit"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "workflows.runner_orchestration_utils.double_process_cache_base_root",
+        lambda: root.resolve(),
+    )
+
+    from workflows.runner_orchestration_utils import write_double_process_claim
+
+    write_double_process_claim("a", "a.json")
+
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    runner.backend = object()
+
+    with pytest.raises(ValueError, match="Active double-process claim"):
+        runner.run_double_process_new_post(explicit_post_id="b")
 
 
 def test_run_double_process_new_post_leaves_claim_after_exception(monkeypatch, tmp_path):
@@ -656,6 +751,9 @@ def test_validate_post_pipeline_reports_mismatch(tmp_path):
     assert result["steps"]["research"]["matches"] is False
     assert result["steps"]["research"]["comparison"] == "mismatch"
     assert result["steps"]["research"]["changed_keys"]
+    snippets = result["steps"]["research"]["changed_key_snippets"]
+    assert isinstance(snippets, list)
+    assert snippets and snippets[0]["path"] == "search_results[1]"
 
 
 def test_validate_post_pipeline_restores_original_artifacts(tmp_path):

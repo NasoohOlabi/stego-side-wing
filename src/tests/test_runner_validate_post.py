@@ -39,6 +39,8 @@ def test_validation_failure_summary_mismatch() -> None:
     dumped = detail.model_dump(exclude_none=True)
     assert dumped["mismatch_stages"] == ["research"]
     assert dumped["sample_changed_keys"] == ["search_results", "meta.x"]
+    assert "forensics_note" in dumped
+    assert "steps" in dumped["forensics_note"]
 
 
 def test_validation_failure_summary_rerun_incomplete() -> None:
@@ -56,3 +58,4 @@ def test_validation_failure_summary_rerun_incomplete() -> None:
     assert dumped["failed_stage"] == "research"
     assert dumped["error_snippet"] == "google timed out"
     assert dumped["skipped_stages"] == ["gen_angles"]
+    assert "forensics_note" in dumped

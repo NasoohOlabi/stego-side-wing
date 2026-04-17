@@ -26,7 +26,7 @@ def test_double_process_new_post_sync_success(client, monkeypatch):
     monkeypatch.setattr(
         api_v1_routes.runner,
         "run_double_process_new_post",
-        lambda on_progress=None, allow_angles_fallback=False: expected,
+        lambda on_progress=None, allow_angles_fallback=False, explicit_post_id=None: expected,
     )
 
     response = client.post(
@@ -42,7 +42,7 @@ def test_double_process_new_post_sync_success(client, monkeypatch):
 def test_double_process_new_post_streaming(client, monkeypatch):
     from app.routes import api_v1_routes
 
-    def _run(on_progress=None, allow_angles_fallback=False):
+    def _run(on_progress=None, allow_angles_fallback=False, explicit_post_id=None):
         if on_progress:
             on_progress("stage_progress", {"stage": "double-process-new-post"})
         return {"post_id": "abc123"}
@@ -58,3 +58,51 @@ def test_double_process_new_post_streaming(client, monkeypatch):
     assert "event: status" in body
     assert "event: result" in body
     assert "event: done" in body
+
+
+def test_double_process_new_post_passes_explicit_post_id(client, monkeypatch):
+    from app.routes import api_v1_routes
+    from app.routes.api_v1 import routes_workflows
+
+    monkeypatch.setattr(routes_workflows, "try_read_double_process_claim", lambda: None)
+
+    captured: list[str | None] = []
+
+    def _run(on_progress=None, allow_angles_fallback=False, explicit_post_id=None):
+        captured.append(explicit_post_id)
+        return {"post_id": explicit_post_id or "x", "source_file": f"{explicit_post_id or 'x'}.json"}
+
+    monkeypatch.setattr(api_v1_routes.runner, "run_double_process_new_post", _run)
+
+    response = client.post(
+        "/api/v1/workflows/double-process-new-post",
+        json={"stream": False, "post_id": "my_post"},
+    )
+    assert response.status_code == 200
+    assert captured == ["my_post"]
+
+
+def test_double_process_new_post_claim_conflict_returns_400(client, monkeypatch):
+    from app.routes import api_v1_routes
+    from app.routes.api_v1 import routes_workflows
+
+    monkeypatch.setattr(
+        routes_workflows,
+        "try_read_double_process_claim",
+        lambda: ("other_id", "other_id.json"),
+    )
+
+    def _should_not_run(**kwargs):
+        raise AssertionError("runner should not run when claim conflicts")
+
+    monkeypatch.setattr(api_v1_routes.runner, "run_double_process_new_post", _should_not_run)
+
+    response = client.post(
+        "/api/v1/workflows/double-process-new-post",
+        json={"stream": False, "post_id": "mine"},
+    )
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert payload["details"]["claim_post_id"] == "other_id"
+    assert payload["details"]["requested_post_id"] == "mine"

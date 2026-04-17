@@ -24,8 +24,8 @@ def validation_outcome_from_report(
         return (
             "protocol_mismatch",
             "At least one stage finished rerunning but the live payload differed from the saved "
-            "artifact. That is a true baseline-vs-rerun mismatch (see comparison / changed_keys on "
-            "those stages).",
+            "artifact. That is a true baseline-vs-rerun mismatch (see each stage’s comparison, "
+            "changed_keys, and changed_key_snippets in the HTTP/SSE result).",
         )
     return (
         "rerun_incomplete",
@@ -37,6 +37,16 @@ def validation_outcome_from_report(
 
 _MAX_CHANGED_KEYS = 12
 _MAX_ERROR_SNIPPET = 240
+_MAX_FOREnsics_NOTE = 280
+
+_MISMATCH_FOREnsics_NOTE = (
+    "Full diff: use validate-post HTTP/SSE body `steps` (changed_keys, changed_key_snippets, "
+    "summaries, protocol_report). JSONL only samples keys."
+)
+_INCOMPLETE_FOREnsics_NOTE = (
+    "Stage errors: use validate-post HTTP/SSE body `steps` (error, protocol_report per stage). "
+    "JSONL only lists failed_stage and error_snippet."
+)
 
 
 class ValidationFailureDetailForLog(BaseModel):
@@ -48,6 +58,7 @@ class ValidationFailureDetailForLog(BaseModel):
     failed_stage: str | None = None
     error_snippet: str | None = Field(default=None, max_length=_MAX_ERROR_SNIPPET)
     skipped_stages: list[str] | None = None
+    forensics_note: str | None = Field(default=None, max_length=_MAX_FOREnsics_NOTE)
 
 
 def _truncate_err(raw: object, cap: int) -> str:
@@ -80,6 +91,7 @@ def _mismatch_summary(
     return ValidationFailureDetailForLog(
         mismatch_stages=mismatched or None,
         sample_changed_keys=keys or None,
+        forensics_note=_MISMATCH_FOREnsics_NOTE,
     )
 
 
@@ -105,6 +117,7 @@ def _incomplete_summary(
         failed_stage=failed_stage,
         error_snippet=err,
         skipped_stages=skipped or None,
+        forensics_note=_INCOMPLETE_FOREnsics_NOTE,
     )
 
 

@@ -34,6 +34,7 @@ from app.schemas.workflow_requests import (
 )
 from infrastructure.json_logging import get_trace_id
 from services.workflow_run_tracker import iter_snapshot
+from workflows.runner_orchestration_utils import try_read_double_process_claim
 
 logger = logging.getLogger(__name__)
 
@@ -533,12 +534,25 @@ def wf_double_process_new_post() -> Any:
     allow_angles_fallback, err = body_bool(body, "allow_angles_fallback", default=False)
     if err:
         return err
+    explicit_post_id, err = optional_body_str(body, "post_id")
+    if err:
+        return err
+    if explicit_post_id:
+        claimed = try_read_double_process_claim()
+        if claimed and claimed[0] != explicit_post_id:
+            return fail(
+                "Active double-process claim exists for a different post_id; "
+                "finish that run or clear the claim before targeting another post.",
+                status=400,
+                details={"claim_post_id": claimed[0], "requested_post_id": explicit_post_id},
+            )
 
     if wants_workflow_stream(body):
         return stream_workflow(
             "double-process-new-post",
             lambda emit: runner.run_double_process_new_post(
                 allow_angles_fallback=allow_angles_fallback,
+                explicit_post_id=explicit_post_id,
                 on_progress=lambda event, payload: emit(
                     "progress",
                     {"event": event, **payload},
@@ -552,6 +566,7 @@ def wf_double_process_new_post() -> Any:
             "double-process-new-post",
             lambda: runner.run_double_process_new_post(
                 allow_angles_fallback=allow_angles_fallback,
+                explicit_post_id=explicit_post_id,
             ),
         )
         return ok(data)
@@ -904,10 +919,26 @@ def wf_run() -> Any:
         allow_angles_fallback, err = body_bool(body, "allow_angles_fallback", default=False)
         if err:
             return err
+        explicit_post_id_cmd, err = optional_body_str(body, "post_id")
+        if err:
+            return err
+        if explicit_post_id_cmd:
+            claimed_cmd = try_read_double_process_claim()
+            if claimed_cmd and claimed_cmd[0] != explicit_post_id_cmd:
+                return fail(
+                    "Active double-process claim exists for a different post_id; "
+                    "finish that run or clear the claim before targeting another post.",
+                    status=400,
+                    details={
+                        "claim_post_id": claimed_cmd[0],
+                        "requested_post_id": explicit_post_id_cmd,
+                    },
+                )
 
         def _run_double_process(progress_cb: Callable[[str, dict[str, Any]], None] | None) -> Any:
             return runner.run_double_process_new_post(
                 allow_angles_fallback=allow_angles_fallback,
+                explicit_post_id=explicit_post_id_cmd,
                 on_progress=progress_cb,
             )
 

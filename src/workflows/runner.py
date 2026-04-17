@@ -35,7 +35,10 @@ from workflows.runner_orchestration_utils import (
     workflow_cache_paths,
     write_double_process_claim,
 )
-from workflows.runner_validate_post import validation_outcome_from_report
+from workflows.runner_validate_post import (
+    validation_failure_summary_for_log,
+    validation_outcome_from_report,
+)
 from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash
 
@@ -712,6 +715,8 @@ class WorkflowRunner:
         if not post_id or not post_id.strip():
             raise ValueError("'post_id' must be a non-empty string")
         post_id = post_id.strip()
+        trace_id = get_trace_id() or str(uuid4())
+        log = _LOG.bind(trace_id=trace_id)
 
         stage_steps = {
             "data_load": "filter-url-unresolved",
@@ -863,6 +868,11 @@ class WorkflowRunner:
             steps_report=steps_report,
             stage_order=tuple(stage_steps.keys()),
         )
+        failure_detail = validation_failure_summary_for_log(
+            validation_outcome=outcome,
+            steps_report=steps_report,
+            stage_order=tuple(stage_steps.keys()),
+        ).model_dump(exclude_none=True)
 
         result = {
             "post_id": post_id,
@@ -878,10 +888,15 @@ class WorkflowRunner:
             },
             "steps": steps_report,
         }
-        _LOG.info(
-            "validate_post post_id={} valid={} use_terms_cache={} use_fetch_cache={}",
+        log.bind(
+            validation_outcome=outcome,
+            validation_explanation=validation_explanation,
+            failure_detail=failure_detail,
+        ).info(
+            "validate_post post_id={} valid={} outcome={} use_terms_cache={} use_fetch_cache={}",
             post_id,
             valid,
+            outcome,
             use_terms_cache,
             use_fetch_cache,
         )

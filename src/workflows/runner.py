@@ -40,6 +40,7 @@ from workflows.runner_validate_post import (
     validation_failure_summary_for_log,
     validation_outcome_from_report,
 )
+from workflows.utils.capacity_observability import log_workflow_capacity_observation
 from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash
 
@@ -809,6 +810,19 @@ class WorkflowRunner:
                 protocol_reports["gen_angles"] = angles_preview["report"]
             except Exception as exc:
                 stage_errors["gen_angles"] = str(exc)
+
+        if (
+            "gen_angles" not in stage_errors
+            and protocol_reports.get("research")
+            and protocol_reports.get("gen_angles")
+        ):
+            log_workflow_capacity_observation(
+                log,
+                post_id=post_id,
+                trace_id=trace_id,
+                research_report=protocol_reports["research"],
+                gen_angles_report=protocol_reports["gen_angles"],
+            )
 
         steps_report: dict[str, dict[str, Any]] = {}
         valid = True

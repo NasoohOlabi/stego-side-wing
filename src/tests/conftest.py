@@ -33,6 +33,7 @@ def clear_workflow_capacity_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strip capacity env keys so tests do not inherit local workflow fan-out settings."""
     strip_keys = (
         "WORKFLOW_CAPACITY_PROFILE",
+        "WORKFLOW_CAPACITY_LIMITS_ENABLED",
         "WORKFLOW_RESEARCH_MAX_TERMS",
         "WORKFLOW_RESEARCH_MAX_SELECTED_URLS",
         "WORKFLOW_DICTIONARY_MAX_SEARCH_RESULTS",

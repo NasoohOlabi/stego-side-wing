@@ -2,7 +2,10 @@
 
 import pytest
 
+from workflows.utils.capacity_observability import build_workflow_capacity_observation_fields
+
 from infrastructure.config import (
+    WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED,
     get_workflow_angles_max_output,
     get_workflow_angles_max_input_blocks,
     get_workflow_capacity_profile,
@@ -20,6 +23,7 @@ from infrastructure.config import (
 def test_workflow_capacity_defaults_to_mid(
     clear_workflow_capacity_env: None,
 ) -> None:
+    assert get_workflow_capacity_settings()["limits_enabled"] is True
     assert get_workflow_capacity_profile() == "mid"
     assert get_workflow_research_max_terms() == 8
     assert get_workflow_research_max_selected_urls() == 24
@@ -64,6 +68,7 @@ def test_workflow_capacity_explicit_overrides(
     monkeypatch.setenv("WORKFLOW_ANGLES_MAX_OUTPUT", "13")
     settings = get_workflow_capacity_settings()
     assert settings == {
+        "limits_enabled": True,
         "profile": "low",
         "research_max_terms": 3,
         "research_max_selected_urls": 9,
@@ -74,12 +79,64 @@ def test_workflow_capacity_explicit_overrides(
     }
 
 
-def test_research_fetch_budget_env_overrides(
+def test_workflow_capacity_limits_disabled_uses_unbounded_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+    clear_workflow_capacity_env: None,
+) -> None:
+    monkeypatch.setenv("WORKFLOW_CAPACITY_LIMITS_ENABLED", "0")
+    assert get_workflow_research_max_terms() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    assert get_workflow_research_max_selected_urls() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    assert get_workflow_dictionary_max_search_results() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    assert get_workflow_dictionary_max_comments() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    assert get_workflow_angles_max_input_blocks() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    assert get_workflow_angles_max_output() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    s = get_workflow_capacity_settings()
+    assert s["limits_enabled"] is False
+    assert s["research_max_terms"] == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+
+
+def test_workflow_capacity_explicit_override_still_applies_when_limits_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    clear_workflow_capacity_env: None,
+) -> None:
+    monkeypatch.setenv("WORKFLOW_CAPACITY_LIMITS_ENABLED", "0")
+    monkeypatch.setenv("WORKFLOW_RESEARCH_MAX_TERMS", "7")
+    assert get_workflow_research_max_terms() == 7
+
+
+def test_build_workflow_capacity_observation_fields_merges_reports(
+    clear_workflow_capacity_env: None,
+) -> None:
+    fields = build_workflow_capacity_observation_fields(
+        research_report={
+            "search_terms": ["a", "b"],
+            "selected_results": [{"link": "x"}],
+            "terms_report": {"terms_raw_count": 5, "terms_capped": True},
+            "capacity": {"terms_capped": True, "selected_url_cap_hit": False},
+        },
+        gen_angles_report={
+            "input_raw_count": 100,
+            "input_count": 40,
+            "input_raw_source_counts": {"comments": 80, "search_results": 10},
+            "angles_raw_count": 20,
+            "options_count": 16,
+            "angles_capped": True,
+            "input_capacity_applied": True,
+        },
+    )
+    assert fields["event"] == "workflow_capacity_observation"
+    assert fields["observed"]["terms_raw_count"] == 5
+    assert fields["observed"]["unique_urls_selected"] == 1
+    assert fields["observed"]["dictionary_raw_entry_count"] == 100
+    assert fields["observed"]["angles_raw_count"] == 20
+    assert "effective_limits" in fields
+
+
+def test_research_fetch_budget_code_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("WORKFLOW_RESEARCH_FETCH_TIMEOUT_SEC", "90")
     monkeypatch.setenv("WORKFLOW_RESEARCH_FETCH_RETRIES", "2")
-    monkeypatch.setenv("WORKFLOW_RESEARCH_FETCH_CONCURRENCY", "6")
-    assert get_workflow_research_fetch_timeout_sec() == 90.0
-    assert get_workflow_research_fetch_retries() == 2
-    assert get_workflow_research_fetch_concurrency() == 6
+    assert get_workflow_research_fetch_timeout_sec() == 180.0
+    assert get_workflow_research_fetch_retries() == 1
+    assert get_workflow_research_fetch_concurrency() == 3

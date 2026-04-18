@@ -5,6 +5,7 @@ import pytest
 import infrastructure.config as infra_config
 from infrastructure.config import (
     DEFAULT_GOOGLE_AI_STUDIO_MODEL,
+    DEFAULT_WORKFLOW_LLM_BACKEND,
     get_google_ai_studio_model,
     get_google_generative_language_api_key,
     get_google_generative_language_api_keys,
@@ -19,7 +20,7 @@ def test_get_workflow_llm_backend_default(clear_llm_backend_env: None) -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ("google", "GEMINI", "ai_studio"),
+    ("google", "GEMINI", DEFAULT_WORKFLOW_LLM_BACKEND),
 )
 def test_get_workflow_llm_backend_google_aliases(
     monkeypatch: pytest.MonkeyPatch, value: str
@@ -115,7 +116,7 @@ def test_google_api_key_none_when_unset(
 def test_dotenv_cache_sees_new_env(
     monkeypatch: pytest.MonkeyPatch, clear_llm_backend_env: None
 ) -> None:
-    """After mutating os.environ, backend reads current os.environ (first in get_env)."""
+    """Backend follows ``WORKFLOW_LLM_BACKEND`` changes in ``os.environ``."""
     monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "google")
     assert get_workflow_llm_backend() == "google"
     monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "lm_studio")

@@ -26,3 +26,25 @@ def clear_llm_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in strip_keys:
         loaded.pop(key, None)
     monkeypatch.setattr(infra_config, "_dotenv_values_cache", loaded)
+
+
+@pytest.fixture
+def clear_workflow_capacity_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip capacity env keys so tests do not inherit local workflow fan-out settings."""
+    strip_keys = (
+        "WORKFLOW_CAPACITY_PROFILE",
+        "WORKFLOW_RESEARCH_MAX_TERMS",
+        "WORKFLOW_RESEARCH_MAX_SELECTED_URLS",
+        "WORKFLOW_DICTIONARY_MAX_SEARCH_RESULTS",
+        "WORKFLOW_DICTIONARY_MAX_COMMENTS",
+        "WORKFLOW_ANGLES_MAX_INPUT_BLOCKS",
+        "WORKFLOW_ANGLES_MAX_OUTPUT",
+    )
+    for key in strip_keys:
+        monkeypatch.delenv(key, raising=False)
+    loaded: dict[str, str | None] = {}
+    if infra_config.ENV_FILE_PATH.exists():
+        loaded = dict(dotenv.dotenv_values(str(infra_config.ENV_FILE_PATH)))
+    for key in strip_keys:
+        loaded.pop(key, None)
+    monkeypatch.setattr(infra_config, "_dotenv_values_cache", loaded)

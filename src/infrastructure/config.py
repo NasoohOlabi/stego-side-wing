@@ -96,6 +96,7 @@ def get_lm_studio_request_timeout_seconds(default: int = 600) -> int:
 
 
 DEFAULT_GOOGLE_AI_STUDIO_MODEL = "gemma-4-26b-a4b-it"
+WorkflowCapacityProfile = Literal["low", "mid", "high"]
 
 
 def get_workflow_llm_backend() -> Literal["lm_studio", "google"]:
@@ -110,6 +111,112 @@ def get_google_ai_studio_model() -> str:
     """Generative Language API model id when workflow LLM backend is AI Studio / Google."""
     explicit = (get_env("GOOGLE_AI_STUDIO_MODEL") or "").strip()
     return explicit or DEFAULT_GOOGLE_AI_STUDIO_MODEL
+
+
+def get_workflow_capacity_profile() -> WorkflowCapacityProfile:
+    """Global capacity preset for workflow fan-out and angle input sizing."""
+    raw = (get_env("WORKFLOW_CAPACITY_PROFILE") or "mid").strip().lower()
+    if raw in ("low", "mid", "high"):
+        return raw
+    return "mid"
+
+
+def _env_non_negative_int(key: str) -> int | None:
+    raw = get_env(key)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return max(0, int(raw.strip()))
+    except ValueError:
+        return None
+
+
+def _capacity_value(key: str, *, low: int, mid: int, high: int) -> int:
+    override = _env_non_negative_int(key)
+    if override is not None:
+        return override
+    profile = get_workflow_capacity_profile()
+    if profile == "low":
+        return low
+    if profile == "high":
+        return high
+    return mid
+
+
+def get_workflow_research_max_terms() -> int:
+    """Maximum normalized search terms kept from term generation."""
+    return _capacity_value("WORKFLOW_RESEARCH_MAX_TERMS", low=4, mid=8, high=12)
+
+
+def get_workflow_research_max_selected_urls() -> int:
+    """Maximum unique research URLs selected and fetched per post."""
+    return _capacity_value("WORKFLOW_RESEARCH_MAX_SELECTED_URLS", low=12, mid=24, high=48)
+
+
+def get_workflow_research_fetch_timeout_sec(default: float = 180.0) -> float:
+    """Per-attempt timeout for each research URL fetch."""
+    raw = get_env("WORKFLOW_RESEARCH_FETCH_TIMEOUT_SEC")
+    if not raw:
+        return default
+    try:
+        return max(5.0, min(float(raw.strip()), 3600.0))
+    except ValueError:
+        return default
+
+
+def get_workflow_research_fetch_retries(default: int = 1) -> int:
+    """Retries after a timed-out fetch attempt."""
+    raw = get_env("WORKFLOW_RESEARCH_FETCH_RETRIES")
+    if not raw:
+        return default
+    try:
+        return max(0, min(int(raw.strip()), 10))
+    except ValueError:
+        return default
+
+
+def get_workflow_research_fetch_concurrency(default: int = 3) -> int:
+    """Concurrent URL fetch workers per research post."""
+    raw = get_env("WORKFLOW_RESEARCH_FETCH_CONCURRENCY")
+    if not raw:
+        return default
+    try:
+        return max(1, min(int(raw.strip()), 16))
+    except ValueError:
+        return default
+
+
+def get_workflow_dictionary_max_search_results() -> int:
+    """Maximum research text blocks that may enter the shared dictionary."""
+    return _capacity_value("WORKFLOW_DICTIONARY_MAX_SEARCH_RESULTS", low=12, mid=24, high=48)
+
+
+def get_workflow_dictionary_max_comments() -> int:
+    """Maximum flattened comment bodies that may enter the shared dictionary."""
+    return _capacity_value("WORKFLOW_DICTIONARY_MAX_COMMENTS", low=16, mid=32, high=96)
+
+
+def get_workflow_angles_max_input_blocks() -> int:
+    """Maximum total text blocks passed into angle generation / shared dictionary users."""
+    return _capacity_value("WORKFLOW_ANGLES_MAX_INPUT_BLOCKS", low=24, mid=48, high=128)
+
+
+def get_workflow_angles_max_output() -> int:
+    """Maximum generated angles retained per post."""
+    return _capacity_value("WORKFLOW_ANGLES_MAX_OUTPUT", low=8, mid=16, high=32)
+
+
+def get_workflow_capacity_settings() -> dict[str, str | int]:
+    """Structured capacity settings for reports and logs."""
+    return {
+        "profile": get_workflow_capacity_profile(),
+        "research_max_terms": get_workflow_research_max_terms(),
+        "research_max_selected_urls": get_workflow_research_max_selected_urls(),
+        "dictionary_max_search_results": get_workflow_dictionary_max_search_results(),
+        "dictionary_max_comments": get_workflow_dictionary_max_comments(),
+        "angles_max_input_blocks": get_workflow_angles_max_input_blocks(),
+        "angles_max_output": get_workflow_angles_max_output(),
+    }
 
 
 def _parse_api_key_list(raw: str | None) -> list[str]:
@@ -150,6 +257,51 @@ def resolve_workflow_llm_provider_and_model(lm_model: str) -> tuple[str, str]:
     if get_workflow_llm_backend() == "google":
         return "gemini", get_google_ai_studio_model()
     return "lm_studio", lm_model
+
+
+def get_workflow_url_fetch_http_first() -> bool:
+    """Try plain HTTP + HTML text extraction before Crawl4AI (default: on)."""
+    raw = (get_env("WORKFLOW_URL_FETCH_HTTP_FIRST") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def get_workflow_url_fetch_http_timeout_sec() -> float:
+    """Timeout for HTTP-first GET (seconds)."""
+    raw = get_env("WORKFLOW_URL_FETCH_HTTP_TIMEOUT_SEC")
+    if raw:
+        try:
+            return max(5.0, min(float(raw.strip()), 120.0))
+        except ValueError:
+            pass
+    return 25.0
+
+
+def get_workflow_url_fetch_http_min_chars() -> int:
+    """Minimum extracted characters to accept HTTP-first text (skip browser crawl)."""
+    raw = get_env("WORKFLOW_URL_FETCH_HTTP_MIN_CHARS")
+    if raw:
+        try:
+            return max(80, min(int(raw.strip()), 500_000))
+        except ValueError:
+            pass
+    return 400
+
+
+def get_crawl4ai_page_timeout_ms() -> int:
+    """Browser page timeout for Crawl4AI navigation (milliseconds)."""
+    raw = get_env("WORKFLOW_CRAWL4AI_PAGE_TIMEOUT_MS")
+    if raw:
+        try:
+            return max(5000, min(int(raw.strip()), 120_000))
+        except ValueError:
+            pass
+    return 45_000
+
+
+def get_crawl4ai_magic_enabled() -> bool:
+    """Crawl4AI magic mode (overlays, automation). Default on; disable to reduce work."""
+    raw = (get_env("WORKFLOW_CRAWL4AI_MAGIC") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 # Common configuration constants

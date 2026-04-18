@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from workflows.pipelines.gen_angles import GenAnglesPipeline
+from workflows.utils.text_utils import build_post_text_dictionary_bundle
 
 
 def test_flatten_comments_handles_nested_replies():
@@ -111,3 +112,105 @@ def test_process_posts_records_partial_failure_summary():
     assert pipeline._last_batch_summary["load_failed_count"] == 1
     assert pipeline._last_batch_summary["processed_count"] == 1
     assert pipeline._last_batch_summary["failed_count"] == 1
+
+
+def test_build_post_text_dictionary_bundle_caps_sources_deterministically(
+    monkeypatch, clear_workflow_capacity_env
+):
+    monkeypatch.setenv("WORKFLOW_DICTIONARY_MAX_SEARCH_RESULTS", "1")
+    monkeypatch.setenv("WORKFLOW_DICTIONARY_MAX_COMMENTS", "2")
+    monkeypatch.setenv("WORKFLOW_ANGLES_MAX_INPUT_BLOCKS", "3")
+    post = {
+        "selftext": "body",
+        "search_results": ["s1", "s2"],
+        "comments": [
+            {"id": "c1", "body": "c1"},
+            {"id": "c2", "body": "c2"},
+            {"id": "c3", "body": "c3"},
+        ],
+    }
+
+    first = build_post_text_dictionary_bundle(post, apply_capacity_profile=True)
+    second = build_post_text_dictionary_bundle(post, apply_capacity_profile=True)
+
+    assert first["texts"] == ["body", "s1", "c1"]
+    assert first["report"]["dictionary_id"] == second["report"]["dictionary_id"]
+    assert first["report"]["raw_source_counts"] == {
+        "post": 1,
+        "search_results": 2,
+        "comments": 3,
+    }
+    assert first["report"]["source_counts"] == {
+        "post": 1,
+        "search_results": 1,
+        "comments": 1,
+    }
+    assert set(first["report"]["truncated_sources"]) == {
+        "search_results",
+        "comments",
+        "total",
+    }
+
+
+def test_preview_post_reports_dictionary_capacity(monkeypatch, clear_workflow_capacity_env):
+    monkeypatch.setenv("WORKFLOW_DICTIONARY_MAX_SEARCH_RESULTS", "1")
+    monkeypatch.setenv("WORKFLOW_DICTIONARY_MAX_COMMENTS", "1")
+    monkeypatch.setenv("WORKFLOW_ANGLES_MAX_INPUT_BLOCKS", "2")
+    captured = {}
+
+    def _analyze_angles(texts):
+        captured["texts"] = list(texts)
+        return {
+            "results": [
+                {
+                    "source_quote": "q1",
+                    "tangent": "t1",
+                    "category": "c1",
+                    "source_document": 0,
+                }
+            ]
+        }
+
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+    pipeline.backend = SimpleNamespace(analyze_angles=_analyze_angles)
+
+    result = pipeline.preview_post(
+        {
+            "id": "post-1",
+            "selftext": "body",
+            "search_results": ["s1", "s2"],
+            "comments": [{"id": "c1", "body": "c1"}],
+        }
+    )
+
+    assert captured["texts"] == ["body", "s1"]
+    assert result["report"]["input_capacity_applied"] is True
+    assert result["report"]["input_raw_count"] == 4
+    assert result["report"]["input_source_counts"] == {
+        "post": 1,
+        "search_results": 1,
+        "comments": 0,
+    }
+    assert set(result["report"]["input_truncated_sources"]) == {
+        "search_results",
+        "total",
+    }
+
+
+def test_preview_post_caps_angles_output(monkeypatch, clear_workflow_capacity_env):
+    monkeypatch.setenv("WORKFLOW_ANGLES_MAX_OUTPUT", "1")
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+    pipeline.backend = SimpleNamespace(
+        analyze_angles=lambda texts: {
+            "results": [
+                {"source_quote": "q1", "tangent": "t1", "category": "c1", "source_document": 0},
+                {"source_quote": "q2", "tangent": "t2", "category": "c2", "source_document": 0},
+            ]
+        }
+    )
+
+    out = pipeline.preview_post({"id": "p-a", "selftext": "body"})
+    assert len(out["report"]["angles"]) == 1
+    assert out["report"]["angles_raw_count"] == 2
+    assert out["report"]["angles_capped"] is True
+    assert out["report"]["angles_max_output"] == 1

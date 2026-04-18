@@ -101,3 +101,48 @@ def test_receiver_run_with_mocks():
     assert out["succeeded"] is True
     assert out["payload"] == secret
     assert out["decoded_angle_index"] == angle_idx
+
+
+def test_receiver_run_fails_fast_on_context_drift():
+    pre_sender = {
+        "id": "recv2",
+        "title": "title",
+        "selftext": "",
+        "url": "https://example.com/article",
+        "comments": [],
+        "angles": [
+            {"source_quote": "quote", "tangent": "tan", "category": "cat"},
+        ],
+    }
+    full_post = dict(pre_sender)
+    full_post["comments"] = [
+        {"id": "stego_c", "author": "sender1", "body": "stego", "replies": []}
+    ]
+    full_post["sender_audit"] = {
+        "dictionary_hash": "not-the-rebuilt-hash",
+        "angles_hash": "not-the-rebuilt-hash",
+    }
+
+    rp = ReceiverPipeline()
+    rp.data_load.preview_post = lambda post, use_cache=True: {
+        "post": {**post, "selftext": "fetched-body"},
+        "report": {"fetch_success": True},
+    }
+    rp.research.preview_post = lambda post, force=True, **kwargs: {
+        "post": {**post, "search_results": []},
+        "report": {},
+    }
+    rp.gen_angles.preview_post = lambda post, allow_fallback=False: {
+        "post": {
+            **post,
+            "angles": [{"source_quote": "quote", "tangent": "tan", "category": "cat"}],
+            "options_count": 1,
+        },
+        "report": {},
+    }
+
+    out = rp.run(full_post, "sender1")
+    assert out["succeeded"] is False
+    assert out["stage"] == "context_drift"
+    assert out["context_drift"]["status"] == "failed"
+    assert out["context_drift"]["mismatches"]

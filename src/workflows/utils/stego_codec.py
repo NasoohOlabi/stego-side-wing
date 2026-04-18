@@ -11,7 +11,11 @@ from typing import Any
 
 from pydantic import validate_call
 
-from workflows.utils.text_utils import build_post_text_dictionary, flatten_comments
+from workflows.utils.text_utils import (
+    build_post_text_dictionary,
+    build_post_text_dictionary_report,
+    flatten_comments,
+)
 
 MAX_LITERAL_LEN = 250
 
@@ -47,8 +51,14 @@ def take_bits(bits: str, count: int) -> tuple[str, str, bool]:
 
 @validate_call
 def build_dictionary(post: dict[str, Any]) -> list[str]:
-    dictionary = build_post_text_dictionary(post)
+    dictionary = build_post_text_dictionary(post, apply_capacity_profile=True)
     return [entry for entry in dictionary if is_non_empty_string(entry)]
+
+
+@validate_call
+def build_dictionary_report(post: dict[str, Any]) -> dict[str, Any]:
+    """Source-aware deterministic dictionary metadata shared by sender and receiver."""
+    return build_post_text_dictionary_report(post, apply_capacity_profile=True)
 
 
 @validate_call

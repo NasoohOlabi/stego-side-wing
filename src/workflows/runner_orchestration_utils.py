@@ -137,6 +137,20 @@ def clear_double_process_claim() -> None:
         pass
 
 
+def reconcile_stale_double_process_claim_vs_explicit(
+    explicit_post_id: str | None,
+    *,
+    has_active_double_process_run: bool,
+) -> None:
+    """Drop on-disk claim that blocks ``explicit_post_id`` when no run holds it (kill/restart)."""
+    if not isinstance(explicit_post_id, str) or not explicit_post_id.strip():
+        return
+    target = explicit_post_id.strip()
+    claimed = try_read_double_process_claim()
+    if claimed and claimed[0] != target and not has_active_double_process_run:
+        clear_double_process_claim()
+
+
 def is_receiver_data_load_failure(exc: Exception) -> bool:
     """True when receiver rebuild failed because URL/HTML fetch did not yield usable body."""
     return "Receiver data-load failed" in str(exc)
@@ -163,6 +177,9 @@ def receiver_post_from_stego(stego_result: dict[str, Any], sender_user_id: str) 
     if not stego_result.get("succeeded"):
         raise ValueError("stego did not succeed; cannot build receiver post")
     post = dict(stego_result.get("post") or {})
+    sender_audit = stego_result.get("sender_audit")
+    if isinstance(sender_audit, dict):
+        post["sender_audit"] = sender_audit
     stego_text = stego_result.get("stego_text")
     if not isinstance(stego_text, str) or not stego_text.strip():
         raise ValueError("stego_text missing or empty")

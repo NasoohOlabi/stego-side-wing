@@ -11,7 +11,7 @@ from uuid import uuid4
 from loguru import logger
 
 from infrastructure.json_logging import get_trace_id
-from services.workflow_run_tracker import get_run_id
+from services.workflow_run_tracker import get_run_id, has_active_run_for_command
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.config import isolated_workflow_config
 from workflows.pipelines.data_load import DataLoadPipeline
@@ -29,6 +29,7 @@ from workflows.runner_orchestration_utils import (
     isolated_workflow_config_for_side,
     normalized_angles_from_raw,
     persist_double_process_final_report,
+    reconcile_stale_double_process_claim_vs_explicit,
     research_run_with_breakdown,
     run_stego_receiver_live_sim_once,
     try_read_double_process_claim,
@@ -480,6 +481,7 @@ class WorkflowRunner:
         stego_text: str,
         angles: list[dict[str, Any]],
         few_shots: list[dict[str, Any]] | None = None,
+        strict_mode: bool = False,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> int | None:
         """Run Decode pipeline."""
@@ -492,6 +494,7 @@ class WorkflowRunner:
             stego_text=stego_text,
             angles=angles,
             few_shots=few_shots,
+            strict_mode=strict_mode,
         )
         self._emit(
             on_progress,
@@ -512,6 +515,8 @@ class WorkflowRunner:
         allow_fallback: bool = False,
         compressed_full: str | None = None,
         max_padding_bits: int = 256,
+        fail_on_context_drift: bool = True,
+        strict_decode: bool = False,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """Rebuild context on the receiver and recover the stego payload."""
@@ -535,6 +540,8 @@ class WorkflowRunner:
                 allow_fallback=allow_fallback,
                 compressed_full=compressed_full,
                 max_padding_bits=max_padding_bits,
+                fail_on_context_drift=fail_on_context_drift,
+                strict_decode=strict_decode,
                 on_progress=on_progress,
             )
         except Exception:
@@ -547,7 +554,11 @@ class WorkflowRunner:
         self._emit(
             on_progress,
             "stage_done",
-            {"stage": "receiver", "succeeded": True, "post_id": post.get("id")},
+            {
+                "stage": "receiver",
+                "succeeded": bool(result.get("succeeded", False)),
+                "post_id": post.get("id"),
+            },
         )
         return result
 
@@ -942,6 +953,12 @@ class WorkflowRunner:
         self, explicit_post_id: str | None
     ) -> tuple[str, str, bool]:
         """Return (post_id, file_name, resumed_from_claim). Raises if explicit id conflicts with claim."""
+        reconcile_stale_double_process_claim_vs_explicit(
+            explicit_post_id,
+            has_active_double_process_run=has_active_run_for_command(
+                "double-process-new-post"
+            ),
+        )
         claimed = try_read_double_process_claim()
         if explicit_post_id:
             if claimed and claimed[0] != explicit_post_id:
@@ -1583,8 +1600,21 @@ class WorkflowRunner:
                 )
                 continue
 
-            dictionary = self.gen_angles.build_dictionary_for_post(post)
-            input_hash = stable_hash(dictionary)
+            if hasattr(self.gen_angles, "build_dictionary_bundle_for_post"):
+                dictionary_bundle = self.gen_angles.build_dictionary_bundle_for_post(post)
+                dictionary = list(dictionary_bundle["texts"])
+                dictionary_report = dict(dictionary_bundle["report"])
+            else:
+                dictionary = list(self.gen_angles.build_dictionary_for_post(post))
+                dictionary_report = {
+                    "dictionary_id": stable_hash(dictionary),
+                    "texts_hash": stable_hash(dictionary),
+                    "raw_entry_count": len(dictionary),
+                    "source_counts": {},
+                    "truncated_sources": [],
+                    "capacity_applied": False,
+                }
+            input_hash = dictionary_report["texts_hash"]
 
             if not dictionary:
                 row = {
@@ -1592,6 +1622,11 @@ class WorkflowRunner:
                     "source_file": file_name,
                     "input_text_blocks": 0,
                     "input_hash": input_hash,
+                    "dictionary_id": dictionary_report["dictionary_id"],
+                    "dictionary_raw_count": dictionary_report["raw_entry_count"],
+                    "dictionary_source_counts": dictionary_report["source_counts"],
+                    "dictionary_truncated_sources": dictionary_report["truncated_sources"],
+                    "dictionary_capacity_applied": dictionary_report["capacity_applied"],
                     "error": "no text blocks for angles input",
                     "identical": None,
                 }
@@ -1616,6 +1651,11 @@ class WorkflowRunner:
                     "source_file": file_name,
                     "input_text_blocks": len(dictionary),
                     "input_hash": input_hash,
+                    "dictionary_id": dictionary_report["dictionary_id"],
+                    "dictionary_raw_count": dictionary_report["raw_entry_count"],
+                    "dictionary_source_counts": dictionary_report["source_counts"],
+                    "dictionary_truncated_sources": dictionary_report["truncated_sources"],
+                    "dictionary_capacity_applied": dictionary_report["capacity_applied"],
                     "error": str(exc),
                     "identical": None,
                 }
@@ -1643,6 +1683,11 @@ class WorkflowRunner:
                 "source_file": file_name,
                 "input_text_blocks": len(dictionary),
                 "input_hash": input_hash,
+                "dictionary_id": dictionary_report["dictionary_id"],
+                "dictionary_raw_count": dictionary_report["raw_entry_count"],
+                "dictionary_source_counts": dictionary_report["source_counts"],
+                "dictionary_truncated_sources": dictionary_report["truncated_sources"],
+                "dictionary_capacity_applied": dictionary_report["capacity_applied"],
                 "run_1_count": len(norm_a),
                 "run_2_count": len(norm_b),
                 "run_1_hash": h1,

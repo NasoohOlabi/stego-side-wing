@@ -33,8 +33,11 @@ from app.schemas.workflow_requests import (
     ValidatePostWorkflowRequest,
 )
 from infrastructure.json_logging import get_trace_id
-from services.workflow_run_tracker import iter_snapshot
-from workflows.runner_orchestration_utils import try_read_double_process_claim
+from services.workflow_run_tracker import has_active_run_for_command, iter_snapshot
+from workflows.runner_orchestration_utils import (
+    reconcile_stale_double_process_claim_vs_explicit,
+    try_read_double_process_claim,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +251,7 @@ def wf_decode() -> Any:
     stego_text = req.stego_text
     angles = req.angles
     few_shots = req.few_shots
+    strict_mode = req.strict_mode
 
     if wants_workflow_stream(body):
         return stream_workflow(
@@ -257,6 +261,7 @@ def wf_decode() -> Any:
                     stego_text=stego_text,
                     angles=angles,
                     few_shots=few_shots,
+                    strict_mode=strict_mode,
                     on_progress=lambda event, payload: emit(
                         "progress",
                         {"event": event, **payload},
@@ -274,6 +279,7 @@ def wf_decode() -> Any:
                     stego_text=stego_text,
                     angles=angles,
                     few_shots=few_shots,
+                    strict_mode=strict_mode,
                 )
             },
         )
@@ -296,6 +302,8 @@ def wf_receiver() -> Any:
     sender_user_id = req.sender_user_id
     compressed_full = req.compressed_bitstring
     allow_fallback = req.allow_fallback
+    fail_on_context_drift = req.fail_on_context_drift
+    strict_decode = req.strict_decode
     use_fetch_cache = req.use_fetch_cache
     use_terms_cache = req.use_terms_cache
     persist_terms_cache = req.persist_terms_cache
@@ -315,6 +323,8 @@ def wf_receiver() -> Any:
                 allow_fallback=allow_fallback,
                 compressed_full=compressed_full,
                 max_padding_bits=max_padding_bits,
+                fail_on_context_drift=fail_on_context_drift,
+                strict_decode=strict_decode,
                 on_progress=lambda event, progress_payload: emit(
                     "progress",
                     {"event": event, **progress_payload},
@@ -336,6 +346,8 @@ def wf_receiver() -> Any:
                 allow_fallback=allow_fallback,
                 compressed_full=compressed_full,
                 max_padding_bits=max_padding_bits,
+                fail_on_context_drift=fail_on_context_drift,
+                strict_decode=strict_decode,
             ),
         )
         return ok(data)
@@ -538,6 +550,12 @@ def wf_double_process_new_post() -> Any:
     if err:
         return err
     if explicit_post_id:
+        reconcile_stale_double_process_claim_vs_explicit(
+            explicit_post_id,
+            has_active_double_process_run=has_active_run_for_command(
+                "double-process-new-post"
+            ),
+        )
         claimed = try_read_double_process_claim()
         if claimed and claimed[0] != explicit_post_id:
             return fail(
@@ -800,6 +818,9 @@ def wf_run() -> Any:
         stego_text = body.get("stego_text")
         angles = body.get("angles")
         few_shots = body.get("few_shots")
+        strict_mode, err = body_bool(body, "strict_mode", default=False)
+        if err:
+            return err
         if not isinstance(stego_text, str):
             return fail("'stego_text' must be a string", status=400)
         if not isinstance(angles, list):
@@ -813,6 +834,7 @@ def wf_run() -> Any:
                     stego_text=stego_text,
                     angles=angles,
                     few_shots=few_shots,
+                    strict_mode=strict_mode,
                     on_progress=progress_cb,
                 )
             }
@@ -831,6 +853,12 @@ def wf_run() -> Any:
         if err:
             return err
         allow_fb, err = body_bool(body, "allow_fallback", default=False)
+        if err:
+            return err
+        fail_drift, err = body_bool(body, "fail_on_context_drift", default=True)
+        if err:
+            return err
+        strict_dec, err = body_bool(body, "strict_decode", default=False)
         if err:
             return err
         ufc, err = body_bool(body, "use_fetch_cache", default=True)
@@ -864,6 +892,8 @@ def wf_run() -> Any:
                 allow_fallback=allow_fb,
                 compressed_full=compressed_b,
                 max_padding_bits=max_pad_i,
+                fail_on_context_drift=fail_drift,
+                strict_decode=strict_dec,
                 on_progress=progress_cb,
             )
 
@@ -923,6 +953,12 @@ def wf_run() -> Any:
         if err:
             return err
         if explicit_post_id_cmd:
+            reconcile_stale_double_process_claim_vs_explicit(
+                explicit_post_id_cmd,
+                has_active_double_process_run=has_active_run_for_command(
+                    "double-process-new-post"
+                ),
+            )
             claimed_cmd = try_read_double_process_claim()
             if claimed_cmd and claimed_cmd[0] != explicit_post_id_cmd:
                 return fail(

@@ -90,6 +90,11 @@ def iter_snapshot() -> Iterator[dict[str, Any]]:
         }
 
 
+def has_active_run_for_command(command: str) -> bool:
+    with _lock:
+        return any(rec.command == command for rec in _runs.values())
+
+
 @contextmanager
 def track_workflow(command: str) -> Generator[str]:
     run_id = register_run(command, "sync")

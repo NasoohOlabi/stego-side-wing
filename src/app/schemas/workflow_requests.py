@@ -15,6 +15,7 @@ class DecodeWorkflowRequest(BaseModel):
     stego_text: str
     angles: list[Any]
     few_shots: list[Any] | None = None
+    strict_mode: bool = False
 
     @field_validator("angles")
     @classmethod
@@ -42,6 +43,8 @@ class ReceiverWorkflowRequest(BaseModel):
     sender_user_id: str = Field(min_length=1)
     compressed_bitstring: str | None = None
     allow_fallback: bool = False
+    fail_on_context_drift: bool = True
+    strict_decode: bool = False
     use_fetch_cache: bool = True
     use_terms_cache: bool = True
     persist_terms_cache: bool = True

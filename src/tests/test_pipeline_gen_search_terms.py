@@ -100,3 +100,26 @@ def test_preview_generation_carries_cache_error_metadata():
     assert report["cache_error"] == "cache root must be array"
     assert report["cache_hit"] is False
     assert report["parse_mode"] == "json_array"
+
+
+def test_preview_generation_caps_terms_but_caches_raw_terms(
+    monkeypatch, clear_workflow_capacity_env
+):
+    cached = []
+    pipeline = GenSearchTermsPipeline.__new__(GenSearchTermsPipeline)
+    pipeline.config = SimpleNamespace(model="dummy")
+    pipeline.llm = SimpleNamespace(
+        call_llm=lambda **kwargs: "[\"t1\", \"t2\", \"t3\", \"t4\"]",
+        last_call_metadata={},
+    )
+    pipeline._get_cached_terms = lambda post_id: None
+    pipeline._cache_terms = lambda post_id, terms: cached.append((post_id, terms))
+    monkeypatch.setenv("WORKFLOW_RESEARCH_MAX_TERMS", "2")
+
+    report = pipeline.preview_generation(post_id="p6", post_title="title")
+
+    assert report["terms"] == ["t1", "t2"]
+    assert report["terms_raw_count"] == 4
+    assert report["terms_capped"] is True
+    assert report["max_terms"] == 2
+    assert cached == [("p6", ["t1", "t2", "t3", "t4"])]

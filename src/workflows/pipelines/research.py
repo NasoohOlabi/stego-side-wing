@@ -1,6 +1,5 @@
 """Research pipeline: generate search terms, search, and fetch content."""
 
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -9,6 +8,13 @@ from uuid import uuid4
 
 from loguru import logger
 
+from infrastructure.config import (
+    get_workflow_capacity_profile,
+    get_workflow_research_fetch_concurrency,
+    get_workflow_research_fetch_retries,
+    get_workflow_research_fetch_timeout_sec,
+    get_workflow_research_max_selected_urls,
+)
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.contracts import FetchUrlResult
 from workflows.pipelines.fetch_url_content import FetchUrlContentPipeline
@@ -21,19 +27,13 @@ from workflows.utils.research_relevance_debug import (
     write_research_terms_debug,
 )
 
-# Per-URL fetch in research; avoids indefinite hang if crawl/browser stalls.
-_RESEARCH_FETCH_TIMEOUT_SEC = float(os.environ.get("RESEARCH_FETCH_TIMEOUT_SEC", "180"))
-# Retries after a timed-out attempt (e.g. 1 => two attempts total per URL).
-_RESEARCH_FETCH_RETRIES = max(0, int(os.environ.get("RESEARCH_FETCH_RETRIES", "1")))
-
-
 def _term_preview(term: str, max_len: int = 160) -> str:
     t = term.replace("\n", " ").strip()
     return t if len(t) <= max_len else t[: max_len - 3] + "..."
 
 
 def _fetch_attempts_total() -> int:
-    return 1 + _RESEARCH_FETCH_RETRIES
+    return 1 + get_workflow_research_fetch_retries()
 
 
 def _elapsed_ms(since: float) -> int:
@@ -98,7 +98,7 @@ class ResearchPipeline:
     ) -> FetchUrlResult:
         """Run fetch in an isolated worker with per-attempt timeout; retry on timeout."""
         attempts = _fetch_attempts_total()
-        ts = _RESEARCH_FETCH_TIMEOUT_SEC
+        ts = get_workflow_research_fetch_timeout_sec()
         prog: dict[str, float | int] = {}
         if url_index is not None and urls_total is not None:
             prog = _fetch_url_slot_progress(url_index, urls_total)
@@ -210,6 +210,8 @@ class ResearchPipeline:
         trace_id = str(uuid4())
         log = self._log.bind(trace_id=trace_id)
         t_preview0 = time.perf_counter()
+        max_selected_urls = get_workflow_research_max_selected_urls()
+        capacity_profile = get_workflow_capacity_profile()
         log.info(
             "research_preview_begin",
             event="research_timing",
@@ -217,6 +219,8 @@ class ResearchPipeline:
             force=force,
             use_terms_cache=use_terms_cache,
             use_fetch_cache=use_fetch_cache,
+            capacity_profile=capacity_profile,
+            max_selected_urls=max_selected_urls,
         )
 
         if not force and not self._is_new_post(post):
@@ -315,6 +319,7 @@ class ResearchPipeline:
         search_events: list[dict[str, Any]] = []
         raw_results_by_term: list[list[dict[str, Any]]] = []
         seen_links: set[str] = set()
+        selected_url_cap_hit = False
         n_terms = len(search_terms)
         t_search_phase0 = time.perf_counter()
         log.info(
@@ -322,6 +327,9 @@ class ResearchPipeline:
             event="research",
             post_id=post_id,
             search_term_count=n_terms,
+            capacity_profile=capacity_profile,
+            max_selected_urls=max_selected_urls,
+            terms_capped=terms_report.get("terms_capped", False),
         )
 
         for idx, term in enumerate(search_terms, start=1):
@@ -358,6 +366,15 @@ class ResearchPipeline:
             selected_for_term: list[dict[str, Any]] = []
             skipped_for_term: list[dict[str, Any]] = []
             for result in raw_results:
+                if max_selected_urls == 0:
+                    selected_url_cap_hit = True
+                    skipped_for_term.append(
+                        {
+                            "reason": "capacity_url_cap_reached",
+                            "max_selected_urls": max_selected_urls,
+                        }
+                    )
+                    break
                 link = result.get("link", "")
                 if not link:
                     skipped_for_term.append({"reason": "missing_link"})
@@ -372,6 +389,15 @@ class ResearchPipeline:
                 summary = self._search_summary(result)
                 selected_for_term.append(summary)
                 all_search_results.append(result)
+                if max_selected_urls > 0 and len(all_search_results) >= max_selected_urls:
+                    selected_url_cap_hit = True
+                    skipped_for_term.append(
+                        {
+                            "reason": "capacity_url_cap_reached",
+                            "max_selected_urls": max_selected_urls,
+                        }
+                    )
+                    break
 
             search_events.append(
                 {
@@ -383,6 +409,8 @@ class ResearchPipeline:
                     "skipped": skipped_for_term,
                 }
             )
+            if selected_url_cap_hit:
+                break
 
         t_after_search = time.perf_counter()
         search_phase_ms = int((t_after_search - t_search_phase0) * 1000)
@@ -393,6 +421,8 @@ class ResearchPipeline:
             elapsed_ms=search_phase_ms,
             search_term_count=n_terms,
             unique_links_selected=len(all_search_results),
+            selected_url_cap_hit=selected_url_cap_hit,
+            max_selected_urls=max_selected_urls,
         )
         if _dbg_dir:
             _corpus = f"{_post_title or ''}\n{_post_text or ''}"
@@ -409,7 +439,7 @@ class ResearchPipeline:
 
         fetched_texts: list[str] = []
         fetched_pages: list[dict[str, Any]] = []
-        batch_size = 3
+        batch_size = get_workflow_research_fetch_concurrency()
         total_urls = len(all_search_results)
         n_batches = (total_urls + batch_size - 1) // batch_size if total_urls else 0
         t_fetch_phase0 = time.perf_counter()
@@ -421,8 +451,8 @@ class ResearchPipeline:
             urls_to_fetch=total_urls,
             batch_size=batch_size,
             batch_count=n_batches,
-            fetch_timeout_sec=_RESEARCH_FETCH_TIMEOUT_SEC,
-            fetch_retries=_RESEARCH_FETCH_RETRIES,
+            fetch_timeout_sec=get_workflow_research_fetch_timeout_sec(),
+            fetch_retries=get_workflow_research_fetch_retries(),
             fetch_attempts_total=_fetch_attempts_total(),
             **_fetch_progress_fields(0, total_urls),
         )
@@ -539,6 +569,13 @@ class ResearchPipeline:
             "search_results": fetched_texts,
             "search_results_hash": stable_hash(fetched_texts),
             "search_results_count": len(fetched_texts),
+            "capacity": {
+                "profile": capacity_profile,
+                "max_selected_urls": max_selected_urls,
+                "selected_url_cap_hit": selected_url_cap_hit,
+                "terms_capped": bool(terms_report.get("terms_capped", False)),
+                "max_terms": terms_report.get("max_terms"),
+            },
             "timing": timing,
         }
         log.info(
@@ -553,6 +590,8 @@ class ResearchPipeline:
             selected_links=len(all_search_results),
             fetched_texts=len(fetched_texts),
             search_results_hash=report["search_results_hash"],
+            selected_url_cap_hit=selected_url_cap_hit,
+            max_selected_urls=max_selected_urls,
         )
         return {"post": post_copy, "report": report}
 

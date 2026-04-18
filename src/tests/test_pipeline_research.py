@@ -148,3 +148,47 @@ def test_process_posts_clears_breakdown_when_include_breakdown():
         step="filter-researched", count=1, offset=0, include_breakdown=True
     )
     assert pipeline.last_research_breakdown_posts == []
+
+
+def test_preview_post_caps_selected_urls(monkeypatch, clear_workflow_capacity_env):
+    pipeline = _research_pipeline_stub()
+    monkeypatch.setenv("WORKFLOW_RESEARCH_MAX_SELECTED_URLS", "2")
+    pipeline.gen_terms = SimpleNamespace(
+        preview_generation=lambda **kwargs: {
+            "terms": ["term1", "term2"],
+            "terms_capped": False,
+            "max_terms": 8,
+        }
+    )
+
+    def google_search(query, first, count):
+        if query == "term1":
+            return {
+                "results": [
+                    {"link": "https://a.com/1"},
+                    {"link": "https://a.com/2"},
+                ]
+            }
+        return {
+            "results": [
+                {"link": "https://b.com/1"},
+            ]
+        }
+
+    pipeline.backend = SimpleNamespace(google_search=google_search)
+    pipeline.fetch_content = SimpleNamespace(
+        fetch=lambda url, use_cache: FetchUrlResult(
+            url=url, success=True, text=f"text:{url}"
+        )
+    )
+
+    preview = pipeline.preview_post(
+        {"id": "p-cap", "title": "t", "selftext": "body", "url": "https://origin"}
+    )
+
+    assert preview["post"]["search_results"] == [
+        "text:https://a.com/1",
+        "text:https://a.com/2",
+    ]
+    assert preview["report"]["capacity"]["selected_url_cap_hit"] is True
+    assert preview["report"]["capacity"]["max_selected_urls"] == 2

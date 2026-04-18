@@ -8,7 +8,11 @@ from typing import Any
 
 from loguru import logger
 
-from infrastructure.config import resolve_workflow_llm_provider_and_model
+from infrastructure.config import (
+    get_workflow_capacity_profile,
+    get_workflow_research_max_terms,
+    resolve_workflow_llm_provider_and_model,
+)
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
 from workflows.utils.debug_probe import write_debug_probe
@@ -141,6 +145,17 @@ class GenSearchTermsPipeline:
     def _normalize_terms(terms: list[str]) -> list[str]:
         return unique_preserve_order(str(term) for term in terms if str(term).strip())
 
+    @staticmethod
+    def _apply_terms_capacity(terms: list[str]) -> tuple[list[str], dict[str, Any]]:
+        max_terms = get_workflow_research_max_terms()
+        trimmed = list(terms[:max_terms])
+        return trimmed, {
+            "terms_raw_count": len(terms),
+            "terms_capped": len(trimmed) != len(terms),
+            "capacity_profile": get_workflow_capacity_profile(),
+            "max_terms": max_terms,
+        }
+
     def preview_generation(
         self,
         post_id: str,
@@ -190,6 +205,7 @@ class GenSearchTermsPipeline:
             cache_hit = cached_terms is not None
         if cached_terms is not None:
             normalized_cached_terms = self._normalize_terms(cached_terms)
+            terms, capacity_meta = self._apply_terms_capacity(normalized_cached_terms)
             elapsed_ms = int((time.perf_counter() - t_start) * 1000)
             self._log.info(
                 "gen_search_terms_cache_hit",
@@ -199,8 +215,12 @@ class GenSearchTermsPipeline:
                 cache_error=cache_error,
                 parse_mode="cache",
                 elapsed_ms=elapsed_ms,
-                terms_count=len(normalized_cached_terms),
-                terms_hash=stable_hash(normalized_cached_terms),
+                terms_count=len(terms),
+                terms_hash=stable_hash(terms),
+                terms_raw_count=capacity_meta["terms_raw_count"],
+                terms_capped=capacity_meta["terms_capped"],
+                capacity_profile=capacity_meta["capacity_profile"],
+                max_terms=capacity_meta["max_terms"],
             )
             return {
                 "post_id": post_id,
@@ -216,8 +236,10 @@ class GenSearchTermsPipeline:
                 "retry_count": 0,
                 "prompt_hash": stable_hash(prompt),
                 "system_prompt_hash": stable_hash(system_message),
-                "terms": normalized_cached_terms,
-                "terms_hash": stable_hash(normalized_cached_terms),
+                "terms": terms,
+                "terms_hash": stable_hash(terms),
+                **capacity_meta,
+                "capacity_limits": {"max_terms": capacity_meta["max_terms"]},
             }
 
         try:
@@ -251,9 +273,10 @@ class GenSearchTermsPipeline:
             )
             llm_ms = int((time.perf_counter() - t_llm) * 1000)
             llm_meta = dict(getattr(self.llm, "last_call_metadata", {}) or {})
-            terms = self._normalize_terms(self._parse_terms(response))
+            normalized_terms = self._normalize_terms(self._parse_terms(response))
+            terms, capacity_meta = self._apply_terms_capacity(normalized_terms)
             if persist_cache:
-                self._cache_terms(post_id, terms)
+                self._cache_terms(post_id, normalized_terms)
             total_ms = int((time.perf_counter() - t_start) * 1000)
             # region agent log
             write_debug_probe(
@@ -264,6 +287,8 @@ class GenSearchTermsPipeline:
                 data={
                     "post_id": post_id,
                     "terms_count": len(terms),
+                    "terms_raw_count": capacity_meta["terms_raw_count"],
+                    "terms_capped": capacity_meta["terms_capped"],
                     "parse_mode": getattr(self, "_last_parse_mode", None),
                     "retry_count": int(llm_meta.get("retry_count", 0) or 0),
                     "elapsed_ms": total_ms,
@@ -282,6 +307,10 @@ class GenSearchTermsPipeline:
                 retry_count=int(llm_meta.get("retry_count", 0) or 0),
                 terms_count=len(terms),
                 terms_hash=stable_hash(terms),
+                terms_raw_count=capacity_meta["terms_raw_count"],
+                terms_capped=capacity_meta["terms_capped"],
+                capacity_profile=capacity_meta["capacity_profile"],
+                max_terms=capacity_meta["max_terms"],
                 use_cache=use_cache,
                 persist_cache=persist_cache,
             )
@@ -302,6 +331,8 @@ class GenSearchTermsPipeline:
                 "system_prompt_hash": stable_hash(system_message),
                 "terms": terms,
                 "terms_hash": stable_hash(terms),
+                **capacity_meta,
+                "capacity_limits": {"max_terms": capacity_meta["max_terms"]},
             }
         except Exception as e:
             llm_meta = dict(getattr(self.llm, "last_call_metadata", {}) or {})
@@ -356,6 +387,11 @@ class GenSearchTermsPipeline:
                 "system_prompt_hash": stable_hash(system_message),
                 "terms": [],
                 "terms_hash": stable_hash([]),
+                "terms_raw_count": 0,
+                "terms_capped": False,
+                "capacity_profile": get_workflow_capacity_profile(),
+                "max_terms": get_workflow_research_max_terms(),
+                "capacity_limits": {"max_terms": get_workflow_research_max_terms()},
                 "error": str(e),
             }
 
@@ -408,4 +444,4 @@ class GenSearchTermsPipeline:
             if line:
                 terms.append(line)
         self._last_parse_mode = "line_fallback" if terms else "empty"
-        return terms[:20]  # Limit to 20 terms
+        return terms

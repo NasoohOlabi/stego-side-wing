@@ -6,6 +6,7 @@ from typing import Any
 from loguru import logger
 
 from infrastructure.config import (
+    get_workflow_angles_max_output,
     get_workflow_llm_backend,
     resolve_workflow_llm_provider_and_model,
 )
@@ -28,7 +29,7 @@ from workflows.utils.angles_llm_config import (
 from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.text_utils import (
-    build_post_text_dictionary,
+    build_post_text_dictionary_bundle,
     flatten_comments,
     parse_json_array_response,
 )
@@ -72,11 +73,15 @@ class GenAnglesPipeline:
 
     def _build_dictionary(self, post: dict) -> list[str]:
         """Build dictionary of texts from post."""
-        return build_post_text_dictionary(post)
+        return list(self.build_dictionary_bundle_for_post(post)["texts"])
 
     def build_dictionary_for_post(self, post: dict[str, Any]) -> list[str]:
         """Public alias for workflow runner / tools that need the same inputs as gen_angles."""
         return self._build_dictionary(post)
+
+    def build_dictionary_bundle_for_post(self, post: dict[str, Any]) -> dict[str, Any]:
+        """Texts plus deterministic dictionary observability metadata."""
+        return build_post_text_dictionary_bundle(post, apply_capacity_profile=True)
 
     def preview_post(
         self,
@@ -85,7 +90,9 @@ class GenAnglesPipeline:
     ) -> dict[str, Any]:
         """Generate angles without mutating or saving artifacts."""
         post_id = str(post.get("id") or "<unknown>")
-        dictionary = self._build_dictionary(post)
+        dictionary_bundle = self.build_dictionary_bundle_for_post(post)
+        dictionary = list(dictionary_bundle["texts"])
+        dictionary_report = dict(dictionary_bundle["report"])
         t_preview = time.perf_counter()
         cfg = getattr(self, "config", None) or get_config()
         if get_workflow_llm_backend() == "google":
@@ -114,6 +121,15 @@ class GenAnglesPipeline:
             "system_prompt_hash": stable_hash(ANGLES_SYSTEM_PROMPT),
             "user_prompt_template_hash": stable_hash(ANGLES_USER_PROMPT_TEMPLATE),
             "used_fallback": False,
+            "dictionary_id": dictionary_report["dictionary_id"],
+            "input_raw_count": dictionary_report["raw_entry_count"],
+            "input_source_counts": dictionary_report["source_counts"],
+            "input_raw_source_counts": dictionary_report["raw_source_counts"],
+            "input_capacity_applied": dictionary_report["capacity_applied"],
+            "input_truncated_sources": dictionary_report["truncated_sources"],
+            "input_capacity_profile": dictionary_report["capacity_profile"],
+            "input_capacity_limits": dictionary_report["capacity_limits"],
+            "input_sample_entries": dictionary_report["sample_entries"],
         }
         write_debug_probe(
             run_id=None,
@@ -125,6 +141,9 @@ class GenAnglesPipeline:
                 "input_count": len(dictionary),
                 "allow_fallback": allow_fallback,
                 "input_hash": report["input_hash"],
+                "dictionary_id": report["dictionary_id"],
+                "input_source_counts": report["input_source_counts"],
+                "input_capacity_applied": report["input_capacity_applied"],
             },
         )
         if not dictionary:
@@ -136,8 +155,20 @@ class GenAnglesPipeline:
                 elapsed_ms_total=_elapsed_ms(t_preview),
                 input_count=0,
                 angles_count=0,
+                dictionary_id=report["dictionary_id"],
             )
             return {"post": dict(post, angles=[], options_count=0), "report": report}
+
+        if report["input_capacity_applied"]:
+            _gen_angles_bind_log().warning(
+                "gen_angles_dictionary_capacity_applied",
+                post_id=post_id,
+                dictionary_id=report["dictionary_id"],
+                input_raw_count=report["input_raw_count"],
+                input_count=report["input_count"],
+                truncated_sources=report["input_truncated_sources"],
+                input_capacity_limits=report["input_capacity_limits"],
+            )
 
         t_an = time.perf_counter()
         try:
@@ -157,6 +188,10 @@ class GenAnglesPipeline:
                         angle["source_document"] = sd
                     if angle["source_quote"] and angle["tangent"] and angle["category"]:
                         angles.append(angle)
+            angles_raw_count = len(angles)
+            max_angles = get_workflow_angles_max_output()
+            if len(angles) > max_angles:
+                angles = angles[:max_angles]
             processed_post = dict(post)
             processed_post["angles"] = angles
             processed_post["options_count"] = len(angles)
@@ -165,6 +200,9 @@ class GenAnglesPipeline:
                     "angles": angles,
                     "angles_hash": stable_hash(angles),
                     "options_count": len(angles),
+                    "angles_raw_count": angles_raw_count,
+                    "angles_capped": angles_raw_count != len(angles),
+                    "angles_max_output": max_angles,
                 }
             )
             write_debug_probe(
@@ -176,6 +214,8 @@ class GenAnglesPipeline:
                     "post_id": post_id,
                     "input_count": len(dictionary),
                     "angles_count": len(angles),
+                    "angles_raw_count": angles_raw_count,
+                    "angles_capped": angles_raw_count != len(angles),
                     "allow_fallback": allow_fallback,
                 },
             )
@@ -188,6 +228,10 @@ class GenAnglesPipeline:
                 input_count=len(dictionary),
                 angles_count=len(angles),
                 angles_hash=report["angles_hash"],
+                dictionary_id=report["dictionary_id"],
+                angles_raw_count=angles_raw_count,
+                angles_capped=angles_raw_count != len(angles),
+                angles_max_output=max_angles,
             )
             return {"post": processed_post, "report": report}
         except Exception as e:
@@ -239,6 +283,10 @@ class GenAnglesPipeline:
             fallback_ms = _elapsed_ms(t_fb)
             for a in angles:
                 a.setdefault("source_document", 0)
+            angles_raw_count = len(angles)
+            max_angles = get_workflow_angles_max_output()
+            if len(angles) > max_angles:
+                angles = angles[:max_angles]
             processed_post = dict(post)
             processed_post["angles"] = angles
             processed_post["options_count"] = len(angles)
@@ -249,6 +297,9 @@ class GenAnglesPipeline:
                     "angles_hash": stable_hash(angles),
                     "options_count": len(angles),
                     "fallback_error": str(e),
+                    "angles_raw_count": angles_raw_count,
+                    "angles_capped": angles_raw_count != len(angles),
+                    "angles_max_output": max_angles,
                 }
             )
             _gen_angles_bind_log().info(
@@ -261,6 +312,10 @@ class GenAnglesPipeline:
                 input_count=len(dictionary),
                 angles_count=len(angles),
                 angles_hash=report["angles_hash"],
+                dictionary_id=report["dictionary_id"],
+                angles_raw_count=angles_raw_count,
+                angles_capped=angles_raw_count != len(angles),
+                angles_max_output=max_angles,
             )
             return {"post": processed_post, "report": report}
 

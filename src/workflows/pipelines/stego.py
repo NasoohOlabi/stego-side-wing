@@ -26,6 +26,9 @@ from workflows.utils.stego_codec import (
     build_dictionary as codec_build_dictionary,
 )
 from workflows.utils.stego_codec import (
+    build_dictionary_report as codec_build_dictionary_report,
+)
+from workflows.utils.stego_codec import (
     compress_payload as codec_compress_payload,
 )
 from workflows.utils.stego_codec import (
@@ -37,6 +40,7 @@ from workflows.utils.stego_codec import (
 from workflows.utils.stego_codec import (
     flatten_comments,
 )
+from workflows.utils.protocol_utils import stable_hash
 from workflows.utils.workflow_llm_prompts import get_prompts
 
 # Backward-compatible names for tests and callers.
@@ -136,6 +140,34 @@ def _text_preview(text: Any, max_len: int = 180) -> str:
         return ""
     stripped = " ".join(text.split())
     return stripped if len(stripped) <= max_len else f"{stripped[:max_len]}..."
+
+
+def _sender_audit_from_post(
+    post: dict[str, Any], post_augmentation: dict[str, Any]
+) -> dict[str, Any]:
+    dictionary_report = codec_build_dictionary_report(post)
+    tangents_db = list(post_augmentation.get("angleEmbedding", {}).get("TangentsDB", []))
+    search_results = list(post.get("search_results", []) or [])
+    selected_urls_hashes = [stable_hash(item) for item in search_results]
+    compression = dict(post_augmentation.get("compression", {}))
+    return {
+        "dictionary_id": dictionary_report["dictionary_id"],
+        "dictionary_hash": dictionary_report["texts_hash"],
+        "dictionary_count": dictionary_report["entry_count"],
+        "angles_hash": stable_hash(tangents_db),
+        "angles_count": len(tangents_db),
+        "selected_url_hashes": selected_urls_hashes,
+        "selected_urls_hash": stable_hash(selected_urls_hashes),
+        "selected_angle_index": post_augmentation.get("angleEmbedding", {})
+        .get("selectedAngle", {})
+        .get("idx"),
+        "compression": {
+            "method": compression.get("method"),
+            "compressed_length": compression.get("compressedLength"),
+            "original_length": compression.get("originalLength"),
+            "compressed_hash": stable_hash(compression.get("compressed", "")),
+        },
+    }
 
 
 def _log_encode_timing_complete(
@@ -558,6 +590,8 @@ class StegoPipeline:
 
         t_aug = time.perf_counter()
         post_augmentation = self._augment_post(payload, post)
+        sender_audit = _sender_audit_from_post(post, post_augmentation)
+        post_augmentation["senderAudit"] = sender_audit
         augment_ms = _elapsed_ms_since(t_aug)
         _stego_log_bind("timing", timing_phase="augment_post").bind(
             stego_encode_run_id=encode_run_id,
@@ -599,6 +633,7 @@ class StegoPipeline:
                 "succeeded": False,
                 "retry_count": 0,
                 "tag": tag,
+                "sender_audit": sender_audit,
                 "error": "No samples generated from angle embedding",
                 "error_details": {
                     "reason": "Angle embedding produced zero sample prompts for generation.",
@@ -712,6 +747,7 @@ class StegoPipeline:
                         "succeeded": True,
                         "retry_count": retry_count,
                         "tag": tag,
+                        "sender_audit": sender_audit,
                         "embedding": post_augmentation,
                         "encoded_samples": encoded_results,
                         "decoded_indices": validation.get("decodedIndices", []),
@@ -759,6 +795,7 @@ class StegoPipeline:
                         "succeeded": False,
                         "retry_count": retry_count,
                         "tag": tag,
+                        "sender_audit": sender_audit,
                         "error": "Decoding validation failed",
                         "error_details": error_details,
                         "breakdown": last_breakdown,
@@ -793,6 +830,7 @@ class StegoPipeline:
                         "succeeded": False,
                         "retry_count": retry_count,
                         "tag": tag,
+                        "sender_audit": sender_audit,
                         "error": str(exc),
                         "error_details": {
                             "reason": "Unexpected exception during stego encoding.",

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import threading
 import time
@@ -8,10 +9,16 @@ from crawl4ai.extraction_strategy import LLMExtractionStrategy
 from loguru import logger
 from pydantic import BaseModel
 
+from content_acquisition.url_http_extract import fetch_main_text_via_http
 from infrastructure.config import (
+    get_crawl4ai_magic_enabled,
+    get_crawl4ai_page_timeout_ms,
     get_env,
     get_lm_studio_url,
     get_workflow_llm_backend,
+    get_workflow_url_fetch_http_first,
+    get_workflow_url_fetch_http_min_chars,
+    get_workflow_url_fetch_http_timeout_sec,
     resolve_workflow_llm_provider_and_model,
 )
 from workflows.adapters.llm import LLMAdapter
@@ -87,6 +94,26 @@ class Crawl4AITracker:
 _tracker = Crawl4AITracker()
 _SCRAPER_LOG = logger.bind(component="Crawl4AIScraper")
 
+_shared_crawler: AsyncWebCrawler | None = None
+_shared_crawler_lock = asyncio.Lock()
+
+
+async def _shared_crawler_instance() -> AsyncWebCrawler:
+    """Reuse one AsyncWebCrawler per process to amortize Playwright startup."""
+    global _shared_crawler
+    async with _shared_crawler_lock:
+        if _shared_crawler is None:
+            crawler = AsyncWebCrawler(verbose=False)
+            await crawler.start()
+            _shared_crawler = crawler
+        return _shared_crawler
+
+
+def reset_shared_crawler_for_tests() -> None:
+    """Drop singleton reference (pytest); does not stop Playwright if already started."""
+    global _shared_crawler
+    _shared_crawler = None
+
 
 def _crawl4ai_structured_llm_resolution(
     model_hint: str,
@@ -112,15 +139,75 @@ def _page_text_fallback(crawl_result: Any) -> str:
     return ""
 
 
-def _markdown_only_run_config() -> CrawlerRunConfig:
+def _browser_markdown_run_config() -> CrawlerRunConfig:
+    mag = get_crawl4ai_magic_enabled()
     return CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
-        magic=True,
-        remove_overlay_elements=True,
-        js_code=JS_CONSENT_CLICK,
+        magic=mag,
+        remove_overlay_elements=mag,
+        js_code=JS_CONSENT_CLICK if mag else "",
         wait_for="body",
-        page_timeout=60000,
+        page_timeout=get_crawl4ai_page_timeout_ms(),
     )
+
+
+def _browser_lm_run_config(strategy: LLMExtractionStrategy) -> CrawlerRunConfig:
+    mag = get_crawl4ai_magic_enabled()
+    return CrawlerRunConfig(
+        extraction_strategy=strategy,
+        cache_mode=CacheMode.BYPASS,
+        magic=mag,
+        remove_overlay_elements=mag,
+        js_code=JS_CONSENT_CLICK if mag else "",
+        wait_for="body",
+        page_timeout=get_crawl4ai_page_timeout_ms(),
+    )
+
+
+def _build_schema_user_prompt(
+    instruction: str,
+    schema: type[BaseModel],
+    page_text: str,
+) -> str:
+    schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+    return (
+        f"{instruction}\n\n"
+        "Output a single JSON object only (no markdown fences) that conforms "
+        f"to this JSON Schema:\n{schema_json}\n\nPage content:\n{page_text[:120_000]}"
+    )
+
+
+def _sync_llm_schema_extract(
+    page_text: str,
+    url: str,
+    schema: type[BaseModel],
+    model_name: str,
+    instruction: str,
+) -> dict[str, Any] | None:
+    wf_backend, provider, model = _crawl4ai_structured_llm_resolution(model_name)
+    prompt = _build_schema_user_prompt(instruction, schema, page_text)
+    _SCRAPER_LOG.info(
+        "crawl4ai_llm_invoke",
+        url=url,
+        workflow_llm_backend=wf_backend,
+        llm_provider=provider,
+        llm_model=model,
+        llm_model_hint=model_name,
+    )
+    raw = LLMAdapter().call_llm(
+        prompt=prompt,
+        system_message="You extract structured data. Reply with JSON only, no prose.",
+        model=model,
+        provider=provider,
+        temperature=0.0,
+        max_tokens=None,
+    )
+    data = parse_structured_llm_schema_text(raw, schema)
+    if data is not None:
+        return data
+    if raw.strip():
+        return {"raw_content": raw}
+    return None
 
 
 def parse_structured_llm_schema_text(raw: str, schema: type[BaseModel]) -> dict[str, Any] | None:
@@ -153,19 +240,41 @@ async def _extract_structured_google_backend(
     instruction: str,
     start_time: float,
 ) -> dict[str, Any] | None:
-    wf_backend, provider, model = _crawl4ai_structured_llm_resolution(model_name)
+    wf_backend, llm_provider, llm_model = _crawl4ai_structured_llm_resolution(model_name)
     _SCRAPER_LOG.info(
         "crawl4ai_step_google_backend",
         url=url,
         workflow_llm_backend=wf_backend,
-        llm_provider=provider,
-        llm_model=model,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
         llm_model_hint=model_name,
     )
-    run_config = _markdown_only_run_config()
+    if get_workflow_url_fetch_http_first():
+        http_text = await asyncio.to_thread(
+            fetch_main_text_via_http,
+            url,
+            timeout_sec=get_workflow_url_fetch_http_timeout_sec(),
+            min_chars=get_workflow_url_fetch_http_min_chars(),
+        )
+        if http_text:
+            _SCRAPER_LOG.info(
+                "crawl4ai_http_first_hit",
+                url=url,
+                text_chars=len(http_text),
+            )
+            quick = _sync_llm_schema_extract(
+                http_text, url, schema, model_name, instruction
+            )
+            if quick is not None:
+                _SCRAPER_LOG.info("crawl4ai_success", url=url)
+                _tracker.end(url, start_time, success=True)
+                return quick
+            _SCRAPER_LOG.warning("crawl4ai_http_first_llm_miss_fallback_browser", url=url)
+
+    run_config = _browser_markdown_run_config()
     try:
-        async with AsyncWebCrawler(verbose=False) as crawler:
-            result: Any = await crawler.arun(url=url, config=run_config)
+        crawler = await _shared_crawler_instance()
+        result: Any = await crawler.arun(url=url, config=run_config)
     except Exception:
         _SCRAPER_LOG.exception("crawl4ai_unexpected_error", url=url)
         _tracker.end(url, start_time, success=False)
@@ -185,35 +294,13 @@ async def _extract_structured_google_backend(
         _tracker.end(url, start_time, success=False)
         return None
 
-    schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
-    prompt = (
-        f"{instruction}\n\n"
-        "Output a single JSON object only (no markdown fences) that conforms "
-        f"to this JSON Schema:\n{schema_json}\n\nPage content:\n{page_text[:120_000]}"
+    out = _sync_llm_schema_extract(
+        page_text, url, schema, model_name, instruction
     )
-    _SCRAPER_LOG.info(
-        "crawl4ai_llm_invoke",
-        url=url,
-        llm_provider=provider,
-        llm_model=model,
-        llm_model_hint=model_name,
-    )
-    raw = LLMAdapter().call_llm(
-        prompt=prompt,
-        system_message="You extract structured data. Reply with JSON only, no prose.",
-        model=model,
-        provider=provider,
-        temperature=0.0,
-        max_tokens=None,
-    )
-    data = parse_structured_llm_schema_text(raw, schema)
-    if data is not None:
+    if out is not None:
         _SCRAPER_LOG.info("crawl4ai_success", url=url)
         _tracker.end(url, start_time, success=True)
-        return data
-    if raw.strip():
-        _tracker.end(url, start_time, success=True)
-        return {"raw_content": raw}
+        return out
     _tracker.end(url, start_time, success=False)
     return None
 
@@ -234,6 +321,30 @@ async def _extract_structured_lm_studio_backend(
         llm_model=llm_model,
         llm_model_hint=model_name,
     )
+    if get_workflow_url_fetch_http_first():
+        http_text = await asyncio.to_thread(
+            fetch_main_text_via_http,
+            url,
+            timeout_sec=get_workflow_url_fetch_http_timeout_sec(),
+            min_chars=get_workflow_url_fetch_http_min_chars(),
+        )
+        if http_text:
+            _SCRAPER_LOG.info(
+                "crawl4ai_lm_http_first_hit",
+                url=url,
+                text_chars=len(http_text),
+            )
+            quick = _sync_llm_schema_extract(
+                http_text, url, schema, model_name, instruction
+            )
+            if quick is not None:
+                _SCRAPER_LOG.info("crawl4ai_success", url=url)
+                _tracker.end(url, start_time, success=True)
+                return quick
+            _SCRAPER_LOG.warning(
+                "crawl4ai_lm_http_first_llm_miss_fallback_browser", url=url
+            )
+
     base_url = get_lm_studio_url()
     llm_config = LLMConfig(
         provider=f"openai/{model_name}",
@@ -248,90 +359,82 @@ async def _extract_structured_lm_studio_backend(
         input_format="fit_markdown",
         verbose=False,
     )
-    run_config = CrawlerRunConfig(
-        extraction_strategy=strategy,
-        cache_mode=CacheMode.BYPASS,
-        magic=True,
-        remove_overlay_elements=True,
-        js_code=JS_CONSENT_CLICK,
-        wait_for="body",
-        page_timeout=60000,
-    )
+    run_config = _browser_lm_run_config(strategy)
     _SCRAPER_LOG.info("crawl4ai_step_visit", url=url)
     try:
-        async with AsyncWebCrawler(verbose=False) as crawler:
-            result: Any = await crawler.arun(url=url, config=run_config)
+        crawler = await _shared_crawler_instance()
+        result: Any = await crawler.arun(url=url, config=run_config)
 
-            if not result.success:
-                _SCRAPER_LOG.error(
-                    "crawl4ai_crawl_failed",
-                    url=url,
-                    error_message=result.error_message,
-                )
-                _tracker.end(url, start_time, success=False)
-                return None
+        if not result.success:
+            _SCRAPER_LOG.error(
+                "crawl4ai_crawl_failed",
+                url=url,
+                error_message=result.error_message,
+            )
+            _tracker.end(url, start_time, success=False)
+            return None
 
-            _SCRAPER_LOG.info("crawl4ai_step_parse", url=url)
+        _SCRAPER_LOG.info("crawl4ai_step_parse", url=url)
 
-            try:
-                extracted = result.extracted_content
-                if not (isinstance(extracted, str) and extracted.strip()):
-                    fb = _page_text_fallback(result)
-                    if fb:
-                        _SCRAPER_LOG.warning(
-                            "crawl4ai_fallback_markdown",
-                            reason="no_llm_extracted_content",
-                            url=url,
-                        )
-                        _tracker.end(url, start_time, success=True)
-                        return {"raw_content": fb}
-                    _tracker.end(url, start_time, success=False)
-                    return None
-                data = json.loads(extracted)
-                if data is None or (isinstance(data, list) and len(data) == 0):
-                    fb = _page_text_fallback(result)
-                    if fb:
-                        _SCRAPER_LOG.warning(
-                            "crawl4ai_fallback_markdown",
-                            reason="llm_json_empty",
-                            url=url,
-                        )
-                        _tracker.end(url, start_time, success=True)
-                        return {"raw_content": fb}
-                    _tracker.end(url, start_time, success=False)
-                    return None
-                _SCRAPER_LOG.info("crawl4ai_success", url=url)
-                _tracker.end(url, start_time, success=True)
-                return cast(dict[str, Any], data)
-            except json.JSONDecodeError:
-                _SCRAPER_LOG.warning(
-                    "crawl4ai_llm_raw_text_not_json",
-                    url=url,
-                )
-                raw_err = result.extracted_content
-                if isinstance(raw_err, str) and raw_err.strip():
-                    _tracker.end(url, start_time, success=True)
-                    return {"raw_content": raw_err}
-                fb = _page_text_fallback(result)
-                if fb:
-                    _tracker.end(url, start_time, success=True)
-                    return {"raw_content": fb}
-                _tracker.end(url, start_time, success=False)
-                return None
-            except Exception as e:
-                _SCRAPER_LOG.exception("crawl4ai_content_processing_error", url=url)
+        try:
+            extracted = result.extracted_content
+            if not (isinstance(extracted, str) and extracted.strip()):
                 fb = _page_text_fallback(result)
                 if fb:
                     _SCRAPER_LOG.warning(
                         "crawl4ai_fallback_markdown",
-                        reason="after_parse_error",
+                        reason="no_llm_extracted_content",
                         url=url,
-                        error=str(e),
                     )
                     _tracker.end(url, start_time, success=True)
                     return {"raw_content": fb}
                 _tracker.end(url, start_time, success=False)
                 return None
+            data = json.loads(extracted)
+            if data is None or (isinstance(data, list) and len(data) == 0):
+                fb = _page_text_fallback(result)
+                if fb:
+                    _SCRAPER_LOG.warning(
+                        "crawl4ai_fallback_markdown",
+                        reason="llm_json_empty",
+                        url=url,
+                    )
+                    _tracker.end(url, start_time, success=True)
+                    return {"raw_content": fb}
+                _tracker.end(url, start_time, success=False)
+                return None
+            _SCRAPER_LOG.info("crawl4ai_success", url=url)
+            _tracker.end(url, start_time, success=True)
+            return cast(dict[str, Any], data)
+        except json.JSONDecodeError:
+            _SCRAPER_LOG.warning(
+                "crawl4ai_llm_raw_text_not_json",
+                url=url,
+            )
+            raw_err = result.extracted_content
+            if isinstance(raw_err, str) and raw_err.strip():
+                _tracker.end(url, start_time, success=True)
+                return {"raw_content": raw_err}
+            fb = _page_text_fallback(result)
+            if fb:
+                _tracker.end(url, start_time, success=True)
+                return {"raw_content": fb}
+            _tracker.end(url, start_time, success=False)
+            return None
+        except Exception as e:
+            _SCRAPER_LOG.exception("crawl4ai_content_processing_error", url=url)
+            fb = _page_text_fallback(result)
+            if fb:
+                _SCRAPER_LOG.warning(
+                    "crawl4ai_fallback_markdown",
+                    reason="after_parse_error",
+                    url=url,
+                    error=str(e),
+                )
+                _tracker.end(url, start_time, success=True)
+                return {"raw_content": fb}
+            _tracker.end(url, start_time, success=False)
+            return None
     except Exception:
         _SCRAPER_LOG.exception("crawl4ai_unexpected_error", url=url)
         _tracker.end(url, start_time, success=False)
@@ -345,10 +448,13 @@ async def extract_structured_data(
     instruction: str = "Extract the data according to the schema.",
 ) -> dict[str, Any] | None:
     """
-    Crawl4AI page fetch; structured fields via LLM.
+    Structured article fields via LLM after optional HTTP-first HTML text, then Crawl4AI.
 
-    ``WORKFLOW_LLM_BACKEND=lm_studio``: OpenAI-compatible server at ``LM_STUDIO_URL``.
-    ``ai_studio`` / ``google`` / ``gemini``: markdown crawl then ``LLMAdapter`` (Gemini).
+    When ``WORKFLOW_URL_FETCH_HTTP_FIRST`` allows it, tries httpx + HTML text first
+    (fast path). On miss or insufficient text, uses a shared ``AsyncWebCrawler``.
+
+    ``WORKFLOW_LLM_BACKEND=lm_studio``: crawl may use embedded LLM extraction.
+    ``ai_studio`` / ``google`` / ``gemini``: crawl for markdown/HTML then ``LLMAdapter``.
     """
     start_time = _tracker.start(url)
     wf_backend, llm_provider, llm_model = _crawl4ai_structured_llm_resolution(model_name)

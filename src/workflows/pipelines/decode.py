@@ -121,6 +121,10 @@ def _extract_decode_index(
     return None, "none"
 
 
+def _is_strict_decode_success_mode(mode: str) -> bool:
+    return mode in {"json_idx", "labeled", "last_line"}
+
+
 class DecodePipeline:
     """Runs semantic shortlist + LLM decode to map stego text to a tangent index."""
 
@@ -143,6 +147,7 @@ class DecodePipeline:
         angles: list[dict[str, Any]],
         few_shots: list[dict[str, Any]] | None = None,
         base_url: str | None = None,
+        strict_mode: bool = False,
     ) -> int | None:
         """
         Decode stego text to angle index.
@@ -339,6 +344,32 @@ class DecodePipeline:
                 )
 
             picked, how = _extract_decode_index(response, allowed_indices, top_candidates)
+            if strict_mode:
+                if picked is None:
+                    self._log.warning(
+                        "decode_strict_parse_failed",
+                        log_area="strict",
+                        strict_mode=True,
+                        extract_how=how,
+                    )
+                    return None
+                if not _is_strict_decode_success_mode(how):
+                    self._log.warning(
+                        "decode_strict_rejected_fallback_mode",
+                        log_area="strict",
+                        strict_mode=True,
+                        decoded_index=picked,
+                        extract_how=how,
+                    )
+                    return None
+                self._log.info(
+                    "decode_strict_index_resolved",
+                    log_area="strict",
+                    strict_mode=True,
+                    decoded_index=picked,
+                    extract_how=how,
+                )
+                return picked
             if picked is not None and how != "rank_fallback":
                 self._log.info(
                     "decode_index_resolved",

@@ -541,6 +541,10 @@ def test_run_double_process_new_post_explicit_id_conflicts_with_claim(monkeypatc
 
     runner = WorkflowRunner.__new__(WorkflowRunner)
     runner.backend = object()
+    monkeypatch.setattr(
+        "workflows.runner.has_active_run_for_command",
+        lambda _cmd: True,
+    )
 
     with pytest.raises(ValueError, match="Active double-process claim"):
         runner.run_double_process_new_post(explicit_post_id="b")
@@ -874,3 +878,43 @@ def test_validate_post_pipeline_missing_baseline(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         runner.validate_post_pipeline(post_id)
+
+
+def test_reconcile_stale_double_process_claim_clears_when_idle(tmp_path, monkeypatch):
+    from workflows.runner_orchestration_utils import (
+        double_process_cache_base_root,
+        reconcile_stale_double_process_claim_vs_explicit,
+        try_read_double_process_claim,
+        write_double_process_claim,
+    )
+
+    monkeypatch.setattr(
+        "workflows.runner_orchestration_utils.double_process_cache_base_root",
+        lambda: tmp_path.resolve(),
+    )
+    double_process_cache_base_root()
+    write_double_process_claim("old", "old.json")
+    reconcile_stale_double_process_claim_vs_explicit(
+        "new", has_active_double_process_run=False
+    )
+    assert try_read_double_process_claim() is None
+
+
+def test_reconcile_stale_double_process_claim_keeps_when_active(tmp_path, monkeypatch):
+    from workflows.runner_orchestration_utils import (
+        double_process_cache_base_root,
+        reconcile_stale_double_process_claim_vs_explicit,
+        try_read_double_process_claim,
+        write_double_process_claim,
+    )
+
+    monkeypatch.setattr(
+        "workflows.runner_orchestration_utils.double_process_cache_base_root",
+        lambda: tmp_path.resolve(),
+    )
+    double_process_cache_base_root()
+    write_double_process_claim("old", "old.json")
+    reconcile_stale_double_process_claim_vs_explicit(
+        "new", has_active_double_process_run=True
+    )
+    assert try_read_double_process_claim() == ("old", "old.json")

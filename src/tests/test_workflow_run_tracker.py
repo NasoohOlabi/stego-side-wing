@@ -21,8 +21,11 @@ def test_tracker_register_and_end():
     assert snap[0]["command"] == "stego"
     assert snap[0]["mode"] == "sync"
     assert "elapsed_ms" in snap[0]
+    assert tracker.has_active_run_for_command("stego") is True
+    assert tracker.has_active_run_for_command("decode") is False
     tracker.end_run(rid)
     assert list(tracker.iter_snapshot()) == []
+    assert tracker.has_active_run_for_command("stego") is False
 
 
 def test_track_workflow_context():

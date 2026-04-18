@@ -14,6 +14,7 @@ from workflows.pipelines.research import ResearchPipeline
 from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.stego_codec import (
     build_dictionary,
+    build_dictionary_report,
     flatten_nested_angles,
     recover_payload_bruteforce_comment_bits,
     recover_payload_with_compressed_full,
@@ -106,6 +107,41 @@ def nested_angles_from_post(post: dict[str, Any]) -> list[list[dict[str, Any]]]:
     return [x if isinstance(x, list) else [x] for x in raw if x is not None]
 
 
+def _extract_sender_audit(post: dict[str, Any]) -> dict[str, Any] | None:
+    explicit = post.get("sender_audit")
+    if isinstance(explicit, dict):
+        return explicit
+    embedding = post.get("embedding")
+    if not isinstance(embedding, dict):
+        return None
+    embedded = embedding.get("senderAudit")
+    return embedded if isinstance(embedded, dict) else None
+
+
+def _rebuilt_selected_urls_hash(rebuilt_post: dict[str, Any]) -> str:
+    urls = rebuilt_post.get("search_results", [])
+    if not isinstance(urls, list):
+        return stable_hash([])
+    return stable_hash([stable_hash(item) for item in urls])
+
+
+def _context_drift_mismatches(
+    sender_audit: dict[str, Any], rebuilt_post: dict[str, Any], rebuilt_summary: dict[str, Any]
+) -> list[dict[str, Any]]:
+    checks = (
+        ("dictionary_hash", sender_audit.get("dictionary_hash"), rebuilt_summary.get("dictionary_hash")),
+        ("dictionary_count", sender_audit.get("dictionary_count"), rebuilt_summary.get("dictionary_count")),
+        ("angles_hash", sender_audit.get("angles_hash"), rebuilt_summary.get("angles_hash")),
+        ("angles_count", sender_audit.get("angles_count"), rebuilt_summary.get("angles_count")),
+        ("selected_urls_hash", sender_audit.get("selected_urls_hash"), _rebuilt_selected_urls_hash(rebuilt_post)),
+    )
+    return [
+        {"field": field, "expected": expected, "actual": actual}
+        for field, expected, actual in checks
+        if expected is not None and expected != actual
+    ]
+
+
 class ReceiverPipeline:
     """Orchestrates data-load, research, angles, and decode to recover a stego payload."""
 
@@ -163,6 +199,7 @@ class ReceiverPipeline:
         )
         ga = self.gen_angles.preview_post(post_rs, allow_fallback=allow_fallback)
         rebuilt = ga["post"]
+        dictionary_report = build_dictionary_report(rebuilt)
 
         summary = {
             "selftext_hash": stable_hash(rebuilt.get("selftext", "")),
@@ -178,6 +215,13 @@ class ReceiverPipeline:
             if isinstance(rebuilt.get("angles"), list)
             else 0,
             "options_count": rebuilt.get("options_count"),
+            "dictionary_id": dictionary_report["dictionary_id"],
+            "dictionary_hash": dictionary_report["texts_hash"],
+            "dictionary_count": dictionary_report["entry_count"],
+            "dictionary_raw_count": dictionary_report["raw_entry_count"],
+            "dictionary_source_counts": dictionary_report["source_counts"],
+            "dictionary_truncated_sources": dictionary_report["truncated_sources"],
+            "dictionary_capacity_applied": dictionary_report["capacity_applied"],
         }
         reports = {"data_load": dl_report, "research": rs["report"], "gen_angles": ga["report"]}
         return rebuilt, {"summary": summary, "reports": reports}
@@ -191,6 +235,8 @@ class ReceiverPipeline:
         nested_angles: list[list[dict[str, Any]]],
         compressed_full: str | None = None,
         max_padding_bits: int = 256,
+        strict_mode: bool = False,
+        expected_angle_index: int | None = None,
         on_progress: ProgressCb = None,
     ) -> tuple[str, dict[str, Any]]:
         tangents_db = flatten_nested_angles(rebuilt_post)
@@ -206,9 +252,18 @@ class ReceiverPipeline:
                 "tags": ["workflow"],
             },
         )
-        decoded_idx = self.decode.decode(stego_text=stego_text, angles=tangents_db)
+        decoded_idx = self.decode.decode(
+            stego_text=stego_text,
+            angles=tangents_db,
+            strict_mode=strict_mode,
+        )
         if decoded_idx is None:
             raise RuntimeError("DecodePipeline could not map stego text to an angle index")
+        if expected_angle_index is not None and decoded_idx != expected_angle_index:
+            raise RuntimeError(
+                "Decoded angle index does not match sender audit "
+                f"(expected={expected_angle_index}, got={decoded_idx})"
+            )
 
         dictionary = build_dictionary(rebuilt_post)
         _emit(
@@ -258,6 +313,8 @@ class ReceiverPipeline:
         allow_fallback: bool = False,
         compressed_full: str | None = None,
         max_padding_bits: int = 256,
+        fail_on_context_drift: bool = True,
+        strict_decode: bool = False,
         on_progress: ProgressCb = None,
     ) -> dict[str, Any]:
         post_id = post.get("id", "<unknown>")
@@ -295,6 +352,25 @@ class ReceiverPipeline:
             allow_fallback=allow_fallback,
             on_progress=on_progress,
         )
+        sender_audit = _extract_sender_audit(post)
+        drift_mismatches: list[dict[str, Any]] = []
+        if isinstance(sender_audit, dict):
+            drift_mismatches = _context_drift_mismatches(
+                sender_audit, rebuilt, rebuild_info["summary"]
+            )
+        if drift_mismatches and fail_on_context_drift:
+            return {
+                "succeeded": False,
+                "stage": "context_drift",
+                "post_id": post.get("id"),
+                "located_comment": located_summary,
+                "rebuild_summary": rebuild_info["summary"],
+                "rebuild_reports": rebuild_info["reports"],
+                "context_drift": {
+                    "status": "failed",
+                    "mismatches": drift_mismatches,
+                },
+            }
 
         nested_rebuilt = nested_angles_from_post(rebuilt)
         payload, decode_info = self.decode_payload(
@@ -304,6 +380,11 @@ class ReceiverPipeline:
             nested_angles=nested_rebuilt,
             compressed_full=compressed_full,
             max_padding_bits=max_padding_bits,
+            strict_mode=strict_decode,
+            expected_angle_index=sender_audit.get("selected_angle_index")
+            if isinstance(sender_audit, dict)
+            and isinstance(sender_audit.get("selected_angle_index"), int)
+            else None,
             on_progress=on_progress,
         )
 
@@ -316,4 +397,8 @@ class ReceiverPipeline:
             "decoded_angle_index": decode_info["decoded_angle_index"],
             "recovery_meta": decode_info["recovery_meta"],
             "rebuild_reports": rebuild_info["reports"],
+            "context_drift": {
+                "status": "checked" if isinstance(sender_audit, dict) else "not_provided",
+                "mismatches": drift_mismatches,
+            },
         }

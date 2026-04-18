@@ -68,6 +68,12 @@ def test_extract_structured_google_backend_uses_llm_after_crawl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "ai_studio")
+    scraper_mod.reset_shared_crawler_for_tests()
+    monkeypatch.setattr(
+        scraper_mod,
+        "fetch_main_text_via_http",
+        lambda url, **kw: None,
+    )
 
     class _FakeMd:
         fit_markdown = "# Page\n\nBody paragraph."
@@ -83,6 +89,9 @@ def test_extract_structured_google_backend_uses_llm_after_crawl(
     class _FakeCrawler:
         def __init__(self, verbose: bool = False) -> None:
             pass
+
+        async def start(self) -> "_FakeCrawler":
+            return self
 
         async def __aenter__(self) -> "_FakeCrawler":
             return self

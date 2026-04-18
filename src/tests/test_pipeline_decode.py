@@ -74,6 +74,38 @@ def test_decode_falls_back_to_top_semantic_match_when_llm_invalid():
     assert pipeline.decode("message", angles) == 1
 
 
+def test_decode_strict_mode_rejects_rank_fallback():
+    angles = [
+        {"source_quote": "q0", "tangent": "t0"},
+        {"source_quote": "q1", "tangent": "t1"},
+        {"source_quote": "q2", "tangent": "t2"},
+        {"source_quote": "q3", "tangent": "t3"},
+        {"source_quote": "q4", "tangent": "t4"},
+        {"source_quote": "q5", "tangent": "t5"},
+    ]
+    pipeline = DecodePipeline.__new__(DecodePipeline)
+    pipeline.backend = SimpleNamespace(
+        semantic_search=lambda text, objects, n: {"results": [{"object": angles[5]}]}
+    )
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "1")
+
+    assert pipeline.decode("message", angles, strict_mode=True) is None
+
+
+def test_decode_strict_mode_accepts_labeled_index():
+    angles = [
+        {"source_quote": "q0", "tangent": "t0"},
+        {"source_quote": "q1", "tangent": "t1"},
+    ]
+    pipeline = DecodePipeline.__new__(DecodePipeline)
+    pipeline.backend = SimpleNamespace(
+        semantic_search=lambda text, objects, n: {"results": [{"object": angles[1]}]}
+    )
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "idx: 1")
+
+    assert pipeline.decode("message", angles, strict_mode=True) == 1
+
+
 def test_decode_returns_none_on_runtime_error():
     angles = [{"source_quote": "q0", "tangent": "t0"}]
     pipeline = DecodePipeline.__new__(DecodePipeline)

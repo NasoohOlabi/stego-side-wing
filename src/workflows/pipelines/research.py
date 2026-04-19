@@ -169,7 +169,13 @@ class ResearchPipeline:
         }
 
     def _web_search_google_or_bing(
-        self, query: str, first: int, count: int, post_id: str
+        self,
+        query: str,
+        first: int,
+        count: int,
+        post_id: str,
+        *,
+        disable_bing_fallback: bool = False,
     ) -> dict[str, Any]:
         """Google CSE first; on quota-style failures try Bing (ScrapingDog) if configured."""
         from services.search_service import search_bing
@@ -178,6 +184,8 @@ class ResearchPipeline:
             return self.backend.google_search(query=query, first=first, count=count)
         except Exception as e:
             if not is_likely_google_quota_error(e):
+                raise
+            if disable_bing_fallback:
                 raise
             self._log.warning(
                 "research_google_bing_fallback",
@@ -201,6 +209,7 @@ class ResearchPipeline:
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
+        disable_bing_fallback: bool = False,
     ) -> dict[str, Any]:
         """Run the live research protocol without saving the output."""
         post_id = post.get("id")
@@ -344,7 +353,11 @@ class ResearchPipeline:
             )
             try:
                 search_response = self._web_search_google_or_bing(
-                    query=term, first=1, count=10, post_id=str(post_id)
+                    query=term,
+                    first=1,
+                    count=10,
+                    post_id=str(post_id),
+                    disable_bing_fallback=disable_bing_fallback,
                 )
                 raw_results = search_response.get("results", [])
                 raw_results_by_term.append(list(raw_results))
@@ -628,6 +641,7 @@ class ResearchPipeline:
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
+        disable_bing_fallback: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         preview = self.preview_post(
             post=post,
@@ -636,6 +650,7 @@ class ResearchPipeline:
             use_terms_cache=use_terms_cache,
             persist_terms_cache=persist_terms_cache,
             use_fetch_cache=use_fetch_cache,
+            disable_bing_fallback=disable_bing_fallback,
         )
         return preview["post"], preview["report"]
 
@@ -647,6 +662,7 @@ class ResearchPipeline:
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
+        disable_bing_fallback: bool = False,
     ) -> dict:
         """
         Research a single post: generate terms, search, fetch content.
@@ -665,6 +681,7 @@ class ResearchPipeline:
             use_terms_cache=use_terms_cache,
             persist_terms_cache=persist_terms_cache,
             use_fetch_cache=use_fetch_cache,
+            disable_bing_fallback=disable_bing_fallback,
         )
         return post_out
 
@@ -674,6 +691,7 @@ class ResearchPipeline:
         count: int = 1,
         offset: int = 1,
         include_breakdown: bool = False,
+        disable_bing_fallback: bool = False,
     ) -> list[dict]:
         """
         Process multiple posts for research.
@@ -720,7 +738,10 @@ class ResearchPipeline:
             except Exception:
                 self._log.exception("research load failed for file={}", file_name)
         results = self.process_post_objects(
-            posts=posts, step=step, include_breakdown=include_breakdown
+            posts=posts,
+            step=step,
+            include_breakdown=include_breakdown,
+            disable_bing_fallback=disable_bing_fallback,
         )
         log.info(
             "research_process_posts_complete",
@@ -740,6 +761,7 @@ class ResearchPipeline:
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
         include_breakdown: bool = False,
+        disable_bing_fallback: bool = False,
     ) -> list[dict[str, Any]]:
         """Process already-loaded post objects and persist researched versions."""
         researched_posts: list[dict[str, Any]] = []
@@ -757,6 +779,7 @@ class ResearchPipeline:
                     use_terms_cache=use_terms_cache,
                     persist_terms_cache=persist_terms_cache,
                     use_fetch_cache=use_fetch_cache,
+                    disable_bing_fallback=disable_bing_fallback,
                 )
                 if include_breakdown:
                     self.last_research_breakdown_posts.append(
@@ -795,6 +818,7 @@ class ResearchPipeline:
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
         use_fetch_cache: bool = True,
+        disable_bing_fallback: bool = False,
     ) -> dict[str, Any]:
         """
         Process one post by ID and persist researched output.
@@ -815,6 +839,7 @@ class ResearchPipeline:
             use_terms_cache=use_terms_cache,
             persist_terms_cache=persist_terms_cache,
             use_fetch_cache=use_fetch_cache,
+            disable_bing_fallback=disable_bing_fallback,
         )
         if not results:
             raise RuntimeError(f"Research returned no result for post {post_id}")

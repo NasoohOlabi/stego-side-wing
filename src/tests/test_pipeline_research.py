@@ -192,3 +192,24 @@ def test_preview_post_caps_selected_urls(monkeypatch, clear_workflow_capacity_en
     ]
     assert preview["report"]["capacity"]["selected_url_cap_hit"] is True
     assert preview["report"]["capacity"]["max_selected_urls"] == 2
+
+
+def test_web_search_google_or_bing_raises_quota_when_bing_fallback_disabled(monkeypatch):
+    pipeline = _research_pipeline_stub()
+    pipeline.backend = SimpleNamespace(
+        google_search=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("429 quota exceeded"))
+    )
+
+    def _should_not_use_bing(**kwargs):
+        raise AssertionError("bing fallback should be disabled")
+
+    monkeypatch.setattr("services.search_service.search_bing", _should_not_use_bing)
+
+    with pytest.raises(RuntimeError, match="quota"):
+        pipeline._web_search_google_or_bing(
+            query="term",
+            first=1,
+            count=10,
+            post_id="p1",
+            disable_bing_fallback=True,
+        )

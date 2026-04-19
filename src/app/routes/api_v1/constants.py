@@ -6,6 +6,7 @@ WORKFLOW_COMMANDS = (
     "data-load",
     "research",
     "gen-angles",
+    "prep-until-google-quota-then-stego",
     "double-process-new-post",
     "batch-angles-determinism",
     "validate-post",

@@ -20,25 +20,25 @@ from infrastructure.config import (
 )
 
 
-def test_workflow_capacity_defaults_to_mid(
+def test_workflow_capacity_defaults_to_uncapped_mid_profile(
     clear_workflow_capacity_env: None,
 ) -> None:
-    assert get_workflow_capacity_settings()["limits_enabled"] is True
+    assert get_workflow_capacity_settings()["limits_enabled"] is False
     assert get_workflow_capacity_profile() == "mid"
-    assert get_workflow_research_max_terms() == 8
-    assert get_workflow_research_max_selected_urls() == 24
-    assert get_workflow_dictionary_max_search_results() == 24
-    assert get_workflow_dictionary_max_comments() == 32
-    assert get_workflow_angles_max_input_blocks() == 48
-    assert get_workflow_angles_max_output() == 16
+    assert get_workflow_research_max_terms() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    assert get_workflow_research_max_selected_urls() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    assert get_workflow_dictionary_max_search_results() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    assert get_workflow_dictionary_max_comments() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    assert get_workflow_angles_max_input_blocks() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+    assert get_workflow_angles_max_output() == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
 
 
 @pytest.mark.parametrize(
     ("profile", "expected_terms", "expected_urls", "expected_blocks"),
     (
         ("low", 4, 12, 24),
-        ("high", 12, 48, 128),
-        ("weird", 8, 24, 48),
+        ("high", 12, 96, 192),
+        ("weird", 8, 48, 96),
     ),
 )
 def test_workflow_capacity_profile_presets(
@@ -49,6 +49,7 @@ def test_workflow_capacity_profile_presets(
     expected_urls: int,
     expected_blocks: int,
 ) -> None:
+    monkeypatch.setenv("WORKFLOW_CAPACITY_LIMITS_ENABLED", "1")
     monkeypatch.setenv("WORKFLOW_CAPACITY_PROFILE", profile)
     assert get_workflow_research_max_terms() == expected_terms
     assert get_workflow_research_max_selected_urls() == expected_urls
@@ -68,7 +69,7 @@ def test_workflow_capacity_explicit_overrides(
     monkeypatch.setenv("WORKFLOW_ANGLES_MAX_OUTPUT", "13")
     settings = get_workflow_capacity_settings()
     assert settings == {
-        "limits_enabled": True,
+        "limits_enabled": False,
         "profile": "low",
         "research_max_terms": 3,
         "research_max_selected_urls": 9,

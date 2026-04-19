@@ -230,6 +230,7 @@ class WorkflowRunner:
         offset: int = 0,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
         include_breakdown: bool = False,
+        disable_bing_fallback: bool = False,
     ) -> Any:
         """Run Research pipeline."""
         trace_id = str(uuid4())
@@ -252,6 +253,7 @@ class WorkflowRunner:
             count=count,
             offset=offset,
             include_breakdown=include_breakdown,
+            disable_bing_fallback=disable_bing_fallback,
         )
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         processed_count = len(results)
@@ -292,6 +294,320 @@ class WorkflowRunner:
             },
         )
         return payload_out
+
+    def run_prep_until_google_quota_then_stego(
+        self,
+        *,
+        tag: str,
+        batch_count: int = 1,
+        batch_size: int = 5,
+        payload: str | None = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        prep_iterations = 0
+        prep_totals = {
+            "data_load_processed": 0,
+            "research_processed": 0,
+            "gen_angles_processed": 0,
+            "gen_angles_failed": 0,
+            "prepared_posts": 0,
+        }
+        quota_detected = False
+        prep_stop_reason = "unknown"
+        phase_transition: dict[str, Any] | None = None
+
+        self._emit(
+            on_progress,
+            "workflow_start",
+            {
+                "workflow": "prep-until-google-quota-then-stego",
+                "tag": tag,
+                "payload_provided": bool(payload),
+                "batch_count": batch_count,
+                "batch_size": batch_size,
+            },
+        )
+        self._emit(on_progress, "phase_start", {"phase": "prep"})
+
+        while True:
+            prep_iterations += 1
+            self._emit(
+                on_progress,
+                "prep_batch_start",
+                {
+                    "phase": "prep",
+                    "iteration": prep_iterations,
+                    "batch_count": batch_count,
+                    "batch_size": batch_size,
+                },
+            )
+
+            t_data = time.perf_counter()
+            data_results = self.run_data_load(
+                count=batch_count,
+                offset=0,
+                batch_size=batch_size,
+            )
+            data_elapsed_ms = int((time.perf_counter() - t_data) * 1000)
+            data_processed = len(data_results)
+            prep_totals["data_load_processed"] += data_processed
+            self._emit(
+                on_progress,
+                "prep_stage_done",
+                {
+                    "phase": "prep",
+                    "iteration": prep_iterations,
+                    "stage": "data-load",
+                    "processed_count": data_processed,
+                    "elapsed_ms": data_elapsed_ms,
+                },
+            )
+            if not data_results:
+                prep_stop_reason = "no_more_posts"
+                self._emit(
+                    on_progress,
+                    "prep_batch_summary",
+                    {
+                        "phase": "prep",
+                        "iteration": prep_iterations,
+                        "data_load_processed": 0,
+                        "research_processed": 0,
+                        "gen_angles_processed": 0,
+                        "gen_angles_failed": 0,
+                        "prepared_posts_in_batch": 0,
+                        "produced_prepared_posts": False,
+                    },
+                )
+                break
+
+            t_research = time.perf_counter()
+            try:
+                research_results = self.research.process_post_objects(
+                    posts=data_results,
+                    step="filter-researched",
+                    disable_bing_fallback=True,
+                )
+            except Exception as exc:
+                if is_likely_google_quota_error(exc):
+                    quota_detected = True
+                    prep_stop_reason = "google_search_quota_detected"
+                    self._emit(
+                        on_progress,
+                        "quota_detected",
+                        {
+                            "phase": "prep",
+                            "iteration": prep_iterations,
+                            "stage": "research",
+                            "message": str(exc),
+                        },
+                    )
+                    break
+                raise
+            research_elapsed_ms = int((time.perf_counter() - t_research) * 1000)
+            research_processed = len(research_results)
+            prep_totals["research_processed"] += research_processed
+            self._emit(
+                on_progress,
+                "prep_stage_done",
+                {
+                    "phase": "prep",
+                    "iteration": prep_iterations,
+                    "stage": "research",
+                    "processed_count": research_processed,
+                    "elapsed_ms": research_elapsed_ms,
+                },
+            )
+
+            t_angles = time.perf_counter()
+            angles_results = self.gen_angles.process_post_objects(
+                posts=research_results,
+                step="angles-step",
+            )
+            angles_elapsed_ms = int((time.perf_counter() - t_angles) * 1000)
+            angles_summary = dict(getattr(self.gen_angles, "_last_batch_summary", {}) or {})
+            angles_processed = len(angles_results)
+            angles_failed = int(angles_summary.get("failed_count", 0) or 0)
+            prep_totals["gen_angles_processed"] += angles_processed
+            prep_totals["gen_angles_failed"] += angles_failed
+            prep_totals["prepared_posts"] += angles_processed
+            self._emit(
+                on_progress,
+                "prep_stage_done",
+                {
+                    "phase": "prep",
+                    "iteration": prep_iterations,
+                    "stage": "gen-angles",
+                    "processed_count": angles_processed,
+                    "failed_count": angles_failed,
+                    "elapsed_ms": angles_elapsed_ms,
+                },
+            )
+            produced_prepared_posts = angles_processed > 0
+            self._emit(
+                on_progress,
+                "prep_batch_summary",
+                {
+                    "phase": "prep",
+                    "iteration": prep_iterations,
+                    "data_load_processed": data_processed,
+                    "research_processed": research_processed,
+                    "gen_angles_processed": angles_processed,
+                    "gen_angles_failed": angles_failed,
+                    "prepared_posts_in_batch": angles_processed,
+                    "produced_prepared_posts": produced_prepared_posts,
+                },
+            )
+            if not produced_prepared_posts:
+                prep_stop_reason = "no_prepared_posts_in_batch"
+                break
+
+        prep_result = {
+            "iterations": prep_iterations,
+            "data_load_processed": prep_totals["data_load_processed"],
+            "research_processed": prep_totals["research_processed"],
+            "gen_angles_processed": prep_totals["gen_angles_processed"],
+            "gen_angles_failed": prep_totals["gen_angles_failed"],
+            "prepared_posts": prep_totals["prepared_posts"],
+            "quota_detected": quota_detected,
+            "stop_reason": prep_stop_reason,
+        }
+        self._emit(on_progress, "phase_done", {"phase": "prep", **prep_result})
+
+        if quota_detected:
+            phase_transition = {
+                "from_phase": "prep",
+                "to_phase": "stego",
+                "reason": "google_search_quota_detected",
+            }
+            self._emit(on_progress, "phase_transition", phase_transition)
+
+        self._emit(on_progress, "phase_start", {"phase": "stego"})
+        self._emit(
+            on_progress,
+            "stego_batch_start",
+            {
+                "phase": "stego",
+                "tag": tag,
+                "list_offset": 0,
+            },
+        )
+
+        stego_results: list[dict[str, Any]] = []
+        succeeded_count = 0
+        failed_count = 0
+        seen_failed_post_ids: set[str] = set()
+        stego_stop_reason = "no_unprocessed_posts"
+        t_stego = time.perf_counter()
+        while True:
+            try:
+                result = self.stego.process_post(
+                    post_id=None,
+                    payload=payload,
+                    tag=tag,
+                    list_offset=0,
+                )
+            except ValueError as exc:
+                if "No unprocessed posts found" in str(exc):
+                    stego_stop_reason = "no_unprocessed_posts"
+                    break
+                raise
+
+            stego_results.append(result)
+            succeeded = bool(result.get("succeeded"))
+            post_obj = result.get("post")
+            post_id_value = (
+                str(post_obj.get("id"))
+                if isinstance(post_obj, dict) and post_obj.get("id") is not None
+                else None
+            )
+            retry_count = int(result.get("retry_count", 0))
+            self._emit(
+                on_progress,
+                "stego_post_done",
+                {
+                    "phase": "stego",
+                    "post_id": post_id_value,
+                    "succeeded": succeeded,
+                    "retry_count": retry_count,
+                    "processed_count": len(stego_results),
+                },
+            )
+
+            if succeeded:
+                succeeded_count += 1
+            else:
+                failed_count += 1
+                if not post_id_value:
+                    stego_stop_reason = "failed_post_without_id"
+                    self._emit(
+                        on_progress,
+                        "stego_batch_summary",
+                        {
+                            "phase": "stego",
+                            "processed_count": len(stego_results),
+                            "succeeded_count": succeeded_count,
+                            "failed_count": failed_count,
+                            "stop_reason": stego_stop_reason,
+                        },
+                    )
+                    break
+                if post_id_value in seen_failed_post_ids:
+                    stego_stop_reason = "repeat_failed_post"
+                    self._emit(
+                        on_progress,
+                        "stego_batch_summary",
+                        {
+                            "phase": "stego",
+                            "processed_count": len(stego_results),
+                            "succeeded_count": succeeded_count,
+                            "failed_count": failed_count,
+                            "stop_reason": stego_stop_reason,
+                        },
+                    )
+                    break
+                seen_failed_post_ids.add(post_id_value)
+
+            self._emit(
+                on_progress,
+                "stego_batch_summary",
+                {
+                    "phase": "stego",
+                    "processed_count": len(stego_results),
+                    "succeeded_count": succeeded_count,
+                    "failed_count": failed_count,
+                },
+            )
+
+        stego_result = {
+            "run_all": True,
+            "tag": tag,
+            "list_offset": 0,
+            "processed_count": len(stego_results),
+            "succeeded_count": succeeded_count,
+            "failed_count": failed_count,
+            "stopped_reason": stego_stop_reason,
+            "results": stego_results,
+            "elapsed_ms": int((time.perf_counter() - t_stego) * 1000),
+        }
+        self._emit(
+            on_progress,
+            "phase_done",
+            {
+                "phase": "stego",
+                "processed_count": stego_result["processed_count"],
+                "succeeded_count": stego_result["succeeded_count"],
+                "failed_count": stego_result["failed_count"],
+                "stop_reason": stego_result["stopped_reason"],
+                "elapsed_ms": stego_result["elapsed_ms"],
+            },
+        )
+        return {
+            "succeeded": True,
+            "tag": tag,
+            "prep": prep_result,
+            "stego": stego_result,
+            "phase_transition": phase_transition,
+        }
 
     def run_gen_angles(
         self,

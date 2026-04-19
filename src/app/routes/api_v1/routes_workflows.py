@@ -173,6 +173,56 @@ def wf_gen_angles() -> Any:
         return fail("Workflow execution failed", status=500, details=str(exc))
 
 
+@bp.route("/workflows/prep-until-google-quota-then-stego", methods=["POST"])
+def wf_prep_until_google_quota_then_stego() -> Any:
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return fail("Invalid JSON body", status=400)
+    tag, err = required_body_str(body, "tag")
+    if err:
+        return err
+    batch_count, err = body_int(body, "batch_count", 1)
+    if err:
+        return err
+    batch_size, err = body_int(body, "batch_size", 5)
+    if err:
+        return err
+    payload, err = optional_payload_field(body, "payload")
+    if err:
+        return err
+    assert tag is not None and batch_count is not None and batch_size is not None
+
+    if wants_workflow_stream(body):
+        return stream_workflow(
+            "prep-until-google-quota-then-stego",
+            lambda emit: runner.run_prep_until_google_quota_then_stego(
+                tag=tag,
+                batch_count=batch_count,
+                batch_size=batch_size,
+                payload=payload,
+                on_progress=lambda event, progress_payload: emit(
+                    "progress",
+                    {"event": event, **progress_payload},
+                ),
+            ),
+            trace_id=get_trace_id(),
+        )
+
+    try:
+        data = sync_workflow(
+            "prep-until-google-quota-then-stego",
+            lambda: runner.run_prep_until_google_quota_then_stego(
+                tag=tag,
+                batch_count=batch_count,
+                batch_size=batch_size,
+                payload=payload,
+            ),
+        )
+        return ok(data)
+    except Exception as exc:
+        return fail("Workflow execution failed", status=500, details=str(exc))
+
+
 @bp.route("/workflows/stego", methods=["POST"])
 def wf_stego() -> Any:
     body = request.get_json(silent=True) or {}
@@ -791,6 +841,34 @@ def wf_run() -> Any:
             return runner.run_gen_angles(count=count, offset=offset, on_progress=progress_cb)
 
         run_dispatch = _run_gen_angles
+
+    elif command == "prep-until-google-quota-then-stego":
+        tag, err = required_body_str(body, "tag")
+        if err:
+            return err
+        batch_count, err = body_int(body, "batch_count", 1)
+        if err:
+            return err
+        batch_size, err = body_int(body, "batch_size", 5)
+        if err:
+            return err
+        payload, err = optional_payload_field(body, "payload")
+        if err:
+            return err
+        assert tag is not None and batch_count is not None and batch_size is not None
+
+        def _run_prep_until_google_quota_then_stego(
+            progress_cb: Callable[[str, dict[str, Any]], None] | None,
+        ) -> Any:
+            return runner.run_prep_until_google_quota_then_stego(
+                tag=tag,
+                batch_count=batch_count,
+                batch_size=batch_size,
+                payload=payload,
+                on_progress=progress_cb,
+            )
+
+        run_dispatch = _run_prep_until_google_quota_then_stego
 
     elif command == "stego":
         list_offset, err = body_int(body, "list_offset", 1)

@@ -104,15 +104,15 @@ WorkflowCapacityProfile = Literal["low", "mid", "high"]
 # --- Workflow capacity & URL fetch (defaults in code; WORKFLOW_* overrides: process env only) ---
 DEFAULT_WORKFLOW_CAPACITY_PROFILE: WorkflowCapacityProfile = "mid"
 # When WORKFLOW_* on/off env vars are unset, default to this (same semantics as ``=1`` before).
-DEFAULT_WORKFLOW_ENV_FLAG_ON = False
+DEFAULT_WORKFLOW_ENV_FLAG_ON = True
 
 # Profile tiers for _capacity_value: (low, mid, high).
 WORKFLOW_CAPACITY_TIER_RESEARCH_MAX_TERMS = (4, 8, 12)
-WORKFLOW_CAPACITY_TIER_RESEARCH_MAX_SELECTED_URLS = (12, 24, 48)
-WORKFLOW_CAPACITY_TIER_DICTIONARY_MAX_SEARCH_RESULTS = (12, 24, 48)
-WORKFLOW_CAPACITY_TIER_DICTIONARY_MAX_COMMENTS = (16, 32, 96)
-WORKFLOW_CAPACITY_TIER_ANGLES_MAX_INPUT_BLOCKS = (24, 48, 128)
-WORKFLOW_CAPACITY_TIER_ANGLES_MAX_OUTPUT = (8, 16, 32)
+WORKFLOW_CAPACITY_TIER_RESEARCH_MAX_SELECTED_URLS = (12, 48, 96)
+WORKFLOW_CAPACITY_TIER_DICTIONARY_MAX_SEARCH_RESULTS = (12, 48, 96)
+WORKFLOW_CAPACITY_TIER_DICTIONARY_MAX_COMMENTS = (16, 64, 128)
+WORKFLOW_CAPACITY_TIER_ANGLES_MAX_INPUT_BLOCKS = (24, 96, 192)
+WORKFLOW_CAPACITY_TIER_ANGLES_MAX_OUTPUT = (8, 32, 64)
 
 DEFAULT_WORKFLOW_RESEARCH_FETCH_TIMEOUT_SEC = 180.0
 DEFAULT_WORKFLOW_RESEARCH_FETCH_RETRIES = 1
@@ -126,7 +126,7 @@ DEFAULT_WORKFLOW_CRAWL4AI_PAGE_TIMEOUT_MS = 45_000
 # profile-based cap so slices and URL loops effectively never hit the ceiling (> 0 so
 # research URL selection never treats the limit as "disabled" / zero-selected).
 WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED = 10_000_000
-DEFAULT_WORKFLOW_CAPACITY_LIMITS_ENABLED = True
+DEFAULT_WORKFLOW_CAPACITY_LIMITS_ENABLED = False
 
 
 def _workflow_env_raw(key: str) -> str | None:
@@ -139,7 +139,7 @@ def _workflow_env_raw(key: str) -> str | None:
 
 def get_workflow_llm_backend() -> Literal["lm_studio", "google"]:
     """Workflow LLM target: Google AI Studio (Generative Language API) or local LM Studio."""
-    raw = DEFAULT_WORKFLOW_LLM_BACKEND.lower()
+    raw = (_workflow_env_raw("WORKFLOW_LLM_BACKEND") or DEFAULT_WORKFLOW_LLM_BACKEND).lower()
     if raw in ("google", "gemini", "ai_studio"):
         return "google"
     return "lm_studio"
@@ -147,7 +147,9 @@ def get_workflow_llm_backend() -> Literal["lm_studio", "google"]:
 
 def get_google_ai_studio_model() -> str:
     """Generative Language API model id when workflow LLM backend is AI Studio / Google."""
-    return DEFAULT_GOOGLE_AI_STUDIO_MODEL
+    return get_env("GOOGLE_AI_STUDIO_MODEL", DEFAULT_GOOGLE_AI_STUDIO_MODEL) or (
+        DEFAULT_GOOGLE_AI_STUDIO_MODEL
+    )
 
 
 def get_google_ai_request_timeout_seconds(
@@ -170,7 +172,7 @@ def get_google_ai_request_timeout_seconds(
 
 def get_workflow_capacity_profile() -> WorkflowCapacityProfile:
     """Global capacity preset for workflow fan-out and angle input sizing."""
-    raw = DEFAULT_WORKFLOW_CAPACITY_PROFILE.lower()
+    raw = (_workflow_env_raw("WORKFLOW_CAPACITY_PROFILE") or DEFAULT_WORKFLOW_CAPACITY_PROFILE).lower()
     if raw in ("low", "mid", "high"):
         return raw
     return DEFAULT_WORKFLOW_CAPACITY_PROFILE
@@ -186,7 +188,10 @@ def _workflow_env_on_off(key: str, *, default: bool) -> bool:
 
 def get_workflow_capacity_limits_enabled() -> bool:
     """When False, profile presets are ignored; per-key WORKFLOW_* overrides still apply."""
-    return DEFAULT_WORKFLOW_CAPACITY_LIMITS_ENABLED
+    return _workflow_env_on_off(
+        "WORKFLOW_CAPACITY_LIMITS_ENABLED",
+        default=DEFAULT_WORKFLOW_CAPACITY_LIMITS_ENABLED,
+    )
 
 
 def _env_non_negative_int(key: str) -> int | None:

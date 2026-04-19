@@ -207,6 +207,118 @@ def test_run_stego_run_all_max_posts_one_caps_batch():
     assert runner.stego.calls == 1
 
 
+def test_run_prep_until_google_quota_then_stego_transitions_and_runs_stego_only():
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    events: list[tuple[str, dict[str, object]]] = []
+
+    class _DummyResearch:
+        def __init__(self):
+            self.calls = 0
+
+        def process_post_objects(self, posts, step, disable_bing_fallback=False):
+            self.calls += 1
+            assert disable_bing_fallback is True
+            if self.calls == 1:
+                return [{"id": "r1"}]
+            raise RuntimeError("google search quota exceeded")
+
+    class _DummyAngles:
+        _last_batch_summary = {"failed_count": 0}
+
+        def process_post_objects(self, posts, step):
+            self._last_batch_summary = {"failed_count": 0}
+            return [{"id": "a1"}]
+
+    class _DummyStego:
+        def __init__(self):
+            self.calls = 0
+
+        def process_post(self, post_id=None, payload=None, tag=None, list_offset=0):
+            self.calls += 1
+            assert post_id is None
+            assert tag == "version_42"
+            assert list_offset == 0
+            if self.calls == 1:
+                return {"succeeded": True, "retry_count": 0, "post": {"id": "p1"}}
+            raise ValueError("No unprocessed posts found for step='final-step' and tag='version_42'.")
+
+    runner.research = _DummyResearch()
+    runner.gen_angles = _DummyAngles()
+    runner.stego = _DummyStego()
+
+    data_batches = iter([[{"id": "d1"}], [{"id": "d2"}]])
+    runner.run_data_load = lambda count, offset=0, batch_size=5: next(data_batches)
+
+    result = runner.run_prep_until_google_quota_then_stego(
+        tag="version_42",
+        batch_count=1,
+        batch_size=5,
+        on_progress=lambda event, payload: events.append((event, payload)),
+    )
+
+    assert result["succeeded"] is True
+    assert result["prep"]["quota_detected"] is True
+    assert result["prep"]["stop_reason"] == "google_search_quota_detected"
+    assert result["stego"]["processed_count"] == 1
+    assert result["stego"]["stopped_reason"] == "no_unprocessed_posts"
+    event_names = [name for name, _ in events]
+    assert "quota_detected" in event_names
+    assert "phase_transition" in event_names
+    assert "stego_post_done" in event_names
+
+
+def test_run_prep_until_google_quota_then_stego_aborts_on_non_quota_research_error():
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+
+    class _DummyResearch:
+        def process_post_objects(self, posts, step, disable_bing_fallback=False):
+            raise RuntimeError("research exploded")
+
+    runner.research = _DummyResearch()
+    runner.gen_angles = object()
+    runner.stego = object()
+    runner.run_data_load = lambda count, offset=0, batch_size=5: [{"id": "d1"}]
+
+    with pytest.raises(RuntimeError, match="research exploded"):
+        runner.run_prep_until_google_quota_then_stego(tag="version_42")
+
+
+def test_run_prep_until_google_quota_then_stego_uses_existing_prepared_posts_when_no_more_prep_work():
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+    events: list[tuple[str, dict[str, object]]] = []
+
+    class _DummyResearch:
+        def process_post_objects(self, posts, step, disable_bing_fallback=False):
+            raise AssertionError("research should not run when no prep work remains")
+
+    class _DummyStego:
+        def __init__(self):
+            self.calls = 0
+
+        def process_post(self, post_id=None, payload=None, tag=None, list_offset=0):
+            self.calls += 1
+            if self.calls == 1:
+                return {"succeeded": True, "retry_count": 0, "post": {"id": "prepared1"}}
+            raise ValueError("No unprocessed posts found for step='final-step' and tag='version_42'.")
+
+    runner.research = _DummyResearch()
+    runner.gen_angles = object()
+    runner.stego = _DummyStego()
+    runner.run_data_load = lambda count, offset=0, batch_size=5: []
+
+    result = runner.run_prep_until_google_quota_then_stego(
+        tag="version_42",
+        on_progress=lambda event, payload: events.append((event, payload)),
+    )
+
+    assert result["prep"]["stop_reason"] == "no_more_posts"
+    assert result["phase_transition"] is None
+    assert result["stego"]["processed_count"] == 1
+    phase_done_events = [payload for event, payload in events if event == "phase_done"]
+    assert any(payload.get("phase") == "prep" for payload in phase_done_events)
+    assert any(payload.get("phase") == "stego" for payload in phase_done_events)
+
+
 def test_run_double_process_new_post_main_then_validation_cache(monkeypatch, tmp_path):
     dp_root = (tmp_path / "datasets" / "double_process_validation").resolve()
     dp_root.mkdir(parents=True)

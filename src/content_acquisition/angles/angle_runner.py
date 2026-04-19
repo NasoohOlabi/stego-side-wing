@@ -76,6 +76,28 @@ _CONNECTIVITY_EXCEPTIONS: tuple[type[BaseException], ...] = (
     RequestsConnectionError,
     ChunkedEncodingError,
 )
+_WORKFLOW_TRANSPORT_NAME_TOKENS = frozenset(
+    {
+        "timeout",
+        "connection",
+        "connect",
+        "chunked",
+        "remoteprotocol",
+        "protocolerror",
+        "readerror",
+        "writeerror",
+        "disconnect",
+    }
+)
+_WORKFLOW_TRANSPORT_MESSAGE_TOKENS = frozenset(
+    {
+        "server disconnected without sending a response",
+        "remote end closed connection without response",
+        "connection reset by peer",
+        "connection aborted",
+        "broken pipe",
+    }
+)
 
 
 def _env_positive_int(name: str, default: int) -> int:
@@ -117,7 +139,11 @@ def _max_transport_split_depth() -> int:
 
 
 def _min_chars_to_split_segment() -> int:
-    return max(500, _env_non_negative_int("ANGLES_MIN_SEGMENT_SPLIT_CHARS", 4000))
+    # Gemini transport failures can happen on prompts that are far smaller than
+    # the old multi-kilobyte threshold, so keep recursive transport retries
+    # eligible for short fragments too while still avoiding runaway recursion on
+    # tiny scraps.
+    return max(128, _env_non_negative_int("ANGLES_MIN_SEGMENT_SPLIT_CHARS", 128))
 
 
 def _llm_http_timeout() -> float | None:
@@ -657,6 +683,53 @@ def _run_context_window_split(batch: list[str], batch_index: int) -> list[dict[s
     return merged
 
 
+def _workflow_transport_error_should_split(
+    llm: LLMAdapter, exc: BaseException
+) -> bool:
+    meta = getattr(llm, "last_call_metadata", {}) or {}
+    error_kind = str(meta.get("error_kind") or type(exc).__name__).lower()
+    if any(token in error_kind for token in _WORKFLOW_TRANSPORT_NAME_TOKENS):
+        return True
+    detail = str(meta.get("response_snippet") or str(exc)).lower()
+    return any(token in detail for token in _WORKFLOW_TRANSPORT_MESSAGE_TOKENS)
+
+
+def _merge_workflow_transport_splits(
+    llm: LLMAdapter,
+    *,
+    provider: str,
+    model: str,
+    sub_batches: list[list[str]],
+    batch_index: int,
+    batch_total: int,
+    depth: int,
+) -> list[dict[str, str]]:
+    _LOG.info(
+        "angles_workflow_transport_split",
+        extra={
+            "event": "angles.workflow_transport_split",
+            "tags": [TAG_WORKFLOW],
+            "component": "angle_runner",
+            "depth": depth,
+            "sub_batches": len(sub_batches),
+        },
+    )
+    merged: list[dict[str, str]] = []
+    for sub in sub_batches:
+        merged.extend(
+            _run_workflow_angle_batch(
+                llm,
+                provider=provider,
+                model=model,
+                batch=sub,
+                batch_index=batch_index,
+                batch_total=batch_total,
+                _depth=depth + 1,
+            )
+        )
+    return merged
+
+
 def _merge_transport_splits(
     sub_batches: list[list[str]],
     batch_index: int,
@@ -794,6 +867,8 @@ def _repair_json_workflow(
         '"required": ["source_quote", "tangent", "category"] } }\n'
         "No markdown, no commentary, only raw JSON."
     )
+    if provider == "gemini":
+        system_prompt = None
     user_prompt = (
         "The previous response failed JSON parsing or schema validation.\n\n"
         f"Error:\n{error_message}\n\n"
@@ -862,18 +937,41 @@ def _run_workflow_angle_batch(
     batch: list[str],
     batch_index: int,
     batch_total: int,
+    _depth: int = 0,
 ) -> list[dict[str, str]]:
     user_prompt = _build_user_prompt(batch)
     _log_prompt(user_prompt, batch_index, batch_total, label="angles_workflow")
-    answer = llm.call_llm(
-        prompt=user_prompt,
-        system_message=SYSTEM_PROMPT,
-        model=model,
-        provider=provider,
-        temperature=TEMPERATURE,
-        max_tokens=8192,
-    )
-    return _parse_or_repair_workflow(llm, provider=provider, model=model, raw_text=answer)
+    system_prompt = None if provider == "gemini" else SYSTEM_PROMPT
+    try:
+        answer = llm.call_llm(
+            prompt=user_prompt,
+            system_message=system_prompt,
+            model=model,
+            provider=provider,
+            temperature=TEMPERATURE,
+            max_tokens=8192,
+        )
+        return _parse_or_repair_workflow(
+            llm, provider=provider, model=model, raw_text=answer
+        )
+    except Exception as exc:
+        if _depth >= _max_transport_split_depth():
+            raise
+        if not _workflow_transport_error_should_split(llm, exc):
+            raise
+        try:
+            sub_batches = _transport_sub_batches(batch)
+        except ValueError:
+            raise exc from None
+        return _merge_workflow_transport_splits(
+            llm,
+            provider=provider,
+            model=model,
+            sub_batches=sub_batches,
+            batch_index=batch_index,
+            batch_total=batch_total,
+            depth=_depth,
+        )
 
 
 def analyze_angles_from_texts_via_workflow_llm(

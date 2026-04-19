@@ -14,6 +14,10 @@ from content_acquisition.angles.angle_runner import analyze_angles_from_texts, a
 def _angles_http_tests_use_lm_studio(monkeypatch: pytest.MonkeyPatch) -> None:
     """These tests mock ``requests.post`` on the legacy LM Studio HTTP path."""
     monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "lm_studio")
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner.get_workflow_llm_backend",
+        lambda: "lm_studio",
+    )
 
 
 def test_analyze_angles_retries_read_timeout_then_ok(monkeypatch: pytest.MonkeyPatch) -> None:

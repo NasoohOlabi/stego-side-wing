@@ -14,7 +14,7 @@ def _angles_prompt_dir() -> Path:
 
 
 def _read_utf8(name: str) -> str:
-    return (_angles_prompt_dir() / name).read_text(encoding="utf-8")
+    return (_angles_prompt_dir() / name).read_text(encoding="utf-8").rstrip()
 
 
 SYSTEM_PROMPT = _read_utf8("systemPrompt.txt")

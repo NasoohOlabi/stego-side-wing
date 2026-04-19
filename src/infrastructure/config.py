@@ -98,6 +98,7 @@ def get_lm_studio_request_timeout_seconds(default: int = 600) -> int:
 # Workflow LLM (non-sensitive defaults; override WORKFLOW_LLM_BACKEND / GOOGLE_AI_STUDIO_MODEL via env).
 DEFAULT_WORKFLOW_LLM_BACKEND = "ai_studio"
 DEFAULT_GOOGLE_AI_STUDIO_MODEL = "gemma-4-26b-a4b-it"
+DEFAULT_GOOGLE_AI_REQUEST_TIMEOUT_SEC = 180
 WorkflowCapacityProfile = Literal["low", "mid", "high"]
 
 # --- Workflow capacity & URL fetch (defaults in code; WORKFLOW_* overrides: process env only) ---
@@ -147,6 +148,24 @@ def get_workflow_llm_backend() -> Literal["lm_studio", "google"]:
 def get_google_ai_studio_model() -> str:
     """Generative Language API model id when workflow LLM backend is AI Studio / Google."""
     return DEFAULT_GOOGLE_AI_STUDIO_MODEL
+
+
+def get_google_ai_request_timeout_seconds(
+    default: int = DEFAULT_GOOGLE_AI_REQUEST_TIMEOUT_SEC,
+) -> int:
+    """
+    HTTP timeout (seconds) for Google AI Studio / Generative Language API requests.
+
+    Override with ``GOOGLE_AI_REQUEST_TIMEOUT_SEC``.
+    """
+    raw = get_env("GOOGLE_AI_REQUEST_TIMEOUT_SEC")
+    if not raw:
+        return default
+    try:
+        n = int(raw.strip())
+    except ValueError:
+        return default
+    return max(10, min(n, 3600))
 
 
 def get_workflow_capacity_profile() -> WorkflowCapacityProfile:

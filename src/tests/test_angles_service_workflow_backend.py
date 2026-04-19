@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
+import httpx
 import pytest
+import requests
 
 import infrastructure.config as infra_config
 from workflows.adapters.llm import LLMAdapter
@@ -35,7 +37,7 @@ def test_analyze_angles_google_backend_uses_llm_adapter(
     assert out[0]["category"] == "c"
     assert out[0].get("source_document") == 0
     assert len(calls) >= 1
-    assert calls[0].get("system_message")
+    assert calls[0].get("system_message") is None
 
 
 def test_analyze_angles_lm_backend_uses_angle_runner(
@@ -81,3 +83,144 @@ def test_analyze_angles_google_disk_cache_avoids_repeat_llm(
     wf_dir = cache_root / "workflow_google"
     assert wf_dir.is_dir()
     assert any(wf_dir.glob("*.json"))
+
+
+@pytest.mark.usefixtures("clear_llm_backend_env")
+def test_analyze_angles_google_transport_split_recovers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "ai_studio")
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._effective_max_chars_per_prompt",
+        lambda: 100_000,
+    )
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._max_transport_split_depth",
+        lambda: 8,
+    )
+    calls: list[int] = []
+
+    def fake_call_llm(self: LLMAdapter, *args: object, **kwargs: object) -> str:
+        prompt = str(kwargs["prompt"])
+        calls.append(len(prompt))
+        if len(prompt) > 25_000:
+            raise httpx.RemoteProtocolError(
+                "Server disconnected without sending a response."
+            )
+        return '[{"source_quote":"a","tangent":"b","category":"c"}]'
+
+    monkeypatch.setattr(LLMAdapter, "call_llm", fake_call_llm)
+
+    cache_root = tmp_path / "angles_wf_split_cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    with angles_cache_context(cache_root):
+        from services.angles_service import analyze_angles
+
+        text = "word " * 6000
+        out = analyze_angles([text], use_cache=False)
+
+    assert len(out) >= 1
+    assert out[0]["category"] == "c"
+    assert out[0]["source_document"] == 0
+    assert len(calls) >= 3
+    assert max(calls) > 25_000
+    assert min(calls) < max(calls)
+
+
+@pytest.mark.usefixtures("clear_llm_backend_env")
+def test_analyze_angles_google_transport_split_recovers_short_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "ai_studio")
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._effective_max_chars_per_prompt",
+        lambda: 100_000,
+    )
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._max_transport_split_depth",
+        lambda: 8,
+    )
+    calls: list[int] = []
+
+    def fake_call_llm(self: LLMAdapter, *args: object, **kwargs: object) -> str:
+        prompt = str(kwargs["prompt"])
+        calls.append(len(prompt))
+        if len(prompt) > 2_000:
+            raise requests.exceptions.ConnectionError(
+                "('Connection aborted.', RemoteDisconnected("
+                "'Remote end closed connection without response'))"
+            )
+        return '[{"source_quote":"a","tangent":"b","category":"c"}]'
+
+    monkeypatch.setattr(LLMAdapter, "call_llm", fake_call_llm)
+
+    cache_root = tmp_path / "angles_wf_split_short_cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    with angles_cache_context(cache_root):
+        from services.angles_service import analyze_angles
+
+        text = "word " * 280
+        out = analyze_angles([text], use_cache=False)
+
+    assert len(out) >= 1
+    assert out[0]["category"] == "c"
+    assert out[0]["source_document"] == 0
+    assert len(calls) >= 3
+    assert max(calls) > 2_000
+    assert min(calls) < 2_000
+
+
+@pytest.mark.usefixtures("clear_llm_backend_env")
+def test_analyze_angles_google_transport_split_recovers_very_short_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "ai_studio")
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._effective_max_chars_per_prompt",
+        lambda: 100_000,
+    )
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._max_transport_split_depth",
+        lambda: 8,
+    )
+    calls: list[int] = []
+
+    def fake_call_llm(self: LLMAdapter, *args: object, **kwargs: object) -> str:
+        prompt = str(kwargs["prompt"])
+        calls.append(len(prompt))
+        if len(prompt) > 1_500:
+            raise requests.exceptions.ConnectionError(
+                "('Connection aborted.', RemoteDisconnected("
+                "'Remote end closed connection without response'))"
+            )
+        return '[{"source_quote":"a","tangent":"b","category":"c"}]'
+
+    monkeypatch.setattr(LLMAdapter, "call_llm", fake_call_llm)
+
+    cache_root = tmp_path / "angles_wf_split_very_short_cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    with angles_cache_context(cache_root):
+        from services.angles_service import analyze_angles
+
+        text = "word " * 55
+        out = analyze_angles([text], use_cache=False)
+
+    assert len(out) >= 1
+    assert out[0]["category"] == "c"
+    assert out[0]["source_document"] == 0
+    assert len(calls) >= 3
+    assert max(calls) > 1_500
+    assert min(calls) < 1_500
+
+
+def test_angles_system_prompt_is_clean_and_machine_readable() -> None:
+    from workflows.utils.angles_llm_config import SYSTEM_PROMPT
+
+    lowered = SYSTEM_PROMPT.lower()
+
+    assert not SYSTEM_PROMPT.endswith("\n")
+    assert "kill myself" not in lowered
+    assert "json validator" not in lowered
+    assert "source_quote" in SYSTEM_PROMPT
+    assert "tangent" in SYSTEM_PROMPT
+    assert "category" in SYSTEM_PROMPT

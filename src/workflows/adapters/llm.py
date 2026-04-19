@@ -21,6 +21,7 @@ from infrastructure.config import (
     get_env,
     get_google_generative_language_api_key,
     get_google_generative_language_api_keys,
+    get_google_ai_request_timeout_seconds,
     get_lm_studio_request_timeout_seconds,
     get_lm_studio_url,
     get_workflow_llm_backend,
@@ -36,6 +37,28 @@ PROMPTS_LOG_PATH = REPO_ROOT / "logs" / f"stego_prompts_{PROMPTS_LOG_TIMESTAMP}.
 _LLM_ADAPTER_LOG = logger.bind(component="LLMAdapter")
 
 _RETRYABLE_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+_RETRYABLE_TRANSPORT_NAME_TOKENS = frozenset(
+    {
+        "timeout",
+        "connection",
+        "connect",
+        "chunked",
+        "remoteprotocol",
+        "protocolerror",
+        "readerror",
+        "writeerror",
+        "disconnect",
+    }
+)
+_RETRYABLE_TRANSPORT_MESSAGE_TOKENS = frozenset(
+    {
+        "server disconnected without sending a response",
+        "remote end closed connection without response",
+        "connection reset by peer",
+        "connection aborted",
+        "broken pipe",
+    }
+)
 
 
 def _llm_max_attempts() -> int:
@@ -106,6 +129,71 @@ def _gemini_response_text(response: Any) -> str:
     raise RuntimeError("No candidates in Gemini response")
 
 
+def _gemini_rest_response_text(data: dict[str, Any]) -> str:
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise RuntimeError("No candidates in Gemini response")
+    first = candidates[0]
+    if not isinstance(first, dict):
+        raise RuntimeError("No candidates in Gemini response")
+    content = first.get("content")
+    if not isinstance(content, dict):
+        raise RuntimeError("No candidates in Gemini response")
+    parts = content.get("parts")
+    if not isinstance(parts, list) or not parts:
+        raise RuntimeError("No candidates in Gemini response")
+
+    non_thinking: list[str] = []
+    fallback: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        fallback.append(text)
+        if not bool(part.get("thought")):
+            non_thinking.append(text)
+
+    selected = non_thinking or fallback
+    if not selected:
+        raise RuntimeError("No candidates in Gemini response")
+    return "\n".join(selected)
+
+
+def _genai_generate_text_via_rest(
+    *,
+    api_key: str,
+    model_name: str,
+    user_text: str,
+    system_message: str | None,
+    temperature: float,
+    max_tokens: int | None,
+    timeout_sec: int,
+) -> str:
+    endpoint = _provider_endpoint("gemini", model=model_name)
+    payload: dict[str, Any] = {
+        "contents": [{"parts": [{"text": user_text}]}],
+        "generationConfig": {
+            "temperature": temperature,
+        },
+    }
+    if max_tokens is not None:
+        payload["generationConfig"]["maxOutputTokens"] = max_tokens
+    if system_message:
+        payload["system_instruction"] = {"parts": [{"text": system_message}]}
+
+    response = requests.post(
+        endpoint,
+        params={"key": api_key},
+        headers={"Content-Type": "application/json"},
+        json=payload,
+        timeout=timeout_sec,
+    )
+    response.raise_for_status()
+    return _gemini_rest_response_text(response.json())
+
+
 def _genai_generate_text(
     *,
     api_key: str,
@@ -114,33 +202,59 @@ def _genai_generate_text(
     system_message: str | None,
     temperature: float,
     max_tokens: int | None,
+    timeout_sec: int,
 ) -> str:
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(
+        api_key=api_key,
+        http_options=genai_types.HttpOptions(timeout=timeout_sec),
+    )
     config = genai_types.GenerateContentConfig(
         temperature=temperature,
         max_output_tokens=max_tokens,
         system_instruction=system_message or None,
     )
-    resp = client.models.generate_content(
-        model=model_name,
-        contents=user_text,
-        config=config,
-    )
-    return _gemini_response_text(resp)
+    try:
+        resp = client.models.generate_content(
+            model=model_name,
+            contents=user_text,
+            config=config,
+        )
+        return _gemini_response_text(resp)
+    except Exception as exc:
+        if not _is_retryable_transport_error(exc):
+            raise
+        return _genai_generate_text_via_rest(
+            api_key=api_key,
+            model_name=model_name,
+            user_text=user_text,
+            system_message=system_message,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+        )
 
 
 def _is_retryable_llm_error(exc: BaseException) -> bool:
     status = _exception_status_code(exc)
     if status is not None:
         return status in _RETRYABLE_HTTP_STATUSES
+    return _is_retryable_transport_error(exc)
+
+
+def _is_retryable_transport_error(exc: BaseException) -> bool:
     name = type(exc).__name__.lower()
-    return any(token in name for token in ("timeout", "connection", "connect", "chunked"))
+    if any(token in name for token in _RETRYABLE_TRANSPORT_NAME_TOKENS):
+        return True
+    snippet = _exception_snippet(exc).lower()
+    return any(token in snippet for token in _RETRYABLE_TRANSPORT_MESSAGE_TOKENS)
 
 
 def _should_try_next_gemini_api_key(exc: BaseException) -> bool:
     """After retries, rotate to another API key for auth/quota-style failures."""
     status = _exception_status_code(exc)
     if status in (401, 403, 429):
+        return True
+    if status is None and _is_retryable_transport_error(exc):
         return True
     low = _exception_snippet(exc).lower()
     return any(
@@ -371,6 +485,7 @@ class LLMAdapter:
             get_google_generative_language_api_keys()
         )
         self.google_palm_api_key = get_google_generative_language_api_key()
+        self.google_ai_timeout_sec = get_google_ai_request_timeout_seconds()
         self.groq_api_key = get_env("GROQ_API_KEY")
         self.lm_studio_url = get_lm_studio_url()
         self.lm_studio_api_token = get_env("LM_STUDIO_API_TOKEN", "lm-studio")
@@ -739,47 +854,108 @@ class LLMAdapter:
         endpoint = _provider_endpoint("gemini", model=model_name)
         keys = self.google_generative_language_api_keys
         last_exc: BaseException | None = None
-        for key_index, api_key in enumerate(keys):
+        timeout_sec = getattr(
+            self,
+            "google_ai_timeout_sec",
+            get_google_ai_request_timeout_seconds(),
+        )
 
-            def _make_request(resolved_key: str) -> Callable[[], str]:
-                def _request() -> str:
-                    raw = _genai_generate_text(
-                        api_key=resolved_key,
-                        model_name=model_name,
-                        user_text=prompt,
-                        system_message=system_message,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                    )
-                    text = _strip_redacted_thinking(raw)
-                    if not text.strip() and raw.strip():
-                        text = raw.strip()
-                    self._log_workflow_llm_turn(
-                        provider="gemini",
-                        model=model_name,
-                        prompt=prompt,
-                        system_message=system_message,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        assistant_response_raw=raw,
-                    )
-                    return text
-
-                return _request
-
-            try:
-                return self._call_with_retry(
-                    provider="gemini",
-                    model=model_name,
-                    endpoint=endpoint,
-                    prompt=prompt,
-                    system_message=system_message,
+        def _make_request(
+            resolved_key: str,
+            *,
+            request_prompt: str,
+            request_system_message: str | None,
+        ) -> Callable[[], str]:
+            def _request() -> str:
+                raw = _genai_generate_text(
+                    api_key=resolved_key,
+                    model_name=model_name,
+                    user_text=request_prompt,
+                    system_message=request_system_message,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    request_fn=_make_request(api_key),
+                    timeout_sec=timeout_sec,
+                )
+                text = _strip_redacted_thinking(raw)
+                if not text.strip() and raw.strip():
+                    text = raw.strip()
+                self._log_workflow_llm_turn(
+                    provider="gemini",
+                    model=model_name,
+                    prompt=request_prompt,
+                    system_message=request_system_message,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    assistant_response_raw=raw,
+                )
+                return text
+
+            return _request
+
+        def _call_for_key(
+            resolved_key: str,
+            *,
+            request_prompt: str,
+            request_system_message: str | None,
+        ) -> str:
+            return self._call_with_retry(
+                provider="gemini",
+                model=model_name,
+                endpoint=endpoint,
+                prompt=request_prompt,
+                system_message=request_system_message,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                request_fn=_make_request(
+                    resolved_key,
+                    request_prompt=request_prompt,
+                    request_system_message=request_system_message,
+                ),
+            )
+
+        for key_index, api_key in enumerate(keys):
+            try:
+                return _call_for_key(
+                    api_key,
+                    request_prompt=prompt,
+                    request_system_message=system_message,
                 )
             except BaseException as exc:
                 last_exc = exc
+                if system_message and _is_retryable_transport_error(exc):
+                    tid = str(uuid4())
+                    _LLM_ADAPTER_LOG.bind(
+                        trace_id=tid,
+                        log_domain="workflow_llm",
+                        provider="gemini",
+                        key_index=key_index,
+                        keys_tried=key_index + 1,
+                        keys_total=len(keys),
+                        http_status=_exception_status_code(exc),
+                    ).info("gemini_retry_without_system_message")
+                    try:
+                        return _call_for_key(
+                            api_key,
+                            request_prompt=prompt,
+                            request_system_message=None,
+                        )
+                    except BaseException as fallback_exc:
+                        last_exc = fallback_exc
+                        if key_index + 1 < len(keys) and _should_try_next_gemini_api_key(
+                            fallback_exc
+                        ):
+                            tid = str(uuid4())
+                            _LLM_ADAPTER_LOG.bind(
+                                trace_id=tid,
+                                log_domain="workflow_llm",
+                                provider="gemini",
+                                key_index=key_index,
+                                keys_tried=key_index + 1,
+                                keys_total=len(keys),
+                                http_status=_exception_status_code(fallback_exc),
+                            ).info("gemini_try_next_api_key")
+                            continue
+                        raise
                 if key_index + 1 < len(keys) and _should_try_next_gemini_api_key(exc):
                     tid = str(uuid4())
                     _LLM_ADAPTER_LOG.bind(

@@ -16,5 +16,7 @@ _cache-directory
 kv_store*
 prompts.log
 logs
-prompts.md
 debug-*.log
+
+
+tmp_*

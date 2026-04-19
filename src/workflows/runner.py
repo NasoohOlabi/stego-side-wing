@@ -1249,7 +1249,7 @@ class WorkflowRunner:
         removes it only after both passes finish and stage hashes are compared.
         On any error before that, the claim is refreshed so the next call keeps
         the same ``post_id`` until comparison completes. A JSON report is written
-        under ``reports/`` when the run fails.
+        under ``reports/`` when the run finishes (success or failure).
         """
         self._emit(
             on_progress,
@@ -1501,6 +1501,7 @@ class WorkflowRunner:
                     "stage_hash_match": comparison,
                 },
             )
+            result["report_path"] = persist_double_process_final_report(dp_base, result)
             completed = True
             return result
         except Exception as exc:

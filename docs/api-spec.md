@@ -32,7 +32,8 @@ No auth is currently enforced in this service. Frontend should treat this API as
 These endpoints support **reproducibility**, **main vs isolated-cache** comparison, and **LLM determinism** checks. They are documented in detail under **Workflows** and **Tools**; this section only maps intent:
 
 - `**POST /workflows/validate-post`** — Replays data-load → research → gen-angles **in memory**, compares each stage’s live output to **saved** artifacts (strict JSON equality). Does **not** overwrite artifacts.
-- `**POST /workflows/double-process-new-post`** — Picks one new post from the data-load queue, runs the three-stage pipeline **twice** (each pass uses its own persistent dedicated URL/terms/angles cache tree; cache **flags** stay enabled on both passes), **writes** artifacts each time, and reports per-stage hash match between passes.
+- `**POST /workflows/double-process-new-post`** — Picks one new post from the data-load queue, runs the three-stage pipeline **twice** (each pass uses its own persistent dedicated URL/terms/angles cache tree; cache **flags** stay enabled on both passes), **writes** artifacts each time, and reports per-stage hash match between passes. Each finished run (success or failure) is also persisted as JSON under `{base}/reports/`.
+- `**GET /workflows/double-process-posts`** — Lists those persisted double-process reports (newest first), with optional `post_id` and `limit` query parameters; each item includes the full saved record plus file metadata.
 - `**POST /workflows/batch-angles-determinism`** — For each `post_id`, runs angle extraction **twice** with angles disk cache disabled and compares normalized angle lists; measures same-host repeatability, not cross-machine parity.
 - **Protocol previews** (`POST /tools/protocol/data-load-preview`, `research-preview`, `angles-preview`, `gen-terms`) — Live protocol steps with controlled persistence for inspecting behavior before full pipeline runs.
 - `**POST /workflows/gen-angles`** — Batch angle generation over the `angles-step` queue (`count` / `offset`); persists via `GenAnglesPipeline.process_posts`.
@@ -248,13 +249,25 @@ Posts, previews, and tool responses may include an `angles` array. Each angle in
     - **Pass 1 (`pass_1_cached`):** `{base}/pass_1/` with `url_cache/`, `angles_cache/`, `research_terms_cache.db`.
     - **Pass 2 (`pass_2_validation`):** `{base}/pass_2/` with the same layout. Pass 2 does not read pass 1’s cache files; an empty `pass_2` store yields cache misses and full fetch/LLM work while using the same code paths as a normal cached run.
   - **Persistence:** Unlike `validate-post`, this **writes** stage outputs to disk each time (same as running data-load → research → gen-angles manually). The second pass overwrites artifacts for that `post_id` in `filter-url-unresolved`, `filter-researched`, and `angles-step` destinations.
+  - **Run reports:** When a run **finishes** (both passes complete and hashes are compared, or an error is raised earlier), a JSON file is written under `{base}/reports/` (same `{base}` as **Base cache root** above). On **success**, `data.report_path` is the path to that file; on **failure**, `data.report_path` is set similarly. Use **`GET /workflows/double-process-posts`** to list saved reports. Reports written before this behavior existed may include failures only; successful runs are listed only after they have been persisted.
   - Response `data` shape (summary):
     - `mode`: `double_process_new_post`
+    - `succeeded`: boolean — `true` when both passes finished and comparison ran
+    - `comparison_completed`: boolean — `true` only when `succeeded` is `true`
     - `post_id`: string (stem of selected file)
     - `source_file`: e.g. `{post_id}.json` as listed by the queue
+    - `report_path?`: string — filesystem path to the JSON report under `{base}/reports/` when the run finished and a report was written
     - `passes.pass_1_cached` / `passes.pass_2_validation`: each has `settings` with the four cache flags above plus `cache_profile` (`pass_1` | `pass_2`) and `cache_paths` (`url_cache_dir`, `research_terms_db_path`, `angles_cache_dir`), and `steps` with per-stage summaries (`data_load`, `research`, `gen_angles`) including stable `hash` and stage-specific fields (same summarizer as other workflow reports)
     - `stage_hash_match`: `{ "data_load": bool, "research": bool, "gen_angles": bool }` — whether the full-post hash for each stage matched between the two passes (search/API non-determinism often makes `research` differ between passes even on the same day)
+    - On failure: `succeeded` / `comparison_completed` are `false`; `error_type` / `error_message` describe the exception; `report_path` points at the failure report when written.
   - Also available as `POST /workflows/run` with `"command": "double-process-new-post"` and the same body fields.
+- `GET /workflows/double-process-posts`
+  - **Purpose:** Return a list of persisted double-process run reports (JSON files under `{base}/reports/`), **newest file first**, where `{base}` is `DOUBLE_PROCESS_VALIDATION_ROOT` or the default `datasets/double_process_validation/`.
+  - **Query:** `post_id?` — if set, only include reports whose saved JSON has that exact `post_id` string; `limit?` (integer, default **50**, maximum **100**) — cap the number of runs returned after filtering.
+  - **Response `data`:** `base_path` (resolved double-process root directory), `count` (number of runs in this response), `runs` (array of):
+    - `report_path`: absolute path to the JSON file
+    - `file_mtime`: last-modified time of that file (seconds since epoch; for sorting/debugging)
+    - `record`: the full JSON object stored for that run (same shape as a synchronous `POST /workflows/double-process-new-post` success or failure body, including `succeeded`, `passes`, `stage_hash_match`, or error fields)
 - `POST /workflows/batch-angles-determinism`
   - **Purpose:** For each `post_id`, load the post from `step` (default `angles-step`), build the same text dictionary as gen-angles, then run angle extraction **twice** with **angles disk cache disabled** (`use_cache=false` on `analyze_angles_from_texts`) and compare normalized angle lists (non-empty `source_quote` / `tangent` / `category` only, same as production preview). The hash comparison **ignores** other fields such as `**source_document`**; persisted posts from gen-angles still include `**source_document`** when present (see **Angle objects**).
   - Body: `post_ids` (required non-empty string array), `step?` (default `angles-step`), `stream?` (bool; same SSE default as other workflow routes).

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.app_factory import create_app
@@ -140,3 +142,55 @@ def test_double_process_new_post_stale_claim_cleared_when_idle(client, monkeypat
     )
     assert response.status_code == 200
     assert captured == ["mine"]
+
+
+def test_double_process_posts_get_lists_reports(client, monkeypatch, tmp_path):
+    from services import double_process_history as dph
+
+    base = tmp_path / "dp"
+    reports = base / "reports"
+    reports.mkdir(parents=True)
+    (reports / "r.json").write_text(
+        json.dumps({"post_id": "p1", "succeeded": True, "mode": "double_process_new_post"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(dph, "double_process_cache_base_root", lambda: base)
+
+    response = client.get("/api/v1/workflows/double-process-posts")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    data = payload["data"]
+    assert data["count"] == 1
+    assert data["base_path"] == str(base.resolve())
+    assert data["runs"][0]["record"]["post_id"] == "p1"
+
+
+def test_double_process_posts_get_filter_and_limit(client, monkeypatch, tmp_path):
+    from services import double_process_history as dph
+
+    base = tmp_path / "dp"
+    reports = base / "reports"
+    reports.mkdir(parents=True)
+    (reports / "a.json").write_text(
+        json.dumps({"post_id": "alpha", "succeeded": True}),
+        encoding="utf-8",
+    )
+    (reports / "b.json").write_text(
+        json.dumps({"post_id": "beta", "succeeded": True}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(dph, "double_process_cache_base_root", lambda: base)
+
+    r = client.get("/api/v1/workflows/double-process-posts?post_id=beta&limit=5")
+    assert r.status_code == 200
+    data = r.get_json()["data"]
+    assert data["count"] == 1
+    assert data["runs"][0]["record"]["post_id"] == "beta"
+
+
+def test_double_process_posts_invalid_limit_query(client):
+    response = client.get("/api/v1/workflows/double-process-posts?limit=notint")
+    assert response.status_code == 400

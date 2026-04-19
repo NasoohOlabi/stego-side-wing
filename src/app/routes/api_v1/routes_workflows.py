@@ -18,6 +18,7 @@ from app.routes.api_v1.http_parsers import (
     json_body,
     optional_body_str,
     optional_payload_field,
+    query_int,
     required_body_str,
 )
 from app.routes.api_v1.runner_access import runner
@@ -33,6 +34,7 @@ from app.schemas.workflow_requests import (
     ValidatePostWorkflowRequest,
 )
 from infrastructure.json_logging import get_trace_id
+from services.double_process_history import list_double_process_runs
 from services.workflow_run_tracker import has_active_run_for_command, iter_snapshot
 from workflows.runner_orchestration_utils import (
     reconcile_stale_double_process_claim_vs_explicit,
@@ -696,6 +698,22 @@ def wf_pipelines() -> tuple[Any, int]:
 def wf_runs() -> tuple[Any, int]:
     runs = list(iter_snapshot())
     return ok({"runs": runs, "count": len(runs)})
+
+
+@bp.route("/workflows/double-process-posts", methods=["GET"])
+def wf_double_process_posts() -> Any:
+    raw_post = request.args.get("post_id")
+    post_id = raw_post.strip() if isinstance(raw_post, str) and raw_post.strip() else None
+    limit_raw, err = query_int("limit", default=50)
+    if err:
+        return err
+    assert limit_raw is not None
+    limit = max(1, min(limit_raw, 100))
+    try:
+        result = list_double_process_runs(post_id=post_id, limit=limit)
+    except ValidationError as exc:
+        return fail("Invalid query parameters", status=400, details=exc.errors())
+    return ok(result.model_dump())
 
 
 @bp.route("/workflows/run", methods=["POST"])

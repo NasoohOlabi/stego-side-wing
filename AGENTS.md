@@ -1,6 +1,5 @@
 # Agent rules
 
-- Append the user’s prompt to the end of `./prompts.md` after completing substantive work (or when the prompt is worth keeping for context). That file is **gitignored** (local-only); create it at the repo root if it does not exist yet.
 
 # Project
 

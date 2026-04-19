@@ -270,6 +270,13 @@ def test_run_double_process_new_post_main_then_validation_cache(monkeypatch, tmp
     assert result["comparison_completed"] is True
     assert result["post_id"] == "n1"
     assert result["source_file"] == "n1.json"
+    rp = result["report_path"]
+    assert isinstance(rp, str) and rp.endswith(".json")
+    report_p = Path(rp)
+    assert report_p.is_file()
+    assert report_p.parent.name == "reports"
+    saved = json.loads(report_p.read_text(encoding="utf-8"))
+    assert saved["succeeded"] is True and saved["post_id"] == "n1"
     p1s = result["passes"]["pass_1_cached"]["settings"]
     assert p1s["use_terms_cache"] is True
     assert p1s["persist_terms_cache"] is True

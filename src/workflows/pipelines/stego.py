@@ -53,8 +53,6 @@ _take_bits = stego_codec.take_bits
 STEGO_WORKFLOW_ID = "27rZrYtywu3k9e7Q"
 STEGO_DEFAULT_OFFSET = 1
 STEGO_LLM_MODEL = DECODE_LLM_MODEL
-# Headroom for models that emit thinking in-content before the JSON array.
-STEGO_ENCODE_MAX_TOKENS = 1536
 _STEGO_LOG = logger.bind(component="StegoPipeline")
 
 
@@ -397,7 +395,6 @@ class StegoPipeline:
             model=model,
             provider=provider,
             temperature=STEGO_CYCLE_LLM_TEMPERATURE,
-            max_tokens=STEGO_ENCODE_MAX_TOKENS,
         )
         llm_wall_ms = _elapsed_ms_since(t_llm)
         meta = self.llm.last_call_metadata or {}

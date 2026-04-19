@@ -30,10 +30,6 @@ _DECODE_LOG_BASE: dict[str, str] = {
     "log_domain": "stego",
     "log_op": "decode",
 }
-# Allow room for inline thinking tags before idx: while still bounding decode length.
-_DECODE_MAX_TOKENS = 128
-
-
 def _angle_signature(angle: dict[str, Any]) -> tuple[str, str, str]:
     return (
         str(angle.get("category", "")),
@@ -291,7 +287,6 @@ class DecodePipeline:
                         model=model,
                         provider=provider,
                         temperature=STEGO_CYCLE_LLM_TEMPERATURE,
-                        max_tokens=_DECODE_MAX_TOKENS,
                     )
                     break
                 except Exception as exc:
@@ -333,7 +328,6 @@ class DecodePipeline:
                 llm_event="strip_probe",
                 response_chars=len(response or ""),
                 stripped_chars=len(stripped_for_parse),
-                decode_max_tokens=_DECODE_MAX_TOKENS,
             )
             if (response or "").strip() and not stripped_for_parse.strip():
                 self._log.warning(

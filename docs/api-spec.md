@@ -37,6 +37,7 @@ These endpoints support **reproducibility**, **main vs isolated-cache** comparis
 - `**POST /workflows/batch-angles-determinism`** — For each `post_id`, runs angle extraction **twice** with angles disk cache disabled and compares normalized angle lists; measures same-host repeatability, not cross-machine parity.
 - **Protocol previews** (`POST /tools/protocol/data-load-preview`, `research-preview`, `angles-preview`, `gen-terms`) — Live protocol steps with controlled persistence for inspecting behavior before full pipeline runs.
 - `**POST /workflows/gen-angles`** — Batch angle generation over the `angles-step` queue (`count` / `offset`); persists via `GenAnglesPipeline.process_posts`.
+- `**POST /workflows/prep-until-google-quota-then-stego`** — Repeats **data-load → research → gen-angles** in bounded batches until **Google Search quota** is detected, then switches to **stego-only** batch processing for a required client-supplied `tag`.
 - `**POST /workflows/receiver`** — Decode path: rebuilds context (**data-load → research → gen-angles**) then decodes the sender’s stego comment for a supplied post JSON.
 - `**POST /workflows/stego-receiver-live`** — Runs **stego** then **receiver** with isolated sender/receiver disk caches; receiver rebuild still runs **gen-angles** as part of context rebuild.
 
@@ -149,12 +150,14 @@ Posts, previews, and tool responses may include an `angles` array. Each angle in
 - `POST /workflows/run`
   - Generic workflow runner.
   - Body: `command` (string) + the same fields as the matching dedicated `POST /workflows/<name>` route.
-  - **Canonical command list:** `GET /workflows/pipelines` returns `commands` and `endpoints`; keep clients aligned with that list (includes e.g. `receiver`, `stego-receiver-live`, `batch-angles-determinism`).
+  - **Canonical command list:** `GET /workflows/pipelines` returns `commands` and `endpoints`; keep clients aligned with that list (includes e.g. `receiver`, `stego-receiver-live`, `batch-angles-determinism`, `prep-until-google-quota-then-stego`).
   - For `command: "stego"`, it uses the same optional/fallback semantics as `POST /workflows/stego` (including optional `payload` as a string or JSON value coerced to string).
   - For `command: "full"`, optional `payload` (string or JSON) is accepted and reported on the run as `payload_provided` in progress events; omit to use defaults where applicable.
   - For `command: "research"`, optional `include_breakdown` (bool, default `false`) matches `POST /workflows/research` (see below). Sync response `data` is `{ "command": "research", "result": <list> }` by default, or `{ "command": "research", "result": { "posts", "breakdown" } }` when `include_breakdown` is true. Streaming: final `result` event uses the same `result` shape.
+  - For `command: "prep-until-google-quota-then-stego"`, body fields and behavior match the dedicated route of the same name, including required `tag`, optional `batch_count`, `batch_size`, and `payload`.
   - Streaming:
     - Defaults to `text/event-stream` (SSE) with events: `status`, `progress`, `log`, `result`, `error`, `done`.
+    - Some workflows emit compact milestone-style `progress` payloads rather than forwarding every low-level callback. `prep-until-google-quota-then-stego` is intentionally **non-spammy** and reports only meaningful state changes.
     - Disable streaming with `?stream=0` or body `{ "stream": false }` to get standard JSON envelope.
 - `POST /workflows/data-load`
   - Body: `count?`, `offset?`, `batch_size?`
@@ -173,6 +176,29 @@ Posts, previews, and tool responses may include an `angles` array. Each angle in
   - Body: `count?` (default `1`), `offset?` (default `0`)
   - Response `data`: list of per-post pipeline results (same shape as other batch workflow returns).
   - Streaming defaults to SSE; disable via `?stream=0` or `{ "stream": false }`.
+- `POST /workflows/prep-until-google-quota-then-stego`
+  - **Purpose:** Repeatedly runs prep-only batches of **data-load → research → gen-angles** until **Google Search quota** is detected, then switches to **stego-only** recursive processing over prepared posts.
+  - Body:
+    - `tag` (string, required) — exact suffix/version marker to append to stego output filenames (for example `version_42`).
+    - `batch_count?` (int, default `1`) — number of posts to attempt per prep iteration.
+    - `batch_size?` (int, default `5`) — data-load sub-batch size within each prep iteration.
+    - `payload?` (string or JSON object/array, coerced to string) — optional stego payload; same coercion semantics as `POST /workflows/stego`.
+  - Behavior:
+    - Prep is a loop of bounded batches, not a single `full` run.
+    - For this workflow only, research treats **Google quota** as a hard stop and does **not** use the usual Bing/ScrapingDog fallback.
+    - When quota is detected, the workflow emits a transition and starts stego-only processing with `run_all=true` semantics and `list_offset=0`.
+    - If prep finds no more work before quota, it still proceeds to stego over whatever prepared posts already exist.
+    - Non-quota prep failures abort the workflow and do **not** switch to stego.
+  - Response `data` shape:
+    - `succeeded`
+    - `tag`
+    - `prep` — `iterations`, `data_load_processed`, `research_processed`, `gen_angles_processed`, `gen_angles_failed`, `prepared_posts`, `quota_detected`, `stop_reason`
+    - `stego` — `run_all`, `tag`, `list_offset`, `processed_count`, `succeeded_count`, `failed_count`, `stopped_reason`, `results`, `elapsed_ms`
+    - `phase_transition` — `null` unless prep stopped because of Google quota, in which case `{ "from_phase": "prep", "to_phase": "stego", "reason": "google_search_quota_detected" }`
+  - Streaming:
+    - Defaults to SSE; disable via `?stream=0` or `{ "stream": false }`.
+    - Uses milestone-style `progress` payloads only; no heartbeat or keepalive events are emitted by this workflow.
+    - Typical `progress.event` values: `workflow_start`, `phase_start`, `prep_batch_start`, `prep_stage_done`, `prep_batch_summary`, `quota_detected`, `phase_transition`, `stego_batch_start`, `stego_post_done`, `stego_batch_summary`, `phase_done`.
 - `POST /workflows/stego`
   - Body: `post_id?`, `payload?` (string or JSON object/array, coerced to string), `tag?`, `list_offset?`, `run_all?`, `max_posts?`
   - Behavior:
@@ -396,4 +422,3 @@ Posts, previews, and tool responses may include an `angles` array. Each angle in
 - Errors from third-party providers are surfaced via `error` + optional `details`.
 - Current API is internal/admin-capable and has no authorization layer.
 - **Metrics UI:** Use `GET /tools/metrics/history` for a file list, then `GET /state/fs/read-json?path=…` with the returned `path` to load a report. Perplexity runs can be slow and may require GPU memory; consider `device=cpu` or a smaller `model_name` for lighter hosts.
-

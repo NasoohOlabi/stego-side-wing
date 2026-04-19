@@ -21,7 +21,6 @@ from infrastructure.config import (
     get_env,
     get_google_generative_language_api_key,
     get_google_generative_language_api_keys,
-    get_google_ai_request_timeout_seconds,
     get_lm_studio_request_timeout_seconds,
     get_lm_studio_url,
     get_workflow_llm_backend,
@@ -202,17 +201,15 @@ def _genai_generate_text(
     system_message: str | None,
     temperature: float,
     max_tokens: int | None,
-    timeout_sec: int,
 ) -> str:
-    client = genai.Client(
-        api_key=api_key,
-        http_options=genai_types.HttpOptions(timeout=timeout_sec),
-    )
-    config = genai_types.GenerateContentConfig(
-        temperature=temperature,
-        max_output_tokens=max_tokens,
-        system_instruction=system_message or None,
-    )
+    client = genai.Client(api_key=api_key)
+    config_kwargs: dict[str, Any] = {
+        "temperature": temperature,
+        "system_instruction": system_message or None,
+    }
+    if max_tokens is not None:
+        config_kwargs["max_output_tokens"] = max_tokens
+    config = genai_types.GenerateContentConfig(**config_kwargs)
     try:
         resp = client.models.generate_content(
             model=model_name,
@@ -230,7 +227,7 @@ def _genai_generate_text(
             system_message=system_message,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout_sec=timeout_sec,
+            timeout_sec=30,
         )
 
 
@@ -485,7 +482,6 @@ class LLMAdapter:
             get_google_generative_language_api_keys()
         )
         self.google_palm_api_key = get_google_generative_language_api_key()
-        self.google_ai_timeout_sec = get_google_ai_request_timeout_seconds()
         self.groq_api_key = get_env("GROQ_API_KEY")
         self.lm_studio_url = get_lm_studio_url()
         self.lm_studio_api_token = get_env("LM_STUDIO_API_TOKEN", "lm-studio")
@@ -854,12 +850,6 @@ class LLMAdapter:
         endpoint = _provider_endpoint("gemini", model=model_name)
         keys = self.google_generative_language_api_keys
         last_exc: BaseException | None = None
-        timeout_sec = getattr(
-            self,
-            "google_ai_timeout_sec",
-            get_google_ai_request_timeout_seconds(),
-        )
-
         def _make_request(
             resolved_key: str,
             *,
@@ -874,7 +864,6 @@ class LLMAdapter:
                     system_message=request_system_message,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout_sec=timeout_sec,
                 )
                 text = _strip_redacted_thinking(raw)
                 if not text.strip() and raw.strip():

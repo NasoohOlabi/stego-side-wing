@@ -12,7 +12,6 @@ def _adapter() -> LLMAdapter:
     adapter.openai_api_key = None
     adapter.google_palm_api_key = None
     adapter.google_generative_language_api_keys = []
-    adapter.google_ai_timeout_sec = 123
     adapter.groq_api_key = None
     adapter.lm_studio_url = "https://example.invalid/v1"
     adapter.lm_studio_api_token = "token"
@@ -283,7 +282,7 @@ def test_gemini_system_message_fallback_can_rotate_to_second_key(
     ]
 
 
-def test_gemini_client_uses_configured_timeout(
+def test_gemini_client_uses_default_sdk_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: list[int | None] = []
@@ -313,12 +312,11 @@ def test_gemini_client_uses_configured_timeout(
     adapter = _adapter()
     adapter.google_generative_language_api_keys = ["key-a"]
     adapter.google_palm_api_key = "key-a"
-    adapter.google_ai_timeout_sec = 77
 
     out = adapter.call_llm(prompt="hi", provider="gemini", model="gemini-pro")
 
     assert out == "ok"
-    assert seen == [77]
+    assert seen == [None]
 
 
 def test_gemini_transport_uses_rest_fallback(
@@ -345,7 +343,7 @@ def test_gemini_transport_uses_rest_fallback(
         payload = kwargs["json"]
         assert isinstance(payload, dict)
         assert kwargs["params"] == {"key": "key-a"}
-        assert kwargs["timeout"] == 77
+        assert kwargs["timeout"] == 30
         assert payload["system_instruction"]["parts"][0]["text"] == "Return JSON only."
         resp = MagicMock()
         resp.status_code = 200
@@ -369,7 +367,6 @@ def test_gemini_transport_uses_rest_fallback(
     adapter = _adapter()
     adapter.google_generative_language_api_keys = ["key-a"]
     adapter.google_palm_api_key = "key-a"
-    adapter.google_ai_timeout_sec = 77
 
     out = adapter.call_llm(
         prompt="hi",

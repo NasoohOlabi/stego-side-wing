@@ -114,7 +114,14 @@ def body_metrics_dataset_dir(body: dict[str, Any]) -> tuple[Path | None, tuple[A
 
 
 def body_metrics_output_basename(body: dict[str, Any]) -> tuple[str | None, tuple[Any, int] | None]:
-    raw = body.get("filename")
+    return _validate_metrics_output_basename(body.get("filename"))
+
+
+def query_metrics_output_basename() -> tuple[str | None, tuple[Any, int] | None]:
+    return _validate_metrics_output_basename(request.args.get("filename"))
+
+
+def _validate_metrics_output_basename(raw: Any) -> tuple[str | None, tuple[Any, int] | None]:
     if not isinstance(raw, str) or not raw.strip():
         return None, fail("'filename' must be a non-empty string", status=400)
     stripped = raw.strip()

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, NamedTuple, cast
 
 from loguru import logger
+from pydantic import validate_call
 
 from infrastructure.config import REPO_ROOT
 
@@ -707,6 +708,23 @@ def _repo_relative_path(absolute_path: Path, repo_root: Path) -> str:
         return str(rel).replace("\\", "/")
     except ValueError:
         return str(absolute_path.resolve())
+
+
+@validate_call(config={"arbitrary_types_allowed": True})
+def delete_metrics_output_sample(output_dir: Path, filename: str) -> dict[str, Any]:
+    """Delete one stego output JSON so future metrics runs exclude it."""
+    target = (output_dir / filename).resolve()
+    if not target.is_file():
+        raise FileNotFoundError(f"Metrics output sample not found: {target}")
+    target.unlink()
+    deleted_path = _repo_relative_path(target, REPO_ROOT)
+    logger.info("metrics_output_sample_deleted", path=deleted_path, filename=filename)
+    return {
+        "deleted": True,
+        "filename": filename,
+        "path": deleted_path,
+        "future_metrics_excluded": True,
+    }
 
 
 def _metrics_file_row(path: Path, kind: str, repo_root: Path) -> dict[str, Any]:

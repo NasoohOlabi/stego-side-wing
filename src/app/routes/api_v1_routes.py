@@ -6,6 +6,7 @@ Re-exports symbols that tests monkeypatch on this module (see ``src/tests/test_a
 from app.routes.api_v1 import bp, init_workflow_runner, runner
 from infrastructure.json_logging import clear_api_log_file, get_api_log_file_stats
 from services.stego_metrics_service import (
+    delete_metrics_output_sample,
     list_metrics_history,
     run_divergence_metrics,
     run_perplexity_metrics,
@@ -25,6 +26,7 @@ __all__ = [
     "runner",
     "clear_api_log_file",
     "get_api_log_file_stats",
+    "delete_metrics_output_sample",
     "list_metrics_history",
     "run_divergence_metrics",
     "run_perplexity_metrics",

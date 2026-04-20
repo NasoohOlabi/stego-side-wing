@@ -2,8 +2,11 @@ import os
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 from services import stego_metrics_service as sms
 from services.stego_metrics_service import (
+    delete_metrics_output_sample,
     extract_stego_text_unified,
     js_divergence,
     kl_divergence,
@@ -105,3 +108,24 @@ def test_run_single_post_metrics_skips_perplexity_without_torch(tmp_path: Path, 
     data = run_single_post_metrics(out / "x_version_9.json", ds)
     assert data["perplexity"] is None
     assert any("Perplexity skipped" in w for w in data["warnings"])
+
+
+def test_delete_metrics_output_sample_removes_file(tmp_path: Path) -> None:
+    out = tmp_path / "output-results"
+    out.mkdir()
+    sample = out / "abc_version_3.json"
+    sample.write_text("[]", encoding="utf-8")
+
+    deleted = delete_metrics_output_sample(out, sample.name)
+
+    assert deleted["deleted"] is True
+    assert deleted["filename"] == sample.name
+    assert not sample.exists()
+
+
+def test_delete_metrics_output_sample_missing_file(tmp_path: Path) -> None:
+    out = tmp_path / "output-results"
+    out.mkdir()
+
+    with pytest.raises(FileNotFoundError):
+        delete_metrics_output_sample(out, "missing_version_1.json")

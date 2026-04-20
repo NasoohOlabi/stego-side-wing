@@ -53,6 +53,40 @@ def test_metrics_history_endpoint_ok(client, monkeypatch):
     assert payload["data"]["history"][0]["kind"] == "perplexity"
 
 
+def test_metrics_delete_sample_endpoint_ok(client, monkeypatch):
+    from app.routes import api_v1_routes
+
+    monkeypatch.setattr(
+        api_v1_routes,
+        "delete_metrics_output_sample",
+        lambda output_dir, filename: {
+            "deleted": True,
+            "filename": filename,
+            "path": f"output-results/{filename}",
+            "future_metrics_excluded": True,
+        },
+    )
+    r = client.delete("/api/v1/tools/metrics/sample?filename=x_version_1.json")
+    assert r.status_code == 200
+    payload = r.get_json()
+    assert payload["ok"] is True
+    assert payload["data"]["deleted"] is True
+    assert payload["data"]["filename"] == "x_version_1.json"
+
+
+def test_metrics_delete_sample_endpoint_missing_file(client, monkeypatch):
+    from app.routes import api_v1_routes
+
+    def _raise_missing(*_args, **_kwargs):
+        raise FileNotFoundError("Metrics output sample not found")
+
+    monkeypatch.setattr(api_v1_routes, "delete_metrics_output_sample", _raise_missing)
+    r = client.delete("/api/v1/tools/metrics/sample?filename=x_version_1.json")
+    assert r.status_code == 404
+    payload = r.get_json()
+    assert payload["ok"] is False
+
+
 def test_metrics_divergence_endpoint_ok(client, monkeypatch):
     from app.routes import api_v1_routes
 

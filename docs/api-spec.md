@@ -383,6 +383,13 @@ Posts, previews, and tool responses may include an `angles` array. Each angle in
       -H 'Content-Type: application/json' \
       -d '{"filename":"1look5n_version_15.json","output_dir":"output-results","dataset_dir":"datasets/news_cleaned","device":"cpu"}'
     ```
+- `DELETE /tools/metrics/sample`
+  - Deletes one stego output JSON from the metrics input directory so future metrics runs exclude it.
+  - **Query parameters:**
+    - `filename` (required) — basename only, must end with `.json`.
+    - `output_dir` — optional repo-relative directory; defaults to `output-results`.
+  - **Success `data`:** `{ "deleted": true, "filename": "<name.json>", "path": "<repo-relative-or-absolute>", "future_metrics_excluded": true }`
+  - **Note:** existing saved report files under `metrics/` are not rewritten; rerun the metrics endpoints after deletion to regenerate clean reports.
 - `GET /tools/metrics/history`
   - Lists saved metrics report files **newest first** (by filesystem mtime). Does not parse report JSON; use `GET /state/fs/read-json?path=<path>` if you need the full document.
   - **Query parameters:**

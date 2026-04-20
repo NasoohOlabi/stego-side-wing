@@ -18,6 +18,7 @@ from app.routes.api_v1.http_parsers import (
     json_body,
     preview_response,
     query_int,
+    query_metrics_output_basename,
     query_metrics_dir_param,
     required_body_str,
 )
@@ -221,6 +222,31 @@ def tool_metrics_single_post() -> tuple[Any, int]:
     except Exception as exc:
         logger.exception("Single-post metrics failed")
         return fail("Single-post metrics failed", status=500, details=str(exc))
+
+
+@bp.route("/tools/metrics/sample", methods=["DELETE"])
+def tool_metrics_delete_sample() -> tuple[Any, int]:
+    filename, err = query_metrics_output_basename()
+    if err:
+        return err
+    assert filename is not None
+    output_dir_raw = request.args.get("output_dir", "output-results")
+    output_dir, err = body_metrics_output_dir({"output_dir": output_dir_raw})
+    if err:
+        return err
+    assert output_dir is not None
+    try:
+        from app.routes import api_v1_routes as ar
+
+        data = ar.delete_metrics_output_sample(output_dir, filename)
+        return ok(data, message="Metrics sample deleted; rerun metrics to refresh saved reports.")
+    except FileNotFoundError as exc:
+        return fail(str(exc), status=404)
+    except ValueError as exc:
+        return fail(str(exc), status=400)
+    except Exception as exc:
+        logger.exception("Metrics sample deletion failed")
+        return fail("Metrics sample deletion failed", status=500, details=str(exc))
 
 
 @bp.route("/tools/metrics/history", methods=["GET"])

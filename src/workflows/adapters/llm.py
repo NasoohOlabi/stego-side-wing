@@ -451,6 +451,22 @@ def _strip_redacted_thinking(text: str) -> str:
 strip_redacted_thinking = _strip_redacted_thinking
 
 
+def _strip_lm_studio_control_envelope(text: str) -> str:
+    """Unwrap LM Studio control-token envelopes while leaving other providers untouched."""
+    s = text.strip()
+    prefix = "<|channel|>final"
+    if not s.startswith(prefix):
+        return s
+
+    marker = "<|message|>"
+    marker_index = s.find(marker)
+    if marker_index < 0:
+        return s
+
+    payload = s[marker_index + len(marker) :].strip()
+    return payload or s
+
+
 def _split_thinking_and_answer(raw: str) -> tuple[str, str]:
     """Split chain-of-thought from the parseable answer for prompt logs."""
     thinking_parts: list[str] = []
@@ -1063,7 +1079,7 @@ class LLMAdapter:
             if not choices:
                 raise RuntimeError("No choices in LM Studio response")
             raw = choices[0]["message"]["content"] or ""
-            text = _strip_redacted_thinking(raw)
+            text = _strip_lm_studio_control_envelope(_strip_redacted_thinking(raw))
             fr, pt, ct = _openai_compatible_meta(data)
             self._log_workflow_llm_turn(
                 provider="lm_studio",

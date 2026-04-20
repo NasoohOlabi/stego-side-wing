@@ -86,6 +86,35 @@ def test_lm_studio_404_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     assert adapter.last_call_metadata["http_status"] == 404
 
 
+def test_lm_studio_unwraps_control_envelope_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_post(*_args: object, **_kwargs: object) -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "<|channel|>final <|constrain|>json<|message|>"
+                            '["a", "b", "c"]'
+                        )
+                    }
+                }
+            ]
+        }
+        return resp
+
+    monkeypatch.setattr("workflows.adapters.llm.requests.post", fake_post)
+
+    adapter = _adapter()
+    out = adapter.call_llm(prompt="hello", provider="lm_studio", model="demo")
+
+    assert out == '["a", "b", "c"]'
+    assert adapter.last_call_metadata["success"] is True
+
+
 def test_gemini_rotates_to_second_key_after_403(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str | None] = []
 

@@ -8,6 +8,7 @@ import pytest
 from infrastructure.config import REPO_ROOT
 from workflows.adapters.llm import (
     LLMAdapter,
+    _strip_lm_studio_control_envelope,
     _split_thinking_and_answer,
     _strip_redacted_thinking,
 )
@@ -123,6 +124,19 @@ def test_no_strip_when_thinking_not_leading() -> None:
     raw = '["x"]\n\nThinking Process:\nnoise\n'
     out = _strip_redacted_thinking(raw)
     assert "Thinking Process" in out
+
+
+def test_strip_lm_studio_control_envelope_returns_json_payload() -> None:
+    raw = (
+        '<|channel|>final <|constrain|>json<|message|>'
+        '["a", "b", "c"]'
+    )
+    assert _strip_lm_studio_control_envelope(raw) == '["a", "b", "c"]'
+
+
+def test_strip_lm_studio_control_envelope_leaves_plain_json_alone() -> None:
+    raw = '["a", "b", "c"]'
+    assert _strip_lm_studio_control_envelope(raw) == raw
 
 
 def test_split_thinking_and_answer_tagged_plus_idx() -> None:

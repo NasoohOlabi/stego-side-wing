@@ -1,5 +1,6 @@
 """Generate angles from post content."""
 
+import re
 import time
 from typing import Any
 
@@ -7,6 +8,7 @@ from loguru import logger
 
 from infrastructure.config import (
     get_workflow_angles_max_output,
+    get_workflow_angles_generation_mode,
     get_workflow_llm_backend,
     resolve_workflow_llm_provider_and_model,
 )
@@ -55,6 +57,55 @@ def _probe_llm_run_id(pipeline: Any) -> str:
     return str(meta.get("run_id") or "")
 
 
+def _source_category(source: str) -> str:
+    if source == "comments":
+        return "Community Discussion"
+    if source == "post":
+        return "Original Post"
+    return "Reference Material"
+
+
+def _sentence_candidates(text: str) -> list[str]:
+    chunks = re.split(r"(?<=[.!?])\s+|\n+", text)
+    cleaned: list[str] = []
+    for chunk in chunks:
+        sentence = " ".join(chunk.split()).strip(" -")
+        if 24 <= len(sentence) <= 220:
+            cleaned.append(sentence)
+    return cleaned or ([" ".join(text.split())[:220].strip()] if text.strip() else [])
+
+
+def _entry_to_angles(entry: dict[str, Any], source_document: int) -> list[dict[str, Any]]:
+    text = str(entry.get("text", "")).strip()
+    if not text:
+        return []
+    return [
+        {
+            "source_quote": sentence,
+            "tangent": sentence,
+            "category": _source_category(str(entry.get("source", ""))),
+            "source_document": source_document,
+        }
+        for sentence in _sentence_candidates(text)[:2]
+    ]
+
+
+def _dedupe_angles(angles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str]] = set()
+    out: list[dict[str, Any]] = []
+    for angle in angles:
+        key = (
+            str(angle.get("source_quote", "")).casefold(),
+            str(angle.get("tangent", "")).casefold(),
+            str(angle.get("category", "")).casefold(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(angle)
+    return out
+
+
 class GenAnglesPipeline:
     """
     Stateful orchestration for angle generation: owns backend and LLM adapters, workflow
@@ -83,6 +134,12 @@ class GenAnglesPipeline:
         """Texts plus deterministic dictionary observability metadata."""
         return build_post_text_dictionary_bundle(post, apply_capacity_profile=True)
 
+    def _generate_angles_extractive(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        angles: list[dict[str, Any]] = []
+        for source_document, entry in enumerate(entries):
+            angles.extend(_entry_to_angles(entry, source_document))
+        return _dedupe_angles(angles)
+
     def preview_post(
         self,
         post: dict[str, Any],
@@ -91,8 +148,10 @@ class GenAnglesPipeline:
         """Generate angles without mutating or saving artifacts."""
         post_id = str(post.get("id") or "<unknown>")
         dictionary_bundle = self.build_dictionary_bundle_for_post(post)
+        entry_bundle = list(dictionary_bundle.get("entries", []))
         dictionary = list(dictionary_bundle["texts"])
         dictionary_report = dict(dictionary_bundle["report"])
+        generation_mode = get_workflow_angles_generation_mode()
         t_preview = time.perf_counter()
         cfg = getattr(self, "config", None) or get_config()
         if get_workflow_llm_backend() == "google":
@@ -118,6 +177,7 @@ class GenAnglesPipeline:
             "provider": report_provider,
             "model": report_model,
             "temperature": ANGLES_TEMPERATURE,
+            "generation_mode": generation_mode,
             "system_prompt_hash": stable_hash(ANGLES_SYSTEM_PROMPT),
             "user_prompt_template_hash": stable_hash(ANGLES_USER_PROMPT_TEMPLATE),
             "used_fallback": False,
@@ -158,6 +218,42 @@ class GenAnglesPipeline:
                 dictionary_id=report["dictionary_id"],
             )
             return {"post": dict(post, angles=[], options_count=0), "report": report}
+
+        if generation_mode == "extractive_zero_kld":
+            t_extract = time.perf_counter()
+            angles = self._generate_angles_extractive(entry_bundle)
+            extract_ms = _elapsed_ms(t_extract)
+            angles_raw_count = len(angles)
+            max_angles = get_workflow_angles_max_output()
+            if len(angles) > max_angles:
+                angles = angles[:max_angles]
+            processed_post = dict(post, angles=angles, options_count=len(angles))
+            report.update(
+                {
+                    "angles": angles,
+                    "angles_hash": stable_hash(angles),
+                    "options_count": len(angles),
+                    "angles_raw_count": angles_raw_count,
+                    "angles_capped": angles_raw_count != len(angles),
+                    "angles_max_output": max_angles,
+                }
+            )
+            _gen_angles_bind_log().info(
+                "gen_angles_preview_complete",
+                path="extractive_zero_kld",
+                post_id=post_id,
+                elapsed_ms_total=_elapsed_ms(t_preview),
+                elapsed_ms_extractive=extract_ms,
+                input_count=len(dictionary),
+                angles_count=len(angles),
+                angles_hash=report["angles_hash"],
+                dictionary_id=report["dictionary_id"],
+                angles_raw_count=angles_raw_count,
+                angles_capped=angles_raw_count != len(angles),
+                angles_max_output=max_angles,
+                generation_mode=generation_mode,
+            )
+            return {"post": processed_post, "report": report}
 
         if report["input_capacity_applied"]:
             _gen_angles_bind_log().warning(
@@ -393,6 +489,7 @@ class GenAnglesPipeline:
         step: str = "angles-step",
         count: int = 1,
         offset: int = 0,
+        tag: str | None = None,
     ) -> list[dict]:
         """
         Process multiple posts to generate angles.
@@ -406,7 +503,12 @@ class GenAnglesPipeline:
             List of posts with angles added
         """
         t_batch = time.perf_counter()
-        posts_list = self.backend.posts_list(step=step, count=count, offset=offset)
+        try:
+            posts_list = self.backend.posts_list(step=step, count=count, offset=offset, tag=tag)
+        except TypeError as exc:
+            if "tag" not in str(exc):
+                raise
+            posts_list = self.backend.posts_list(step=step, count=count, offset=offset)
         file_names = posts_list.get("fileNames", [])
         load_failed_count = 0
         if not file_names:
@@ -440,11 +542,12 @@ class GenAnglesPipeline:
                     step=step,
                 )
                 load_failed_count += 1
-        processed_posts = self.process_post_objects(posts=posts, step=step)
+        processed_posts = self.process_post_objects(posts=posts, step=step, tag=tag)
         processing_summary = dict(getattr(self, "_last_batch_summary", {}))
         processing_failed = int(processing_summary.get("failed_count", 0) or 0)
         self._last_batch_summary = {
             "step": step,
+            "tag": tag,
             "requested_count": count,
             "listed_count": len(file_names),
             "loaded_count": len(posts),
@@ -486,20 +589,31 @@ class GenAnglesPipeline:
         posts: list[dict[str, Any]],
         step: str = "angles-step",
         allow_fallback: bool = False,
+        tag: str | None = None,
     ) -> list[dict[str, Any]]:
         """Process already-loaded post objects and persist angle-enriched versions."""
         processed_posts: list[dict[str, Any]] = []
+        save_object = getattr(self.backend, "save_object_local", None)
+        save_post = getattr(self.backend, "save_post_local", None)
         for post in posts:
             post_id = post.get("id", "<unknown>")
             t_post = time.perf_counter()
             try:
                 processed = self.process_post(post, step, allow_fallback=allow_fallback)
-                self.backend.save_post_local(processed, step=step)
+                filename = f"{post_id}_{tag}.json" if tag else f"{post_id}.json"
+                if callable(save_object):
+                    save_object(processed, step=step, filename=filename)
+                elif callable(save_post) and not tag:
+                    save_post(processed, step=step)
+                else:
+                    raise AttributeError("backend is missing a compatible save method")
                 processed_posts.append(processed)
                 _gen_angles_bind_log().info(
                     "gen_angles_post_persisted",
                     post_id=post_id,
                     step=step,
+                    tag=tag,
+                    filename=filename,
                     elapsed_ms_total=_elapsed_ms(t_post),
                     options_count=processed.get("options_count"),
                 )
@@ -512,6 +626,7 @@ class GenAnglesPipeline:
                 )
         self._last_batch_summary = {
             "step": step,
+            "tag": tag,
             "input_count": len(posts),
             "processed_count": len(processed_posts),
             "failed_count": len(posts) - len(processed_posts),
@@ -524,6 +639,7 @@ class GenAnglesPipeline:
         post_id: str,
         step: str = "angles-step",
         allow_fallback: bool = False,
+        tag: str | None = None,
     ) -> dict[str, Any]:
         """
         Process one post by ID and persist angle output.
@@ -535,12 +651,16 @@ class GenAnglesPipeline:
         Returns:
             Processed post dictionary with angles
         """
-        file_name = f"{post_id}.json"
-        post = self.backend.get_post_local(file_name, step)
+        file_name = f"{post_id}_{tag}.json" if tag else f"{post_id}.json"
+        try:
+            post = self.backend.get_post_local(file_name, step)
+        except FileNotFoundError:
+            post = self.backend.get_post_local(f"{post_id}.json", step)
         results = self.process_post_objects(
             posts=[post],
             step=step,
             allow_fallback=allow_fallback,
+            tag=tag,
         )
         if not results:
             raise RuntimeError(f"GenAngles returned no result for post {post_id}")

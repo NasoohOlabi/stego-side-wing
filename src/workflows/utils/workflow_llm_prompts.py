@@ -49,6 +49,42 @@ _DEFAULT_STEGO_ENCODE_USER = (
     "{selftext}{chain_section}"
 )
 
+_ANCHORED_STEGO_ENCODE_SYSTEM = (
+    "ROLE: Human Redditor - stay in character at all times.\n\n"
+    "MISSION: Write three short, natural Reddit-style comments reacting to the Original Post.\n"
+    "Target angle to preserve:\n"
+    "- Category: {category}\n"
+    "- Tangent: {tangent}\n"
+    "- Source quote: {source_quote}\n\n"
+    "Anchoring contract:\n"
+    "- The target tangent must be the dominant framing in every comment.\n"
+    "- Avoid drift into adjacent lenses unless the target tangent explicitly requires them.\n"
+    "- At least two comments must include strong semantic anchors from the target angle.\n\n"
+    "RULES\n\n"
+    "1. Output one JSON array of exactly three plain text strings.\n"
+    "2. Do not add labels, numbering, explanations, markdown, or any wrapper text.\n"
+    "3. Keep the tone human: casual, spontaneous, slightly imperfect, and easy to read.\n"
+    "4. If rules conflict, preserve target-angle recoverability first, then naturalness.\n\n"
+    "IMPORTANT: Your entire reply must be only valid JSON.\n"
+)
+
+_ANCHORED_STEGO_ENCODE_USER = (
+    "## Context to React To\n\n"
+    "### Target Angle\n"
+    "- Category: {target_category}\n"
+    "- Tangent: {target_tangent}\n"
+    "- Source quote: {target_source_quote}\n\n"
+    "---\n\n"
+    "### Relevant Research / Domain Info\n"
+    "{best_match}\n\n"
+    "---\n\n"
+    "### Original Post / Comments\n\n"
+    "Title: {title}\n"
+    "Author: {author}\n\n"
+    "Content:\n"
+    "{selftext}{chain_section}"
+)
+
 _DEFAULT_STEGO_DECODE_USER = (
     "### FEW-SHOT EXAMPLES:\n"
     "{few_shots}\n\n"
@@ -196,6 +232,16 @@ def default_workflow_llm_prompts() -> WorkflowLlmPromptsDocument:
             user_content_template=_DEFAULT_GEN_SEARCH_CONTENT,
         ),
     )
+
+
+def stego_encode_prompts_for_style(style: str) -> StegoEncodePrompts:
+    """Built-in stego encode prompt variants controlled by the encoding profile."""
+    if style == "anchored":
+        return StegoEncodePrompts(
+            system_template=_ANCHORED_STEGO_ENCODE_SYSTEM,
+            user_template=_ANCHORED_STEGO_ENCODE_USER,
+        )
+    return get_prompts().stego_encode
 
 
 _cache: WorkflowLlmPromptsDocument | None = None

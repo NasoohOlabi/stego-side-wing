@@ -613,19 +613,21 @@ class WorkflowRunner:
         self,
         count: int = 1,
         offset: int = 0,
+        tag: str | None = None,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> list[dict]:
         """Run GenAngles pipeline."""
         self._emit(
             on_progress,
             "stage_start",
-            {"stage": "gen-angles", "count": count, "offset": offset},
+            {"stage": "gen-angles", "count": count, "offset": offset, "tag": tag},
         )
         t0 = time.perf_counter()
         results = self.gen_angles.process_posts(
             step="angles-step",
             count=count,
             offset=offset,
+            tag=tag,
         )
         batch_ms = int((time.perf_counter() - t0) * 1000)
         summary = dict(getattr(self.gen_angles, "_last_batch_summary", {}) or {})
@@ -650,6 +652,7 @@ class WorkflowRunner:
                 "processed_count": len(results),
                 "elapsed_ms": batch_ms,
                 "requested_count": summary.get("requested_count"),
+                "tag": summary.get("tag"),
                 "listed_count": summary.get("listed_count"),
                 "loaded_count": summary.get("loaded_count"),
                 "load_failed_count": summary.get("load_failed_count"),

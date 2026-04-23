@@ -1,0 +1,27 @@
+{
+  "id": "security-130",
+  "title": "Encoding profile security sample 130",
+  "selftext": "",
+  "url": "https://example.test/security/130",
+  "comments": [
+    {
+      "id": "security-130-c0",
+      "author": "user_0",
+      "body": "The sample discussion for profile security sample 130 keeps stable wording in comment slot 0 with marker rhrztnsh.",
+      "replies": []
+    },
+    {
+      "id": "security-130-c1",
+      "author": "user_1",
+      "body": "The carrier discussion for profile security sample 130 keeps stable wording in comment slot 1 with marker lasxbbch.",
+      "replies": []
+    },
+    {
+      "id": "security-130-c2",
+      "author": "user_2",
+      "body": "The workflow discussion for profile security sample 130 keeps stable wording in comment slot 2 with marker fwainumk.",
+      "replies": []
+    }
+  ],
+  "search_results": []
+}

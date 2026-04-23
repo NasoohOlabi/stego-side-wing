@@ -7,8 +7,13 @@ from workflows.utils.stego_codec import (
     comment_selection_bit_width,
     compress_payload,
     decompress_after_embed_prefix,
+    embed_invisible_payload,
+    extract_invisible_payload,
+    protect_payload,
     recover_payload_bruteforce_comment_bits,
     recover_payload_with_compressed_full,
+    strip_invisible_payload,
+    unprotect_payload,
 )
 
 
@@ -70,3 +75,23 @@ def test_recover_with_compressed_full_matches_bruteforce():
     )
     assert full is not None and brute is not None
     assert full[0] == payload == brute[0]
+
+
+def test_invisible_payload_roundtrip_preserves_visible_text():
+    visible_text = "Distribution-compatible visible text."
+    payload = "hidden-" + ("XYZ123" * 256)
+
+    stego_text = embed_invisible_payload(visible_text, payload)
+
+    assert strip_invisible_payload(stego_text) == visible_text
+    assert extract_invisible_payload(stego_text) == payload
+
+
+def test_secure_payload_transform_roundtrip_and_authentication():
+    payload = "sensitive payload"
+    protected = protect_payload(payload, transform="hmac_xor_v1", secret="test-secret")
+
+    assert protected != payload
+    assert unprotect_payload(protected, transform="hmac_xor_v1", secret="test-secret") == payload
+    assert unprotect_payload(protected + "x", transform="hmac_xor_v1", secret="test-secret") is None
+    assert unprotect_payload(protected, transform="hmac_xor_v1", secret="wrong") is None

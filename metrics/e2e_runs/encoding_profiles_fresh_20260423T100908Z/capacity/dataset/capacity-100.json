@@ -1,0 +1,27 @@
+{
+  "id": "capacity-100",
+  "title": "Encoding profile capacity sample 100",
+  "selftext": "",
+  "url": "https://example.test/capacity/100",
+  "comments": [
+    {
+      "id": "capacity-100-c0",
+      "author": "user_0",
+      "body": "The profile discussion for profile capacity sample 100 keeps stable wording in comment slot 0 with marker afcxdrhz.",
+      "replies": []
+    },
+    {
+      "id": "capacity-100-c1",
+      "author": "user_1",
+      "body": "The sample discussion for profile capacity sample 100 keeps stable wording in comment slot 1 with marker qjjximwi.",
+      "replies": []
+    },
+    {
+      "id": "capacity-100-c2",
+      "author": "user_2",
+      "body": "The sample discussion for profile capacity sample 100 keeps stable wording in comment slot 2 with marker vgmxfkfo.",
+      "replies": []
+    }
+  ],
+  "search_results": []
+}

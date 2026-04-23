@@ -1,0 +1,27 @@
+{
+  "id": "security-006",
+  "title": "Encoding profile security sample 006",
+  "selftext": "",
+  "url": "https://example.test/security/006",
+  "comments": [
+    {
+      "id": "security-006-c0",
+      "author": "user_0",
+      "body": "The sample discussion for profile security sample 006 keeps stable wording in comment slot 0 with marker ltnwgnez.",
+      "replies": []
+    },
+    {
+      "id": "security-006-c1",
+      "author": "user_1",
+      "body": "The profile discussion for profile security sample 006 keeps stable wording in comment slot 1 with marker ixfrxuke.",
+      "replies": []
+    },
+    {
+      "id": "security-006-c2",
+      "author": "user_2",
+      "body": "The metric discussion for profile security sample 006 keeps stable wording in comment slot 2 with marker lcrwryth.",
+      "replies": []
+    }
+  ],
+  "search_results": []
+}

@@ -145,6 +145,9 @@ def wf_gen_angles() -> Any:
         parsed_offset = int(offset)
     except (TypeError, ValueError):
         return fail("'count' and 'offset' must be integers", status=400)
+    tag, err = optional_body_str(body, "tag")
+    if err:
+        return err
 
     if wants_workflow_stream(body):
         return stream_workflow(
@@ -152,6 +155,7 @@ def wf_gen_angles() -> Any:
             lambda emit: runner.run_gen_angles(
                 count=parsed_count,
                 offset=parsed_offset,
+                tag=tag,
                 on_progress=lambda event, payload: emit(
                     "progress",
                     {"event": event, **payload},
@@ -166,6 +170,7 @@ def wf_gen_angles() -> Any:
             lambda: runner.run_gen_angles(
                 count=parsed_count,
                 offset=parsed_offset,
+                tag=tag,
             ),
         )
         return ok(data)
@@ -835,10 +840,15 @@ def wf_run() -> Any:
         offset, err = body_int(body, "offset", 0)
         if err:
             return err
+        tag, err = optional_body_str(body, "tag")
+        if err:
+            return err
         assert count is not None and offset is not None
 
         def _run_gen_angles(progress_cb: Callable[[str, dict[str, Any]], None] | None) -> Any:
-            return runner.run_gen_angles(count=count, offset=offset, on_progress=progress_cb)
+            return runner.run_gen_angles(
+                count=count, offset=offset, tag=tag, on_progress=progress_cb
+            )
 
         run_dispatch = _run_gen_angles
 

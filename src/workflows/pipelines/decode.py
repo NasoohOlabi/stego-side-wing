@@ -11,10 +11,14 @@ from typing import Any
 
 from loguru import logger
 
-from infrastructure.config import resolve_workflow_llm_provider_and_model
+from infrastructure.config import (
+    get_workflow_decode_llm_max_tries,
+    get_workflow_decode_semantic_top_n,
+    get_workflow_stego_llm_temperature,
+    resolve_workflow_llm_provider_and_model,
+)
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter, strip_redacted_thinking
-from workflows.llm_temperatures import STEGO_CYCLE_LLM_TEMPERATURE
 from workflows.utils.workflow_llm_prompts import get_prompts
 
 # Must match ``gpt-oss`` node + stego encoder (``stego.STEGO_LLM_MODEL``).
@@ -175,10 +179,11 @@ class DecodePipeline:
                 few_shots_count=len(few_shots or []),
             )
 
+            semantic_top_n = get_workflow_decode_semantic_top_n()
             search_result = self.backend.semantic_search(
                 text=stego_text,
                 objects=angles,
-                n=DECODE_SEMANTIC_TOP_N,
+                n=semantic_top_n,
             )
 
             results = search_result.get("results", [])
@@ -196,7 +201,7 @@ class DecodePipeline:
 
             top_candidates: list[dict[str, Any]] = []
             unmapped_semantic = 0
-            for rank, result in enumerate(results[:DECODE_SEMANTIC_TOP_N], start=1):
+            for rank, result in enumerate(results[:semantic_top_n], start=1):
                 obj = result.get("object", {})
                 if not isinstance(obj, dict):
                     unmapped_semantic += 1
@@ -246,7 +251,7 @@ class DecodePipeline:
                 log_area="semantic",
                 semantic_event="candidate_diagnostics",
                 results_returned=len(results),
-                results_scanned=min(len(results), DECODE_SEMANTIC_TOP_N),
+                results_scanned=min(len(results), semantic_top_n),
                 top_candidates_count=len(top_candidates),
                 unmapped_semantic_count=unmapped_semantic,
                 labeled_for_prompt_count=len(labeled),
@@ -279,14 +284,15 @@ class DecodePipeline:
             response: str | None = None
             last_exc: BaseException | None = None
             provider, model = resolve_workflow_llm_provider_and_model(DECODE_LLM_MODEL)
-            for attempt in range(1, DECODE_LLM_MAX_TRIES + 1):
+            max_tries = get_workflow_decode_llm_max_tries()
+            for attempt in range(1, max_tries + 1):
                 try:
                     response = self.llm.call_llm(
                         prompt=prompt,
                         system_message=system_message,
                         model=model,
                         provider=provider,
-                        temperature=STEGO_CYCLE_LLM_TEMPERATURE,
+                        temperature=get_workflow_stego_llm_temperature(),
                     )
                     break
                 except Exception as exc:
@@ -296,7 +302,7 @@ class DecodePipeline:
                         log_area="llm",
                         llm_event="attempt_failed",
                         attempt=attempt,
-                        max_tries=DECODE_LLM_MAX_TRIES,
+                        max_tries=max_tries,
                         error=str(exc),
                     )
             if response is None:

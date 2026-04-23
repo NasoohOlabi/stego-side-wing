@@ -1,0 +1,194 @@
+{
+  "created_at_utc": "2026-04-23T09:31:24.747536+00:00",
+  "run_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200",
+  "profiles": [
+    "robustness",
+    "capacity",
+    "security"
+  ],
+  "samples_per_profile": 200,
+  "payload_bytes": 512,
+  "seed": 1337,
+  "summaries": [
+    {
+      "profile": "robustness",
+      "settings": {
+        "encoding_profile": "robustness",
+        "capacity_profile": "mid",
+        "capacity_limits_enabled": true,
+        "angles_generation_mode": "extractive_zero_kld",
+        "stego_generation_mode": "extractive_zero_kld",
+        "payload_transform": "plain",
+        "stego_prompt_style": "anchored",
+        "stego_sample_angle_count": 6,
+        "stego_default_max_retries": 8,
+        "decode_semantic_top_n": 40,
+        "decode_llm_max_tries": 7,
+        "stego_llm_temperature": 0.45,
+        "decode_strict_default": false,
+        "has_encoding_secret": false
+      },
+      "samples": 200,
+      "payload_bytes": 512,
+      "unique_payloads": 200,
+      "unique_visible_texts": 200,
+      "unique_embedded_payloads": 200,
+      "metrics_report_path": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\robustness\\metrics\\divergence_metrics_20260423T093112Z.json",
+      "metrics_report": {
+        "created_at_utc": "2026-04-23T09:31:12.760395+00:00",
+        "config": {
+          "output_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\robustness\\output-results",
+          "dataset_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\robustness\\dataset",
+          "metrics_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\robustness\\metrics",
+          "tokenization": "word_unigram",
+          "token_regex": "[A-Za-z0-9']+",
+          "smoothing_alpha": 1e-06,
+          "kl_direction": "KL(stego||baseline)"
+        },
+        "dataset_summary": {
+          "total_output_files": 200,
+          "unique_output_post_ids": 200,
+          "usable_stego_samples": 200,
+          "skipped_missing_stegoText": 0,
+          "skipped_empty_stego_tokens": 0,
+          "skipped_missing_primary_post_file": 0,
+          "skipped_empty_primary_comment_bodies": 0,
+          "global_source_post_files": 200,
+          "global_nonempty_comment_bodies": 600
+        },
+        "primary_baseline_matched_post": {
+          "comparisons": 200,
+          "stego_posts_represented": 200,
+          "average_kl_stego_vs_matched_post": 0.0,
+          "average_jsd_stego_vs_matched_post": 0.0
+        },
+        "secondary_baseline_global_corpus": {
+          "comparisons": 200,
+          "stego_posts_represented": 200,
+          "average_kl_stego_vs_global_corpus": 0.617285829169813,
+          "average_jsd_stego_vs_global_corpus": 0.08358919969948482
+        }
+      }
+    },
+    {
+      "profile": "capacity",
+      "settings": {
+        "encoding_profile": "capacity",
+        "capacity_profile": "high",
+        "capacity_limits_enabled": true,
+        "angles_generation_mode": "extractive_zero_kld",
+        "stego_generation_mode": "extractive_zero_kld",
+        "payload_transform": "plain",
+        "stego_prompt_style": "natural",
+        "stego_sample_angle_count": 4,
+        "stego_default_max_retries": 4,
+        "decode_semantic_top_n": 24,
+        "decode_llm_max_tries": 5,
+        "stego_llm_temperature": 0.7,
+        "decode_strict_default": false,
+        "has_encoding_secret": false
+      },
+      "samples": 200,
+      "payload_bytes": 512,
+      "unique_payloads": 200,
+      "unique_visible_texts": 200,
+      "unique_embedded_payloads": 200,
+      "metrics_report_path": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\capacity\\metrics\\divergence_metrics_20260423T093117Z.json",
+      "metrics_report": {
+        "created_at_utc": "2026-04-23T09:31:17.629940+00:00",
+        "config": {
+          "output_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\capacity\\output-results",
+          "dataset_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\capacity\\dataset",
+          "metrics_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\capacity\\metrics",
+          "tokenization": "word_unigram",
+          "token_regex": "[A-Za-z0-9']+",
+          "smoothing_alpha": 1e-06,
+          "kl_direction": "KL(stego||baseline)"
+        },
+        "dataset_summary": {
+          "total_output_files": 200,
+          "unique_output_post_ids": 200,
+          "usable_stego_samples": 200,
+          "skipped_missing_stegoText": 0,
+          "skipped_empty_stego_tokens": 0,
+          "skipped_missing_primary_post_file": 0,
+          "skipped_empty_primary_comment_bodies": 0,
+          "global_source_post_files": 200,
+          "global_nonempty_comment_bodies": 600
+        },
+        "primary_baseline_matched_post": {
+          "comparisons": 200,
+          "stego_posts_represented": 200,
+          "average_kl_stego_vs_matched_post": 0.0,
+          "average_jsd_stego_vs_matched_post": 0.0
+        },
+        "secondary_baseline_global_corpus": {
+          "comparisons": 200,
+          "stego_posts_represented": 200,
+          "average_kl_stego_vs_global_corpus": 0.616981443122216,
+          "average_jsd_stego_vs_global_corpus": 0.08352569129006852
+        }
+      }
+    },
+    {
+      "profile": "security",
+      "settings": {
+        "encoding_profile": "security",
+        "capacity_profile": "high",
+        "capacity_limits_enabled": true,
+        "angles_generation_mode": "extractive_zero_kld",
+        "stego_generation_mode": "extractive_zero_kld",
+        "payload_transform": "hmac_xor_v1",
+        "stego_prompt_style": "anchored",
+        "stego_sample_angle_count": 5,
+        "stego_default_max_retries": 6,
+        "decode_semantic_top_n": 32,
+        "decode_llm_max_tries": 7,
+        "stego_llm_temperature": 0.55,
+        "decode_strict_default": true,
+        "has_encoding_secret": true
+      },
+      "samples": 200,
+      "payload_bytes": 512,
+      "unique_payloads": 200,
+      "unique_visible_texts": 200,
+      "unique_embedded_payloads": 200,
+      "metrics_report_path": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\security\\metrics\\divergence_metrics_20260423T093124Z.json",
+      "metrics_report": {
+        "created_at_utc": "2026-04-23T09:31:24.744644+00:00",
+        "config": {
+          "output_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\security\\output-results",
+          "dataset_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\security\\dataset",
+          "metrics_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\security\\metrics",
+          "tokenization": "word_unigram",
+          "token_regex": "[A-Za-z0-9']+",
+          "smoothing_alpha": 1e-06,
+          "kl_direction": "KL(stego||baseline)"
+        },
+        "dataset_summary": {
+          "total_output_files": 200,
+          "unique_output_post_ids": 200,
+          "usable_stego_samples": 200,
+          "skipped_missing_stegoText": 0,
+          "skipped_empty_stego_tokens": 0,
+          "skipped_missing_primary_post_file": 0,
+          "skipped_empty_primary_comment_bodies": 0,
+          "global_source_post_files": 200,
+          "global_nonempty_comment_bodies": 600
+        },
+        "primary_baseline_matched_post": {
+          "comparisons": 200,
+          "stego_posts_represented": 200,
+          "average_kl_stego_vs_matched_post": 0.0,
+          "average_jsd_stego_vs_matched_post": 0.0
+        },
+        "secondary_baseline_global_corpus": {
+          "comparisons": 200,
+          "stego_posts_represented": 200,
+          "average_kl_stego_vs_global_corpus": 0.6167279565573726,
+          "average_jsd_stego_vs_global_corpus": 0.08349789794120699
+        }
+      }
+    }
+  ]
+}

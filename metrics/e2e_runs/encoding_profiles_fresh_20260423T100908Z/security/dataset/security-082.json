@@ -1,0 +1,27 @@
+{
+  "id": "security-082",
+  "title": "Encoding profile security sample 082",
+  "selftext": "",
+  "url": "https://example.test/security/082",
+  "comments": [
+    {
+      "id": "security-082-c0",
+      "author": "user_0",
+      "body": "The sample discussion for profile security sample 082 keeps stable wording in comment slot 0 with marker menjurmg.",
+      "replies": []
+    },
+    {
+      "id": "security-082-c1",
+      "author": "user_1",
+      "body": "The carrier discussion for profile security sample 082 keeps stable wording in comment slot 1 with marker qsxnobsq.",
+      "replies": []
+    },
+    {
+      "id": "security-082-c2",
+      "author": "user_2",
+      "body": "The metric discussion for profile security sample 082 keeps stable wording in comment slot 2 with marker rcduxmdt.",
+      "replies": []
+    }
+  ],
+  "search_results": []
+}

@@ -12,6 +12,31 @@ logger = logging.getLogger(__name__)
 _LIST_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
 
 
+def _tag_suffix(tag: str | None) -> str:
+    return f"_{tag}" if tag else ""
+
+
+def _is_tagged_source_name(file_name: str, tag: str | None) -> bool:
+    suffix = _tag_suffix(tag)
+    return bool(suffix) and file_name.endswith(f"{suffix}.json")
+
+
+def _dest_name_for_source(file_name: str, tag: str | None) -> str:
+    if _is_tagged_source_name(file_name, tag):
+        return file_name
+    suffix = _tag_suffix(tag)
+    stem = file_name[:-5] if file_name.endswith(".json") else file_name
+    return f"{stem}{suffix}.json"
+
+
+def _candidate_names(entries: list[os.DirEntry[str]], tag: str | None) -> list[str]:
+    json_names = [entry.name for entry in entries if entry.is_file() and entry.name.endswith(".json")]
+    if not tag:
+        return json_names
+    tagged = [name for name in json_names if _is_tagged_source_name(name, tag)]
+    return tagged if tagged else [name for name in json_names if not name.endswith(_tag_suffix(tag) + ".json")]
+
+
 def is_file_in_folder(folder_path: str, file_name: str) -> bool:
     """
     Checks if a file exists within a specified folder.
@@ -83,7 +108,7 @@ def list_posts(
 
 def _get_unprocessed_sorted_files(src_dir: str, dest_dir: str, tag: str | None) -> list[str]:
     """Return cached list of source JSON files not yet present in destination."""
-    tag_suffix = f"_{tag}" if tag else ""
+    tag_suffix = _tag_suffix(tag)
     cache_key = (src_dir, dest_dir, tag_suffix)
     src_mtime = os.stat(src_dir).st_mtime_ns
     dest_mtime = os.stat(dest_dir).st_mtime_ns
@@ -91,12 +116,14 @@ def _get_unprocessed_sorted_files(src_dir: str, dest_dir: str, tag: str | None) 
     if cached and cached["src_mtime"] == src_mtime and cached["dest_mtime"] == dest_mtime:
         return list(cached["files"])
 
+    src_entries = list(os.scandir(src_dir))
+    candidate_names = set(_candidate_names(src_entries, tag))
     dest_files = {entry.name for entry in os.scandir(dest_dir) if entry.is_file()}
     candidates: list[tuple[str, int]] = []
-    for entry in os.scandir(src_dir):
-        if not entry.is_file() or not entry.name.endswith(".json"):
+    for entry in src_entries:
+        if entry.name not in candidate_names:
             continue
-        dest_name = f"{entry.name[:-5]}{tag_suffix}.json"
+        dest_name = _dest_name_for_source(entry.name, tag)
         if dest_name in dest_files:
             continue
         try:

@@ -5,7 +5,8 @@ from workflows.pipelines.receiver import (
     locate_sender_stego_comment,
 )
 from workflows.pipelines.receiver import ReceiverPipeline
-from workflows.utils.stego_codec import augment_post
+from workflows.pipelines.stego import StegoPipeline
+from workflows.utils.stego_codec import augment_post, embed_invisible_payload
 
 
 def test_locate_sender_stego_comment():
@@ -146,3 +147,117 @@ def test_receiver_run_fails_fast_on_context_drift():
     assert out["stage"] == "context_drift"
     assert out["context_drift"]["status"] == "failed"
     assert out["context_drift"]["mismatches"]
+
+
+def test_receiver_run_recovers_invisible_suffix_payload_without_compressed_full():
+    pre_sender = {
+        "id": "recv3",
+        "title": "title",
+        "selftext": "",
+        "url": "https://example.com/article",
+        "comments": [],
+        "angles": [
+            {"source_quote": "visible carrier text", "tangent": "visible carrier text", "category": "cat"},
+        ],
+    }
+    secret = "payload-" + ("A1B2C3" * 256)
+    aug = augment_post("legacy", pre_sender)
+    angle_idx = int(aug["angleEmbedding"]["selectedAngle"]["idx"])
+    stego_body = embed_invisible_payload("visible carrier text", secret)
+
+    full_post = dict(pre_sender)
+    full_post["comments"] = [
+        {
+            "id": "stego_c",
+            "author": "sender1",
+            "body": stego_body,
+            "replies": [],
+        }
+    ]
+
+    rp = ReceiverPipeline()
+    rp.data_load.preview_post = lambda post, use_cache=True: {
+        "post": {**post, "selftext": "fetched-body"},
+        "report": {"fetch_success": True},
+    }
+    rp.research.preview_post = lambda post, force=True, **kwargs: {
+        "post": {**post, "search_results": []},
+        "report": {},
+    }
+    rp.gen_angles.preview_post = lambda post, allow_fallback=False: {
+        "post": {**post, "angles": list(pre_sender["angles"]), "options_count": 1},
+        "report": {},
+    }
+    rp.decode.decode = lambda **kwargs: angle_idx
+
+    out = rp.run(
+        full_post,
+        "sender1",
+        use_fetch_cache=False,
+        use_terms_cache=False,
+        persist_terms_cache=False,
+        use_fetch_cache_research=False,
+    )
+
+    assert out["succeeded"] is True
+    assert out["payload"] == secret
+    assert out["recovery_meta"]["payload_carrier"] == "invisible_suffix_utf8"
+
+
+def test_receiver_run_unwraps_security_profile_payload(
+    monkeypatch, clear_workflow_capacity_env
+):
+    monkeypatch.setenv("WORKFLOW_ENCODING_PROFILE", "security")
+    monkeypatch.setenv("WORKFLOW_ENCODING_SECRET", "receiver-secret")
+    pre_sender = {
+        "id": "recv-sec",
+        "title": "title",
+        "selftext": "",
+        "url": "https://example.com/article",
+        "comments": [
+            {
+                "id": "c1",
+                "author": "alice",
+                "body": "visible carrier text for the secure profile",
+                "replies": [],
+            }
+        ],
+        "angles": [
+            {
+                "source_quote": "visible carrier text for the secure profile",
+                "tangent": "visible carrier text for the secure profile",
+                "category": "cat",
+            },
+        ],
+    }
+    secret = "payload-secure"
+    encoded = StegoPipeline().encode(secret, pre_sender)
+    angle_idx = int(encoded["angle_index"])
+
+    full_post = dict(pre_sender)
+    full_post["sender_audit"] = encoded["sender_audit"]
+    full_post["comments"] = [
+        *pre_sender["comments"],
+        {"id": "stego_c", "author": "sender1", "body": encoded["stego_text"], "replies": []},
+    ]
+
+    rp = ReceiverPipeline()
+    rp.data_load.preview_post = lambda post, use_cache=True: {
+        "post": {**post, "selftext": "fetched-body"},
+        "report": {"fetch_success": True},
+    }
+    rp.research.preview_post = lambda post, force=True, **kwargs: {
+        "post": {**post, "search_results": []},
+        "report": {},
+    }
+    rp.gen_angles.preview_post = lambda post, allow_fallback=False: {
+        "post": {**post, "angles": list(pre_sender["angles"]), "options_count": 1},
+        "report": {},
+    }
+    rp.decode.decode = lambda **kwargs: angle_idx
+
+    out = rp.run(full_post, "sender1", fail_on_context_drift=False)
+
+    assert out["succeeded"] is True
+    assert out["payload"] == secret
+    assert out["recovery_meta"]["payload_transform"] == "hmac_xor_v1"

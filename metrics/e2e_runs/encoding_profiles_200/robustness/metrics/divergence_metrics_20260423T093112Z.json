@@ -1,0 +1,35 @@
+{
+  "created_at_utc": "2026-04-23T09:31:12.760395+00:00",
+  "config": {
+    "output_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\robustness\\output-results",
+    "dataset_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\robustness\\dataset",
+    "metrics_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_200\\robustness\\metrics",
+    "tokenization": "word_unigram",
+    "token_regex": "[A-Za-z0-9']+",
+    "smoothing_alpha": 1e-06,
+    "kl_direction": "KL(stego||baseline)"
+  },
+  "dataset_summary": {
+    "total_output_files": 200,
+    "unique_output_post_ids": 200,
+    "usable_stego_samples": 200,
+    "skipped_missing_stegoText": 0,
+    "skipped_empty_stego_tokens": 0,
+    "skipped_missing_primary_post_file": 0,
+    "skipped_empty_primary_comment_bodies": 0,
+    "global_source_post_files": 200,
+    "global_nonempty_comment_bodies": 600
+  },
+  "primary_baseline_matched_post": {
+    "comparisons": 200,
+    "stego_posts_represented": 200,
+    "average_kl_stego_vs_matched_post": 0.0,
+    "average_jsd_stego_vs_matched_post": 0.0
+  },
+  "secondary_baseline_global_corpus": {
+    "comparisons": 200,
+    "stego_posts_represented": 200,
+    "average_kl_stego_vs_global_corpus": 0.617285829169813,
+    "average_jsd_stego_vs_global_corpus": 0.08358919969948482
+  }
+}

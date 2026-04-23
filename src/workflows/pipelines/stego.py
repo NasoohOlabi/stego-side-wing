@@ -8,11 +8,20 @@ from uuid import uuid4
 
 from loguru import logger
 
-from infrastructure.config import resolve_workflow_llm_provider_and_model
+from infrastructure.config import (
+    get_workflow_encoding_secret,
+    get_workflow_encoding_settings,
+    get_workflow_payload_transform,
+    get_workflow_stego_default_max_retries,
+    get_workflow_stego_generation_mode,
+    get_workflow_stego_llm_temperature,
+    get_workflow_stego_prompt_style,
+    get_workflow_stego_sample_angle_count,
+    resolve_workflow_llm_provider_and_model,
+)
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
-from workflows.llm_temperatures import STEGO_CYCLE_LLM_TEMPERATURE
 from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
 from workflows.utils import stego_codec
 from workflows.utils.output_results_shape import (
@@ -32,6 +41,12 @@ from workflows.utils.stego_codec import (
     compress_payload as codec_compress_payload,
 )
 from workflows.utils.stego_codec import (
+    embed_invisible_payload,
+)
+from workflows.utils.stego_codec import (
+    protect_payload,
+)
+from workflows.utils.stego_codec import (
     embed_in_angle_selection as codec_embed_in_angle_selection,
 )
 from workflows.utils.stego_codec import (
@@ -40,8 +55,11 @@ from workflows.utils.stego_codec import (
 from workflows.utils.stego_codec import (
     flatten_comments,
 )
+from workflows.utils.stego_codec import (
+    strip_invisible_payload,
+)
 from workflows.utils.protocol_utils import stable_hash
-from workflows.utils.workflow_llm_prompts import get_prompts
+from workflows.utils.workflow_llm_prompts import stego_encode_prompts_for_style
 
 # Backward-compatible names for tests and callers.
 MAX_LITERAL_LEN = stego_codec.MAX_LITERAL_LEN
@@ -138,6 +156,35 @@ def _text_preview(text: Any, max_len: int = 180) -> str:
         return ""
     stripped = " ".join(text.split())
     return stripped if len(stripped) <= max_len else f"{stripped[:max_len]}..."
+
+
+def _joined_comment_bodies(post: dict[str, Any]) -> str:
+    bodies = [
+        body.strip()
+        for comment in flatten_comments(post.get("comments", []))
+        for body in [comment.get("body")]
+        if isinstance(body, str) and body.strip()
+    ]
+    return "\n".join(bodies).strip()
+
+
+def _extractive_stego_text(post: dict[str, Any]) -> str:
+    comment_corpus = _joined_comment_bodies(post)
+    if comment_corpus:
+        return comment_corpus
+    selftext = post.get("selftext", "")
+    if isinstance(selftext, str) and selftext.strip():
+        return selftext.strip()
+    return ""
+
+
+def _extractive_angle_matches(candidate_text: str, selected_angle: dict[str, Any]) -> bool:
+    visible_text = strip_invisible_payload(candidate_text)
+    for key in ("source_quote", "tangent"):
+        value = selected_angle.get(key)
+        if isinstance(value, str) and value.strip() and value.strip() in visible_text:
+            return True
+    return False
 
 
 def _sender_audit_from_post(
@@ -292,7 +339,8 @@ class StegoPipeline:
         self, post_augmentation: dict[str, Any], post: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         angle_embedding = post_augmentation.get("angleEmbedding", {})
-        candidate_angles = angle_embedding.get("totalAnglesSelectedFirst", [])[:4]
+        sample_count = get_workflow_stego_sample_angle_count()
+        candidate_angles = angle_embedding.get("totalAnglesSelectedFirst", [])[:sample_count]
         needles = [str(a.get("source_quote", "")) for a in candidate_angles if isinstance(a, dict)]
         haystack = post.get("search_results", [])
         if not isinstance(haystack, list):
@@ -315,6 +363,49 @@ class StegoPipeline:
         if not isinstance(tangents_db, list):
             tangents_db = []
         return samples, tangents_db
+
+    def _encode_extractive_zero_kld(
+        self,
+        *,
+        payload: str,
+        embedded_payload: str,
+        post: dict[str, Any],
+        tag: str | None,
+        sender_audit: dict[str, Any],
+        post_augmentation: dict[str, Any],
+        selected_angle: dict[str, Any],
+        selected_idx: Any,
+    ) -> dict[str, Any] | None:
+        if get_workflow_stego_generation_mode() != "extractive_zero_kld":
+            return None
+        visible_text = _extractive_stego_text(post)
+        if not _is_non_empty_string(visible_text):
+            return None
+        if not _extractive_angle_matches(visible_text, selected_angle):
+            return None
+        stego_text = embed_invisible_payload(visible_text, embedded_payload)
+        sender_audit["payload_carrier"] = "invisible_suffix_utf8"
+        sender_audit["payload_bytes"] = len(payload.encode("utf-8"))
+        sender_audit["embedded_payload_bytes"] = len(embedded_payload.encode("utf-8"))
+        return {
+            "stego_text": stego_text,
+            "post": post,
+            "selected_angle": selected_angle,
+            "angle_index": selected_idx,
+            "succeeded": True,
+            "retry_count": 0,
+            "tag": tag,
+            "sender_audit": sender_audit,
+            "breakdown": {
+                "mode": "extractive_zero_kld",
+                "payload_carrier": "invisible_suffix_utf8",
+                "visible_text_len": len(visible_text),
+                "invisible_payload_bytes": len(embedded_payload.encode("utf-8")),
+                "invisible_payload_bits": len(embedded_payload.encode("utf-8")) * 8,
+                "raw_payload_bytes": len(payload.encode("utf-8")),
+            },
+            "embedding": post_augmentation,
+        }
 
     def _build_prompt(
         self, sample: dict[str, Any], comment_embedding: dict[str, Any]
@@ -347,9 +438,13 @@ class StegoPipeline:
             if rendered:
                 chain_section = "\n---\n" + "\n---\n".join(rendered)
 
-        enc = get_prompts().stego_encode
+        prompt_style = get_workflow_stego_prompt_style()
+        enc = stego_encode_prompts_for_style(prompt_style)
         prompt = enc.user_template.format(
             best_match=str(sample.get("best_match", "")),
+            target_category=str(sample.get("category", "")),
+            target_tangent=str(sample.get("tangent", "")),
+            target_source_quote=str(sample.get("source_quote", "")),
             title=title,
             author=author,
             selftext=selftext,
@@ -358,6 +453,7 @@ class StegoPipeline:
         system_message = enc.system_template.format(
             tangent=str(sample.get("tangent", "")),
             category=str(sample.get("category", "")),
+            source_quote=str(sample.get("source_quote", "")),
         )
         return prompt, system_message
 
@@ -394,7 +490,7 @@ class StegoPipeline:
             system_message=system_message,
             model=model,
             provider=provider,
-            temperature=STEGO_CYCLE_LLM_TEMPERATURE,
+            temperature=get_workflow_stego_llm_temperature(),
         )
         llm_wall_ms = _elapsed_ms_since(t_llm)
         meta = self.llm.last_call_metadata or {}
@@ -560,7 +656,7 @@ class StegoPipeline:
         payload: str,
         post: dict[str, Any],
         tag: str | None = None,
-        max_retries: int = 4,
+        max_retries: int | None = None,
     ) -> dict[str, Any]:
         """
         Encode payload into post using steganography.
@@ -575,25 +671,64 @@ class StegoPipeline:
         if not isinstance(angles, list) or not angles:
             raise ValueError("Post must have angles")
 
+        resolved_max_retries = (
+            get_workflow_stego_default_max_retries() if max_retries is None else max_retries
+        )
+        payload_transform = get_workflow_payload_transform()
+        embedded_payload = protect_payload(
+            payload,
+            transform=payload_transform,
+            secret=get_workflow_encoding_secret(),
+        )
         post_id = post.get("id")
         encode_run_id = uuid4().hex
         t_encode = time.perf_counter()
         _stego_log_bind("start").bind(stego_encode_run_id=encode_run_id).info(
-            "post_id={} payload_len={} max_retries={}",
+            "post_id={} payload_len={} max_retries={} encoding_profile={}",
             post_id,
             len(payload),
-            max_retries,
+            resolved_max_retries,
+            get_workflow_encoding_settings().get("encoding_profile"),
         )
 
         t_aug = time.perf_counter()
-        post_augmentation = self._augment_post(payload, post)
+        post_augmentation = self._augment_post(embedded_payload, post)
         sender_audit = _sender_audit_from_post(post, post_augmentation)
+        sender_audit["encoding"] = get_workflow_encoding_settings()
+        sender_audit["payload_transform"] = payload_transform
+        sender_audit["raw_payload_bytes"] = len(payload.encode("utf-8"))
+        sender_audit["embedded_payload_bytes"] = len(embedded_payload.encode("utf-8"))
         post_augmentation["senderAudit"] = sender_audit
         augment_ms = _elapsed_ms_since(t_aug)
         _stego_log_bind("timing", timing_phase="augment_post").bind(
             stego_encode_run_id=encode_run_id,
             elapsed_ms=augment_ms,
         ).info("post_id={} elapsed_ms={}", post_id, augment_ms)
+
+        selected_angle = post_augmentation["angleEmbedding"].get("selectedAngle", {})
+        selected_idx = selected_angle.get("idx")
+        extractive_result = self._encode_extractive_zero_kld(
+            payload=payload,
+            embedded_payload=embedded_payload,
+            post=post,
+            tag=tag,
+            sender_audit=sender_audit,
+            post_augmentation=post_augmentation,
+            selected_angle=selected_angle,
+            selected_idx=selected_idx,
+        )
+        if extractive_result is not None:
+            _log_encode_timing_complete(
+                encode_run_id=encode_run_id,
+                post_id=post_id,
+                augment_ms=augment_ms,
+                build_samples_ms=0,
+                encode_total_ms=_elapsed_ms_since(t_encode),
+                succeeded=True,
+                retry_count=0,
+                timing_outcome="extractive_zero_kld",
+            )
+            return extractive_result
 
         t_samp = time.perf_counter()
         samples, tangents_db = self._build_samples(post_augmentation, post)
@@ -641,19 +776,17 @@ class StegoPipeline:
                 "embedding": post_augmentation,
             }
 
-        selected_angle = post_augmentation["angleEmbedding"].get("selectedAngle", {})
-        selected_idx = selected_angle.get("idx")
         retry_count = 0
         last_breakdown: dict[str, Any] = {}
 
-        while retry_count <= max_retries:
+        while retry_count <= resolved_max_retries:
             try:
                 t_attempt = time.perf_counter()
                 _stego_log_bind("attempt").info(
                     "post_id={} attempt={}/{} selected_idx={}",
                     post_id,
                     retry_count + 1,
-                    max_retries + 1,
+                    resolved_max_retries + 1,
                     selected_idx,
                 )
                 encoded_results: list[dict[str, Any]] = []
@@ -760,7 +893,7 @@ class StegoPipeline:
                     selected_idx,
                     validation.get("decodedIndices", []),
                 )
-                if retry_count >= max_retries:
+                if retry_count >= resolved_max_retries:
                     error_details = {
                         "reason": (
                             "None of the generated primary candidate texts decoded to the selected angle."
@@ -808,7 +941,7 @@ class StegoPipeline:
                     retry_count + 1,
                     type(exc).__name__,
                 )
-                if retry_count >= max_retries:
+                if retry_count >= resolved_max_retries:
                     _log_encode_timing_complete(
                         encode_run_id=encode_run_id,
                         post_id=post_id,

@@ -214,3 +214,76 @@ def test_preview_post_caps_angles_output(monkeypatch, clear_workflow_capacity_en
     assert out["report"]["angles_raw_count"] == 2
     assert out["report"]["angles_capped"] is True
     assert out["report"]["angles_max_output"] == 1
+
+
+def test_preview_post_extractive_zero_kld_mode_skips_backend(
+    monkeypatch, clear_workflow_capacity_env
+):
+    monkeypatch.setenv("WORKFLOW_ANGLES_GENERATION_MODE", "extractive_zero_kld")
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+    pipeline.backend = SimpleNamespace(
+        analyze_angles=lambda _texts: (_ for _ in ()).throw(AssertionError("backend not expected"))
+    )
+
+    out = pipeline.preview_post(
+        {
+            "id": "p-z",
+            "selftext": "A practical trick is to keep the wording close to the source material.",
+            "comments": [
+                {
+                    "id": "c1",
+                    "body": "This wording already sounds like a normal comment and should stay in distribution.",
+                }
+            ],
+        }
+    )
+
+    assert out["report"]["generation_mode"] == "extractive_zero_kld"
+    assert out["report"]["options_count"] >= 1
+    assert out["report"]["angles"][0]["source_quote"]
+    assert out["report"]["angles"][0]["tangent"] == out["report"]["angles"][0]["source_quote"]
+    assert out["post"]["options_count"] == len(out["post"]["angles"])
+
+
+def test_process_posts_uses_tagged_queue_and_saves_tagged_filename():
+    saved = []
+    seen = {}
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+    pipeline.backend = SimpleNamespace(
+        posts_list=lambda step, count, offset, tag=None: seen.update(
+            {"step": step, "count": count, "offset": offset, "tag": tag}
+        )
+        or {"fileNames": ["p1.json"]},
+        get_post_local=lambda file_name, step: {"id": "p1"},
+        save_object_local=lambda data, step, filename: saved.append((step, filename)),
+    )
+    pipeline.process_post = lambda post, step, allow_fallback=False: {
+        **post,
+        "angles": [{"x": 1}],
+        "options_count": 1,
+    }
+
+    result = pipeline.process_posts(step="angles-step", count=1, offset=0, tag="exp")
+
+    assert result[0]["options_count"] == 1
+    assert seen == {"step": "angles-step", "count": 1, "offset": 0, "tag": "exp"}
+    assert saved == [("angles-step", "p1_exp.json")]
+
+
+def test_process_post_id_prefers_tagged_source_when_present():
+    calls = []
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+    pipeline.backend = SimpleNamespace(
+        get_post_local=lambda file_name, step: calls.append((file_name, step))
+        or {"id": "p1"},
+        save_object_local=lambda data, step, filename: None,
+    )
+    pipeline.process_post = lambda post, step, allow_fallback=False: {
+        **post,
+        "angles": [{"x": 1}],
+        "options_count": 1,
+    }
+
+    pipeline.process_post_id("p1", step="angles-step", tag="exp")
+
+    assert calls[0] == ("p1_exp.json", "angles-step")

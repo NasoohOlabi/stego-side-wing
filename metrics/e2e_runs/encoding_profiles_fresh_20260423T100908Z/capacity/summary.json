@@ -1,0 +1,60 @@
+{
+  "profile": "capacity",
+  "settings": {
+    "encoding_profile": "capacity",
+    "capacity_profile": "high",
+    "capacity_limits_enabled": true,
+    "angles_generation_mode": "extractive_zero_kld",
+    "stego_generation_mode": "extractive_zero_kld",
+    "payload_transform": "plain",
+    "stego_prompt_style": "natural",
+    "stego_sample_angle_count": 4,
+    "stego_default_max_retries": 4,
+    "decode_semantic_top_n": 24,
+    "decode_llm_max_tries": 5,
+    "stego_llm_temperature": 0.7,
+    "decode_strict_default": false,
+    "has_encoding_secret": false
+  },
+  "samples": 200,
+  "payload_bytes": 512,
+  "unique_payloads": 200,
+  "unique_visible_texts": 200,
+  "unique_embedded_payloads": 200,
+  "metrics_report_path": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_fresh_20260423T100908Z\\capacity\\metrics\\divergence_metrics_20260423T100917Z.json",
+  "metrics_report": {
+    "created_at_utc": "2026-04-23T10:09:17.843323+00:00",
+    "config": {
+      "output_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_fresh_20260423T100908Z\\capacity\\output-results",
+      "dataset_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_fresh_20260423T100908Z\\capacity\\dataset",
+      "metrics_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\encoding_profiles_fresh_20260423T100908Z\\capacity\\metrics",
+      "tokenization": "word_unigram",
+      "token_regex": "[A-Za-z0-9']+",
+      "smoothing_alpha": 1e-06,
+      "kl_direction": "KL(stego||baseline)"
+    },
+    "dataset_summary": {
+      "total_output_files": 200,
+      "unique_output_post_ids": 200,
+      "usable_stego_samples": 200,
+      "skipped_missing_stegoText": 0,
+      "skipped_empty_stego_tokens": 0,
+      "skipped_missing_primary_post_file": 0,
+      "skipped_empty_primary_comment_bodies": 0,
+      "global_source_post_files": 200,
+      "global_nonempty_comment_bodies": 600
+    },
+    "primary_baseline_matched_post": {
+      "comparisons": 200,
+      "stego_posts_represented": 200,
+      "average_kl_stego_vs_matched_post": 0.0,
+      "average_jsd_stego_vs_matched_post": 0.0
+    },
+    "secondary_baseline_global_corpus": {
+      "comparisons": 200,
+      "stego_posts_represented": 200,
+      "average_kl_stego_vs_global_corpus": 0.6169814431222158,
+      "average_jsd_stego_vs_global_corpus": 0.08352569129006858
+    }
+  }
+}

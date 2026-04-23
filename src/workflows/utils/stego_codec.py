@@ -7,6 +7,10 @@ comment/angle embedding, and payload recovery after stripping embed prefixes.
 from __future__ import annotations
 
 import math
+import base64
+import hashlib
+import hmac
+import secrets
 from typing import Any
 
 from pydantic import validate_call
@@ -18,6 +22,12 @@ from workflows.utils.text_utils import (
 )
 
 MAX_LITERAL_LEN = 250
+INVISIBLE_PAYLOAD_START = "\u2060\u2063\u2060"
+INVISIBLE_PAYLOAD_END = "\u2063\u2060\u2063"
+INVISIBLE_PAYLOAD_ZERO = "\u200c"
+INVISIBLE_PAYLOAD_ONE = "\u200d"
+INVISIBLE_PAYLOAD_LENGTH_BITS = 32
+SECURE_PAYLOAD_PREFIX = "swsec1."
 
 
 @validate_call
@@ -28,6 +38,147 @@ def is_non_empty_string(value: Any) -> bool:
 @validate_call
 def to_binary_utf8(text: str) -> str:
     return "".join(format(b, "08b") for b in text.encode("utf-8"))
+
+
+def _b64_urlsafe(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64_urlsafe_decode(text: str) -> bytes | None:
+    try:
+        padded = text + ("=" * (-len(text) % 4))
+        return base64.urlsafe_b64decode(padded.encode("ascii"))
+    except (ValueError, UnicodeEncodeError):
+        return None
+
+
+def _xor_stream(secret: str, nonce: bytes, length: int) -> bytes:
+    secret_bytes = secret.encode("utf-8")
+    out = bytearray()
+    counter = 0
+    while len(out) < length:
+        block = hmac.new(
+            secret_bytes,
+            nonce + counter.to_bytes(4, "big"),
+            hashlib.sha256,
+        ).digest()
+        out.extend(block)
+        counter += 1
+    return bytes(out[:length])
+
+
+@validate_call
+def protect_payload(payload: str, transform: str = "plain", secret: str | None = None) -> str:
+    """Apply the configured reversible payload transform before embedding."""
+    if transform == "plain":
+        return payload
+    if transform != "hmac_xor_v1":
+        raise ValueError(f"Unsupported payload transform: {transform}")
+    if not secret:
+        raise ValueError("WORKFLOW_ENCODING_SECRET is required for hmac_xor_v1 payloads")
+    nonce = secrets.token_bytes(16)
+    payload_bytes = payload.encode("utf-8")
+    stream = _xor_stream(secret, nonce, len(payload_bytes))
+    ciphertext = bytes(a ^ b for a, b in zip(payload_bytes, stream, strict=True))
+    mac = hmac.new(
+        secret.encode("utf-8"),
+        b"swsec1" + nonce + ciphertext,
+        hashlib.sha256,
+    ).digest()[:16]
+    return f"{SECURE_PAYLOAD_PREFIX}{_b64_urlsafe(nonce)}.{_b64_urlsafe(ciphertext)}.{_b64_urlsafe(mac)}"
+
+
+@validate_call
+def unprotect_payload(
+    protected_payload: str, transform: str = "plain", secret: str | None = None
+) -> str | None:
+    """Reverse ``protect_payload``; returns ``None`` on invalid secure payloads."""
+    if transform == "plain":
+        return protected_payload
+    if transform != "hmac_xor_v1" or not secret:
+        return None
+    if not protected_payload.startswith(SECURE_PAYLOAD_PREFIX):
+        return None
+    parts = protected_payload[len(SECURE_PAYLOAD_PREFIX) :].split(".")
+    if len(parts) != 3:
+        return None
+    nonce = _b64_urlsafe_decode(parts[0])
+    ciphertext = _b64_urlsafe_decode(parts[1])
+    supplied_mac = _b64_urlsafe_decode(parts[2])
+    if nonce is None or ciphertext is None or supplied_mac is None:
+        return None
+    expected_mac = hmac.new(
+        secret.encode("utf-8"),
+        b"swsec1" + nonce + ciphertext,
+        hashlib.sha256,
+    ).digest()[:16]
+    if not hmac.compare_digest(supplied_mac, expected_mac):
+        return None
+    stream = _xor_stream(secret, nonce, len(ciphertext))
+    payload_bytes = bytes(a ^ b for a, b in zip(ciphertext, stream, strict=True))
+    try:
+        return payload_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+@validate_call
+def embed_invisible_payload(visible_text: str, payload: str) -> str:
+    payload_bytes = payload.encode("utf-8")
+    length_bits = format(len(payload_bytes), f"0{INVISIBLE_PAYLOAD_LENGTH_BITS}b")
+    payload_bits = "".join(format(b, "08b") for b in payload_bytes)
+    invisible_bits = "".join(
+        INVISIBLE_PAYLOAD_ONE if bit == "1" else INVISIBLE_PAYLOAD_ZERO
+        for bit in length_bits + payload_bits
+    )
+    return f"{visible_text}{INVISIBLE_PAYLOAD_START}{invisible_bits}{INVISIBLE_PAYLOAD_END}"
+
+
+def _split_invisible_payload(text: str) -> tuple[str, str | None]:
+    start = text.find(INVISIBLE_PAYLOAD_START)
+    if start < 0:
+        return text, None
+    payload_start = start + len(INVISIBLE_PAYLOAD_START)
+    end = text.find(INVISIBLE_PAYLOAD_END, payload_start)
+    if end < 0:
+        return text, None
+    visible = text[:start] + text[end + len(INVISIBLE_PAYLOAD_END) :]
+    return visible, text[payload_start:end]
+
+
+def _decode_invisible_payload_chars(payload_chars: str) -> str | None:
+    bits_chars = set(payload_chars)
+    if not bits_chars.issubset({INVISIBLE_PAYLOAD_ZERO, INVISIBLE_PAYLOAD_ONE}):
+        return None
+    bits = "".join("1" if ch == INVISIBLE_PAYLOAD_ONE else "0" for ch in payload_chars)
+    if len(bits) < INVISIBLE_PAYLOAD_LENGTH_BITS:
+        return None
+    payload_len = int(bits[:INVISIBLE_PAYLOAD_LENGTH_BITS], 2)
+    total_bits = INVISIBLE_PAYLOAD_LENGTH_BITS + (payload_len * 8)
+    if len(bits) != total_bits:
+        return None
+    payload_bits = bits[INVISIBLE_PAYLOAD_LENGTH_BITS:]
+    try:
+        payload_bytes = bytes(
+            int(payload_bits[idx : idx + 8], 2) for idx in range(0, len(payload_bits), 8)
+        )
+        return payload_bytes.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
+@validate_call
+def strip_invisible_payload(text: str) -> str:
+    visible, _ = _split_invisible_payload(text)
+    return visible
+
+
+@validate_call
+def extract_invisible_payload(text: str) -> str | None:
+    _, payload_chars = _split_invisible_payload(text)
+    if payload_chars is None:
+        return None
+    return _decode_invisible_payload_chars(payload_chars)
 
 
 @validate_call

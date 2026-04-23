@@ -1,0 +1,27 @@
+{
+  "id": "security-008",
+  "title": "Encoding profile security sample 008",
+  "selftext": "",
+  "url": "https://example.test/security/008",
+  "comments": [
+    {
+      "id": "security-008-c0",
+      "author": "user_0",
+      "body": "The workflow discussion for profile security sample 008 keeps stable wording in comment slot 0 with marker wmduivlj.",
+      "replies": []
+    },
+    {
+      "id": "security-008-c1",
+      "author": "user_1",
+      "body": "The profile discussion for profile security sample 008 keeps stable wording in comment slot 1 with marker ggcpylmy.",
+      "replies": []
+    },
+    {
+      "id": "security-008-c2",
+      "author": "user_2",
+      "body": "The carrier discussion for profile security sample 008 keeps stable wording in comment slot 2 with marker wjmwccxc.",
+      "replies": []
+    }
+  ],
+  "search_results": []
+}

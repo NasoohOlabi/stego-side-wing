@@ -95,6 +95,41 @@ def test_encode_returns_success_with_mocked_stages():
     assert result["angle_index"] == 2
 
 
+def test_encode_uses_anchor_fallback_after_validation_exhausted():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    angle = {"idx": 2, "category": "c", "tangent": "target tangent", "source_quote": "q"}
+    pipeline._augment_post = lambda payload, post: {
+        "commentEmbedding": {"context": {"title": "t", "author": "a"}},
+        "angleEmbedding": {
+            "selectedAngle": angle,
+            "totalAnglesSelectedFirst": [],
+            "TangentsDB": [angle],
+        },
+    }
+    pipeline._build_samples = lambda aug, post: ([angle], [angle])
+    pipeline._generate_stego_texts = lambda **kwargs: ["drifted candidate"]
+
+    def fake_cross_validate(**kwargs):
+        text = kwargs["candidate_texts"][0]
+        if "target tangent" in text:
+            return {
+                "succeeded": True,
+                "stegoText": text,
+                "decodedIndices": [2],
+                "validationDetails": {},
+            }
+        return {"succeeded": False, "decodedIndices": [9], "validationDetails": {}}
+
+    pipeline._cross_validate = fake_cross_validate
+
+    post = {"id": "p1", "angles": [angle]}
+    result = pipeline.encode(payload="secret", post=post, tag="tag", max_retries=0)
+
+    assert result["succeeded"] is True
+    assert result["stego_text"].startswith("The part I keep coming back to")
+    assert result["encoded_samples"][-1]["generation_mode"] == "anchor_fallback"
+
+
 def test_encode_returns_error_when_no_samples():
     pipeline = StegoPipeline.__new__(StegoPipeline)
     pipeline._augment_post = lambda payload, post: {"angleEmbedding": {"selectedAngle": {"idx": 0}}}

@@ -1,0 +1,17 @@
+{
+    "pid":  35160,
+    "launched_at_utc":  "2026-04-23T21:23:13.9641245Z",
+    "run_dir":  "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_13_per_profile_fixed3_20260423T212313Z",
+    "stdout_log":  "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_13_per_profile_fixed3_20260423T212313Z.stdout.log",
+    "stderr_log":  "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_13_per_profile_fixed3_20260423T212313Z.stderr.log",
+    "progress_log":  "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_13_per_profile_fixed3_20260423T212313Z.progress.jsonl",
+    "command":  "uv run python scripts\\\\run_actual_workload_e2e.py --samples-per-profile 13 --run-dir \u0027D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_13_per_profile_fixed3_20260423T212313Z\u0027 --overwrite --max-retries 4 --fail-fast --progress-log \u0027D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_13_per_profile_fixed3_20260423T212313Z.progress.jsonl\u0027 --log-level WARNING",
+    "expected_samples":  52,
+    "samples_per_profile":  13,
+    "profiles":  [
+                     "balanced",
+                     "robustness",
+                     "capacity",
+                     "security"
+                 ]
+}

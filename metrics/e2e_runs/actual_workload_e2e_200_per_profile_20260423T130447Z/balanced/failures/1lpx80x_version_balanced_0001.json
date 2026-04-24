@@ -1,0 +1,7 @@
+{
+  "profile": "balanced",
+  "post_id": "1lpx80x",
+  "sample_index": 1,
+  "elapsed_ms": 631254,
+  "error": "RuntimeError: Stego LLM output must be valid JSON: exactly 3 non-empty strings (array or object with texts/comments/items/output), optionally in a markdown code fence \u2014 no prose before/after."
+}

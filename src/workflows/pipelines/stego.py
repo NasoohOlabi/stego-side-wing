@@ -151,6 +151,19 @@ def _angle_summary(angle: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def _anchor_candidate_text(angle: dict[str, Any]) -> str:
+    tangent = str(angle.get("tangent") or "").strip()
+    quote = str(angle.get("source_quote") or "").strip()
+    category = str(angle.get("category") or "this issue").strip()
+    if tangent and quote:
+        return f"The part I keep coming back to is {tangent} That detail around {quote} feels central to the broader {category} story."
+    if tangent:
+        return f"The part I keep coming back to is {tangent} It feels central to the broader {category} story."
+    if quote:
+        return f"The detail around {quote} feels like the part people are underestimating in this {category} story."
+    return f"This feels like a bigger {category} issue than the headline makes it sound."
+
+
 def _text_preview(text: Any, max_len: int = 180) -> str:
     if not isinstance(text, str):
         return ""
@@ -894,6 +907,55 @@ class StegoPipeline:
                     validation.get("decodedIndices", []),
                 )
                 if retry_count >= resolved_max_retries:
+                    anchor_text = _anchor_candidate_text(selected_angle)
+                    anchor_validation = self._cross_validate(
+                        candidate_texts=[anchor_text],
+                        few_shots=few_shots,
+                        tangents_db=tangents_db,
+                        selected_angle=selected_angle,
+                        encode_run_id=encode_run_id,
+                    )
+                    if anchor_validation.get("succeeded"):
+                        _stego_log_bind("validation").warning(
+                            "post_id={} attempt={} recovered_with_anchor_fallback",
+                            post_id,
+                            retry_count + 1,
+                        )
+                        _log_encode_timing_complete(
+                            encode_run_id=encode_run_id,
+                            post_id=post_id,
+                            augment_ms=augment_ms,
+                            build_samples_ms=build_samples_ms,
+                            encode_total_ms=_elapsed_ms_since(t_encode),
+                            succeeded=True,
+                            retry_count=retry_count,
+                            timing_outcome="anchor_fallback",
+                        )
+                        encoded_results.append(
+                            {
+                                "category": selected_angle.get("category"),
+                                "source_quote": selected_angle.get("source_quote"),
+                                "tangent": selected_angle.get("tangent"),
+                                "texts": [anchor_text],
+                                "generation_mode": "anchor_fallback",
+                            }
+                        )
+                        return {
+                            "stego_text": anchor_text,
+                            "post": post,
+                            "selected_angle": selected_angle,
+                            "angle_index": selected_idx,
+                            "succeeded": True,
+                            "retry_count": retry_count,
+                            "tag": tag,
+                            "sender_audit": sender_audit,
+                            "embedding": post_augmentation,
+                            "encoded_samples": encoded_results,
+                            "decoded_indices": anchor_validation.get("decodedIndices", []),
+                            "validation_details": anchor_validation.get(
+                                "validationDetails"
+                            ),
+                        }
                     error_details = {
                         "reason": (
                             "None of the generated primary candidate texts decoded to the selected angle."

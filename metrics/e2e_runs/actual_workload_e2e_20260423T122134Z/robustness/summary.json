@@ -1,0 +1,87 @@
+{
+  "profile": "robustness",
+  "settings": {
+    "encoding_profile": "robustness",
+    "capacity_profile": "mid",
+    "capacity_limits_enabled": true,
+    "angles_generation_mode": "model",
+    "stego_generation_mode": "model",
+    "payload_transform": "plain",
+    "stego_prompt_style": "anchored",
+    "stego_sample_angle_count": 6,
+    "stego_default_max_retries": 8,
+    "decode_semantic_top_n": 40,
+    "decode_llm_max_tries": 7,
+    "stego_llm_temperature": 0.45,
+    "decode_strict_default": false,
+    "has_encoding_secret": false
+  },
+  "has_encoding_secret": false,
+  "requested_samples": 1,
+  "samples_succeeded": 1,
+  "samples_failed": 0,
+  "force_model_generation": true,
+  "skip_receiver_decode": false,
+  "entries": [
+    {
+      "profile": "robustness",
+      "post_id": "1look5n",
+      "sample_index": 0,
+      "payload_hash": "61084784d93d8bdc97dd3fd204aec192ba5f86d7e4c71dd73af085bb6f637dba",
+      "payload_bytes": 51,
+      "output_file": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_20260423T122134Z\\robustness\\output-results\\1look5n_version_robustness_0000.json",
+      "elapsed_ms": 583613,
+      "angle_index": 2,
+      "retry_count": 0,
+      "receiver_decode": {
+        "decoded_angle_index": 2,
+        "recovery_meta": {
+          "comment_bits": "11001011001",
+          "angle_bits": "0010",
+          "lc": 11,
+          "la": 4,
+          "payload_transform": "plain",
+          "embedded_payload_bytes": 51,
+          "payload_bytes": 51
+        }
+      }
+    }
+  ],
+  "failures": [],
+  "metrics_report_path": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_20260423T122134Z\\robustness\\metrics\\divergence_metrics_20260423T123720Z.json",
+  "metrics_report": {
+    "created_at_utc": "2026-04-23T12:37:20.729465+00:00",
+    "config": {
+      "output_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_20260423T122134Z\\robustness\\output-results",
+      "dataset_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_20260423T122134Z\\robustness\\dataset",
+      "metrics_dir": "D:\\Master\\code\\stego-side-wing\\metrics\\e2e_runs\\actual_workload_e2e_20260423T122134Z\\robustness\\metrics",
+      "tokenization": "word_unigram",
+      "token_regex": "[A-Za-z0-9']+",
+      "smoothing_alpha": 1e-06,
+      "kl_direction": "KL(stego||baseline)"
+    },
+    "dataset_summary": {
+      "total_output_files": 1,
+      "unique_output_post_ids": 1,
+      "usable_stego_samples": 1,
+      "skipped_missing_stegoText": 0,
+      "skipped_empty_stego_tokens": 0,
+      "skipped_missing_primary_post_file": 0,
+      "skipped_empty_primary_comment_bodies": 0,
+      "global_source_post_files": 1,
+      "global_nonempty_comment_bodies": 168
+    },
+    "primary_baseline_matched_post": {
+      "comparisons": 1,
+      "stego_posts_represented": 1,
+      "average_kl_stego_vs_matched_post": 7.820187428300355,
+      "average_jsd_stego_vs_matched_post": 0.533465373445352
+    },
+    "secondary_baseline_global_corpus": {
+      "comparisons": 1,
+      "stego_posts_represented": 1,
+      "average_kl_stego_vs_global_corpus": 7.820187428300355,
+      "average_jsd_stego_vs_global_corpus": 0.533465373445352
+    }
+  }
+}

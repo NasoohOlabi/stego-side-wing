@@ -77,6 +77,35 @@ def test_recover_with_compressed_full_matches_bruteforce():
     assert full[0] == payload == brute[0]
 
 
+def test_recover_with_compressed_full_accepts_modulo_angle_bits():
+    post = {
+        "id": "p-mod",
+        "title": "",
+        "selftext": "",
+        "url": "https://example.com",
+        "comments": [],
+        "angles": [
+            {"source_quote": "q1", "tangent": "t1", "category": "c1"},
+            {"source_quote": "q2", "tangent": "t2", "category": "c2"},
+            {"source_quote": "q3", "tangent": "t3", "category": "c3"},
+        ],
+    }
+    payload = "\u00e9"
+    aug = augment_post(payload, post)
+    comp = aug["compression"]["compressed"]
+    nested = [[a] for a in post["angles"]]
+    dictionary = build_dictionary(post)
+
+    assert comp[1:3] == "11"
+    recovered = recover_payload_with_compressed_full(
+        comp, dictionary, post, nested, decoded_angle_index=0
+    )
+
+    assert recovered is not None
+    assert recovered[0] == payload
+    assert recovered[1]["angle_bits"] == "11"
+
+
 def test_invisible_payload_roundtrip_preserves_visible_text():
     visible_text = "Distribution-compatible visible text."
     payload = "hidden-" + ("XYZ123" * 256)

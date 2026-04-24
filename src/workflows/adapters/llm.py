@@ -231,6 +231,17 @@ def _genai_generate_text(
         )
 
 
+def _fold_system_message_into_prompt(prompt: str, system_message: str) -> str:
+    """Preserve system instructions when a provider fallback cannot send them separately."""
+    return (
+        "System instructions for this request:\n"
+        f"{system_message.strip()}\n\n"
+        "---\n\n"
+        "User request:\n"
+        f"{prompt}"
+    )
+
+
 def _is_retryable_llm_error(exc: BaseException) -> bool:
     status = _exception_status_code(exc)
     if status is not None:
@@ -937,11 +948,14 @@ class LLMAdapter:
                         keys_tried=key_index + 1,
                         keys_total=len(keys),
                         http_status=_exception_status_code(exc),
-                    ).info("gemini_retry_without_system_message")
+                    ).info("gemini_retry_with_folded_system_message")
                     try:
                         return _call_for_key(
                             api_key,
-                            request_prompt=prompt,
+                            request_prompt=_fold_system_message_into_prompt(
+                                prompt,
+                                system_message,
+                            ),
                             request_system_message=None,
                         )
                     except BaseException as fallback_exc:

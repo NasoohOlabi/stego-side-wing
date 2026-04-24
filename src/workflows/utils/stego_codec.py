@@ -497,6 +497,24 @@ def angle_bits_for_index(idx: int, n_angles: int) -> str:
     return encode_int(idx, n_angles - 1)
 
 
+def angle_bits_decode_to_index(bits: str, idx: int, n_angles: int) -> bool:
+    if n_angles <= 0 or not bits:
+        return False
+    return int(bits, 2) % n_angles == idx % n_angles
+
+
+def angle_bit_aliases_for_index(idx: int, n_angles: int) -> list[str]:
+    width = angle_selection_bit_width(n_angles)
+    if width <= 0 or n_angles <= 0:
+        return [""]
+    target = idx % n_angles
+    return [
+        format(value, f"0{width}b")
+        for value in range(1 << width)
+        if value % n_angles == target
+    ]
+
+
 def _decompress_standard_suffix(utf8_bit_suffix: str) -> str | None:
     if len(utf8_bit_suffix) % 8 != 0:
         return None
@@ -634,11 +652,10 @@ def recover_payload_with_compressed_full(
     la = angle_selection_bit_width(len(angles))
     if len(angles) == 0:
         return None
-    expected_angle_bits = angle_bits_for_index(decoded_angle_index, len(angles))
     if len(compressed_full) < lc + la:
         return None
     actual_angle = compressed_full[lc : lc + la]
-    if actual_angle != expected_angle_bits:
+    if not angle_bits_decode_to_index(actual_angle, decoded_angle_index, len(angles)):
         return None
     comment_bits = compressed_full[:lc]
     payload = decompress_after_embed_prefix(compressed_full, dictionary, lc, la)
@@ -651,6 +668,43 @@ def recover_payload_with_compressed_full(
         "la": la,
     }
     return payload, meta
+
+
+def _recovery_candidate(
+    candidate: str,
+    *,
+    dictionary: list[str],
+    lc: int,
+    la: int,
+    prefix: str,
+    comment_bits: str,
+    angle_bits: str,
+) -> tuple[str, dict[str, Any], int] | None:
+    check = compress_payload(candidate, dictionary)
+    cfull = check.get("compressed", "")
+    if not isinstance(cfull, str) or not cfull.startswith(prefix):
+        return None
+    if decompress_after_embed_prefix(cfull, dictionary, lc, la) != candidate:
+        return None
+    meta = {
+        "comment_bits": comment_bits,
+        "angle_bits": angle_bits,
+        "lc": lc,
+        "la": la,
+        "method": check.get("method"),
+    }
+    return candidate, meta, len(cfull)
+
+
+def _shorter_recovery(
+    current: tuple[str, dict[str, Any], int] | None,
+    candidate: tuple[str, dict[str, Any], int] | None,
+) -> tuple[str, dict[str, Any], int] | None:
+    if candidate is None:
+        return current
+    if current is None or candidate[2] < current[2]:
+        return candidate
+    return current
 
 
 def recover_payload_bruteforce_comment_bits(
@@ -679,11 +733,11 @@ def recover_payload_bruteforce_comment_bits(
     if not angles:
         return None
 
-    angle_bits = angle_bits_for_index(decoded_angle_index, len(angles))
     if compressed_full is not None:
         if len(compressed_full) < lc + la:
             return None
-        if compressed_full[lc : lc + la] != angle_bits:
+        angle_bits = compressed_full[lc : lc + la]
+        if not angle_bits_decode_to_index(angle_bits, decoded_angle_index, len(angles)):
             return None
         payload = decompress_after_embed_prefix(compressed_full, dictionary, lc, la)
         if payload is None:
@@ -697,70 +751,56 @@ def recover_payload_bruteforce_comment_bits(
         }
 
     n_comment_guesses = 1 << lc if lc > 0 else 1
-
-    def _accepts(candidate: str, check: dict[str, Any], b_comment: str) -> bool:
-        cfull = check.get("compressed", "")
-        if not isinstance(cfull, str):
-            return False
-        prefix = b_comment + angle_bits
-        if not cfull.startswith(prefix):
-            return False
-        recovered = decompress_after_embed_prefix(cfull, dictionary, lc, la)
-        return recovered == candidate
-
+    angle_bits_candidates = angle_bit_aliases_for_index(decoded_angle_index, len(angles))
     best: tuple[str, dict[str, Any], int] | None = None
 
     for guess in range(n_comment_guesses):
         b_comment = format(guess, f"0{lc}b") if lc > 0 else ""
-        prefix = b_comment + angle_bits
+        for angle_bits in angle_bits_candidates:
+            prefix = b_comment + angle_bits
 
-        # Standard mode completion: first bit of full compressed is '0'.
-        if prefix and prefix[0] == "0":
-            utf8_partial = prefix[1:]
-            for pad in range(0, max_padding_bits + 1):
-                extended = utf8_partial + ("0" * pad)
-                candidate = _decompress_standard_suffix(extended)
-                if candidate is None:
-                    continue
-                check = compress_payload(candidate, dictionary)
-                if not _accepts(candidate, check, b_comment):
-                    continue
-                cfull = check.get("compressed", "")
-                assert isinstance(cfull, str)
-                meta = {
-                    "comment_bits": b_comment,
-                    "angle_bits": angle_bits,
-                    "lc": lc,
-                    "la": la,
-                    "method": check.get("method"),
-                }
-                score = len(cfull)
-                if best is None or score < best[2]:
-                    best = (candidate, meta, score)
+            # Standard mode completion: first bit of full compressed is '0'.
+            if prefix and prefix[0] == "0":
+                utf8_partial = prefix[1:]
+                for pad in range(0, max_padding_bits + 1):
+                    candidate = _decompress_standard_suffix(utf8_partial + ("0" * pad))
+                    if candidate is None:
+                        continue
+                    best = _shorter_recovery(
+                        best,
+                        _recovery_candidate(
+                            candidate,
+                            dictionary=dictionary,
+                            lc=lc,
+                            la=la,
+                            prefix=prefix,
+                            comment_bits=b_comment,
+                            angle_bits=angle_bits,
+                        ),
+                    )
 
-        # Dictionary mode: first bit is '1'.
-        if prefix and prefix[0] == "1":
-            body_partial = prefix[1:]
-            for pad in range(0, max_padding_bits + 1):
-                extended = body_partial + ("0" * pad)
-                candidate = _decompress_dictionary_bitstream(extended, dictionary)
-                if candidate is None:
-                    continue
-                check = compress_payload(candidate, dictionary)
-                if not _accepts(candidate, check, b_comment):
-                    continue
-                cfull = check.get("compressed", "")
-                assert isinstance(cfull, str)
-                meta = {
-                    "comment_bits": b_comment,
-                    "angle_bits": angle_bits,
-                    "lc": lc,
-                    "la": la,
-                    "method": check.get("method"),
-                }
-                score = len(cfull)
-                if best is None or score < best[2]:
-                    best = (candidate, meta, score)
+            # Dictionary mode: first bit is '1'.
+            if prefix and prefix[0] == "1":
+                body_partial = prefix[1:]
+                for pad in range(0, max_padding_bits + 1):
+                    candidate = _decompress_dictionary_bitstream(
+                        body_partial + ("0" * pad),
+                        dictionary,
+                    )
+                    if candidate is None:
+                        continue
+                    best = _shorter_recovery(
+                        best,
+                        _recovery_candidate(
+                            candidate,
+                            dictionary=dictionary,
+                            lc=lc,
+                            la=la,
+                            prefix=prefix,
+                            comment_bits=b_comment,
+                            angle_bits=angle_bits,
+                        ),
+                    )
 
     if best is None:
         return None

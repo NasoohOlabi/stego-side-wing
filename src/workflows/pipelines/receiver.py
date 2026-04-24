@@ -115,6 +115,37 @@ def nested_angles_from_post(post: dict[str, Any]) -> list[list[dict[str, Any]]]:
     return [x if isinstance(x, list) else [x] for x in raw if x is not None]
 
 
+def _angle_signature(angle: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(angle.get("category", "")),
+        str(angle.get("source_quote", "")),
+        str(angle.get("tangent", "")),
+    )
+
+
+def _canonicalize_decoded_angle_index(
+    decoded_idx: int,
+    expected_angle_index: int | None,
+    tangents_db: list[dict[str, Any]],
+) -> int:
+    if expected_angle_index is None or decoded_idx == expected_angle_index:
+        return decoded_idx
+    if not (0 <= decoded_idx < len(tangents_db)):
+        return decoded_idx
+    if not (0 <= expected_angle_index < len(tangents_db)):
+        return decoded_idx
+    if _angle_signature(tangents_db[decoded_idx]) != _angle_signature(
+        tangents_db[expected_angle_index]
+    ):
+        return decoded_idx
+    _RECEIVER_LOG.warning(
+        "receiver_duplicate_angle_signature_canonicalized",
+        decoded_angle_index=decoded_idx,
+        expected_angle_index=expected_angle_index,
+    )
+    return expected_angle_index
+
+
 def _extract_sender_audit(post: dict[str, Any]) -> dict[str, Any] | None:
     explicit = post.get("sender_audit")
     if isinstance(explicit, dict):
@@ -295,17 +326,32 @@ class ReceiverPipeline:
         )
         if decoded_idx is None:
             raise RuntimeError("DecodePipeline could not map stego text to an angle index")
+        decoded_idx = _canonicalize_decoded_angle_index(
+            decoded_idx,
+            expected_angle_index,
+            tangents_db,
+        )
+        semantic_decoded_idx = decoded_idx
+        authoritative_idx = decoded_idx
         if expected_angle_index is not None and decoded_idx != expected_angle_index:
-            raise RuntimeError(
-                "Decoded angle index does not match sender audit "
-                f"(expected={expected_angle_index}, got={decoded_idx})"
+            _RECEIVER_LOG.warning(
+                "receiver_angle_index_mismatch_using_sender_audit",
+                expected_angle_index=expected_angle_index,
+                decoded_angle_index=decoded_idx,
+                strict_mode=strict_mode,
             )
+            if strict_mode:
+                raise RuntimeError(
+                    "Decoded angle index does not match sender audit "
+                    f"(expected={expected_angle_index}, got={decoded_idx})"
+                )
+            authoritative_idx = expected_angle_index
 
         dictionary = build_dictionary(rebuilt_post)
         _emit(
             on_progress,
             "receiver.decode_payload",
-            {"decoded_angle_index": decoded_idx, "tags": ["workflow"]},
+            {"decoded_angle_index": authoritative_idx, "tags": ["workflow"]},
         )
 
         recovery_meta: dict[str, Any]
@@ -318,17 +364,20 @@ class ReceiverPipeline:
                 "payload_bytes": len(payload.encode("utf-8")),
                 "embedded_payload_bytes": len(hidden_payload.encode("utf-8")),
             }
-            return payload, {
-                "decoded_angle_index": decoded_idx,
+            info = {
+                "decoded_angle_index": authoritative_idx,
                 "recovery_meta": recovery_meta,
             }
+            if semantic_decoded_idx != authoritative_idx:
+                info["semantic_decoded_angle_index"] = semantic_decoded_idx
+            return payload, info
         if compressed_full is not None:
             got = recover_payload_with_compressed_full(
                 compressed_full,
                 dictionary,
                 pre_sender_post,
                 nested_angles,
-                decoded_idx,
+                authoritative_idx,
             )
             if got is None:
                 raise RuntimeError("Compressed bitstring does not match decoded angle index")
@@ -338,7 +387,7 @@ class ReceiverPipeline:
                 dictionary,
                 pre_sender_post,
                 nested_angles,
-                decoded_idx,
+                authoritative_idx,
                 max_padding_bits=max_padding_bits,
             )
             if got is None:
@@ -352,7 +401,13 @@ class ReceiverPipeline:
         recovery_meta["payload_transform"] = resolved_transform
         recovery_meta["embedded_payload_bytes"] = len(protected_payload.encode("utf-8"))
         recovery_meta["payload_bytes"] = len(payload.encode("utf-8"))
-        return payload, {"decoded_angle_index": decoded_idx, "recovery_meta": recovery_meta}
+        info = {
+            "decoded_angle_index": authoritative_idx,
+            "recovery_meta": recovery_meta,
+        }
+        if semantic_decoded_idx != authoritative_idx:
+            info["semantic_decoded_angle_index"] = semantic_decoded_idx
+        return payload, info
 
     def run(
         self,

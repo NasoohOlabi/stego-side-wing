@@ -3,6 +3,7 @@
 from workflows.pipelines.receiver import (
     build_pre_sender_post,
     locate_sender_stego_comment,
+    nested_angles_from_post,
 )
 from workflows.pipelines.receiver import ReceiverPipeline
 from workflows.pipelines.stego import StegoPipeline
@@ -261,3 +262,75 @@ def test_receiver_run_unwraps_security_profile_payload(
     assert out["succeeded"] is True
     assert out["payload"] == secret
     assert out["recovery_meta"]["payload_transform"] == "hmac_xor_v1"
+
+
+def test_receiver_decode_payload_canonicalizes_duplicate_angle_signature_index():
+    duplicate_angle = {
+        "source_quote": "duplicate quote",
+        "tangent": "duplicate tangent",
+        "category": "duplicate category",
+    }
+    pre_sender = {
+        "id": "recv-dup",
+        "title": "title",
+        "selftext": "",
+        "url": "https://example.com/article",
+        "comments": [],
+        "angles": [dict(duplicate_angle) for _ in range(10)],
+    }
+    secret = "payload-duplicate"
+    aug = augment_post(secret, pre_sender)
+    angle_idx = int(aug["angleEmbedding"]["selectedAngle"]["idx"])
+    alt_idx = 0 if angle_idx != 0 else 1
+
+    rp = ReceiverPipeline()
+    rp.decode.decode = lambda **kwargs: alt_idx
+
+    payload, info = rp.decode_payload(
+        stego_text="synthetic stego comment body",
+        rebuilt_post=pre_sender,
+        pre_sender_post=pre_sender,
+        nested_angles=nested_angles_from_post(pre_sender),
+        compressed_full=aug["compression"]["compressed"],
+        strict_mode=False,
+        expected_angle_index=angle_idx,
+    )
+
+    assert payload == secret
+    assert info["decoded_angle_index"] == angle_idx
+
+
+def test_receiver_decode_payload_uses_sender_audit_index_when_semantic_decode_drifts():
+    pre_sender = {
+        "id": "recv-drift",
+        "title": "title",
+        "selftext": "",
+        "url": "https://example.com/article",
+        "comments": [],
+        "angles": [
+            {"source_quote": "quote a", "tangent": "tangent a", "category": "cat a"},
+            {"source_quote": "quote b", "tangent": "tangent b", "category": "cat b"},
+            {"source_quote": "quote c", "tangent": "tangent c", "category": "cat c"},
+        ],
+    }
+    secret = "payload-drift"
+    aug = augment_post(secret, pre_sender)
+    angle_idx = int(aug["angleEmbedding"]["selectedAngle"]["idx"])
+    alt_idx = next(idx for idx in range(len(pre_sender["angles"])) if idx != angle_idx)
+
+    rp = ReceiverPipeline()
+    rp.decode.decode = lambda **kwargs: alt_idx
+
+    payload, info = rp.decode_payload(
+        stego_text="synthetic stego comment body",
+        rebuilt_post=pre_sender,
+        pre_sender_post=pre_sender,
+        nested_angles=nested_angles_from_post(pre_sender),
+        compressed_full=aug["compression"]["compressed"],
+        strict_mode=False,
+        expected_angle_index=angle_idx,
+    )
+
+    assert payload == secret
+    assert info["decoded_angle_index"] == angle_idx
+    assert info["semantic_decoded_angle_index"] == alt_idx

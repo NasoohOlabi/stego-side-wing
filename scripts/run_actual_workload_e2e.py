@@ -55,6 +55,21 @@ PROFILE_OVERRIDE_KEYS = (
     "WORKFLOW_STEGO_LLM_TEMPERATURE",
     "WORKFLOW_DECODE_STRICT_DEFAULT",
 )
+TRANSIENT_SAMPLE_ERROR_MARKERS = (
+    "Connection aborted",
+    "RemoteDisconnected",
+    "Failed to resolve",
+    "NameResolutionError",
+    "Max retries exceeded",
+    "Temporary failure in name resolution",
+    "Read timed out",
+    "ConnectTimeout",
+    "ConnectionError",
+    "SSLError",
+    "ProtocolError",
+)
+DEFAULT_MAX_TRANSIENT_SAMPLE_RETRIES = 3
+DEFAULT_TRANSIENT_SAMPLE_RETRY_BASE_DELAY_SECONDS = 30.0
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -159,6 +174,20 @@ def _payload_for(run_id: str, profile: str, post_id: str, sample_idx: int) -> st
     return f"actual-e2e:{run_id}:{profile}:{sample_idx:04d}:{post_id}"
 
 
+def _is_retryable_sample_error(exc: BaseException) -> bool:
+    message = " ".join(str(part) for part in exc.args) if exc.args else str(exc)
+    normalized = message.lower()
+    return any(marker.lower() in normalized for marker in TRANSIENT_SAMPLE_ERROR_MARKERS)
+
+
+def _transient_sample_retry_delay_seconds(
+    retry_index: int, *, base_delay_seconds: float
+) -> float:
+    if base_delay_seconds <= 0:
+        return 0.0
+    return base_delay_seconds * (2**retry_index)
+
+
 def _run_receiver_decode(
     *,
     receiver: ReceiverPipeline,
@@ -191,6 +220,117 @@ def _run_receiver_decode(
     return info
 
 
+def _run_sample(
+    *,
+    run_id: str,
+    profile: str,
+    post_id: str,
+    sample_idx: int,
+    angles_dir: Path,
+    dataset_dir: Path,
+    input_dir: Path,
+    profile_dataset_dir: Path,
+    output_dir: Path,
+    stego: StegoPipeline,
+    receiver: ReceiverPipeline,
+    max_retries: int,
+    skip_receiver_decode: bool,
+    max_transient_sample_retries: int,
+    transient_sample_retry_base_delay_seconds: float,
+) -> dict[str, Any]:
+    sample_label = f"{post_id}_version_{profile}_{sample_idx:04d}"
+    payload = _payload_for(run_id, profile, post_id, sample_idx)
+    payload_hash = stable_hash(payload)
+    attempt_index = 0
+
+    while True:
+        t0 = time.perf_counter()
+        try:
+            post = _read_json(angles_dir / f"{post_id}.json")
+            baseline_post = _read_json(dataset_dir / f"{post_id}.json")
+            if not _has_usable_angles(post):
+                raise ValueError(f"Post {post_id} has no usable angles")
+            _write_json(input_dir / f"{sample_label}.json", post)
+            _write_json(profile_dataset_dir / f"{post_id}.json", baseline_post)
+
+            logger.bind(component="ActualWorkloadE2E").info(
+                "sample_start",
+                profile=profile,
+                post_id=post_id,
+                sample_index=sample_idx,
+                payload_hash=payload_hash,
+                sample_attempt=attempt_index + 1,
+            )
+            stego_result = stego.encode(
+                payload=payload,
+                post=post,
+                tag=f"version_{profile}",
+                max_retries=max_retries,
+            )
+            if not stego_result.get("succeeded") or not stego_result.get("stego_text"):
+                raise RuntimeError(str(stego_result.get("error") or "stego encode failed"))
+            receiver_info = {}
+            if not skip_receiver_decode:
+                receiver_info = _run_receiver_decode(
+                    receiver=receiver,
+                    post=post,
+                    stego_result=stego_result,
+                    payload=payload,
+                )
+            output_path = output_dir / f"{sample_label}.json"
+            _write_json(output_path, n8n_save_object_body(stego_result))
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            entry = {
+                "profile": profile,
+                "post_id": post_id,
+                "sample_index": sample_idx,
+                "payload_hash": payload_hash,
+                "payload_bytes": len(payload.encode("utf-8")),
+                "output_file": str(output_path),
+                "elapsed_ms": elapsed_ms,
+                "angle_index": stego_result.get("angle_index"),
+                "retry_count": stego_result.get("retry_count"),
+                "receiver_decode": receiver_info,
+                "sample_attempt": attempt_index + 1,
+                "transient_retry_count": attempt_index,
+            }
+            logger.bind(component="ActualWorkloadE2E").info(
+                "sample_complete",
+                profile=profile,
+                post_id=post_id,
+                sample_index=sample_idx,
+                elapsed_ms=elapsed_ms,
+                angle_index=stego_result.get("angle_index"),
+                retry_count=stego_result.get("retry_count"),
+                sample_attempt=attempt_index + 1,
+                transient_retry_count=attempt_index,
+            )
+            return entry
+        except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            if attempt_index < max_transient_sample_retries and _is_retryable_sample_error(exc):
+                wait_seconds = _transient_sample_retry_delay_seconds(
+                    attempt_index,
+                    base_delay_seconds=transient_sample_retry_base_delay_seconds,
+                )
+                logger.bind(component="ActualWorkloadE2E").warning(
+                    "sample_retrying_transient_failure",
+                    profile=profile,
+                    post_id=post_id,
+                    sample_index=sample_idx,
+                    elapsed_ms=elapsed_ms,
+                    sample_attempt=attempt_index + 1,
+                    transient_retry_count=attempt_index,
+                    wait_seconds=wait_seconds,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                if wait_seconds > 0:
+                    time.sleep(wait_seconds)
+                attempt_index += 1
+                continue
+            raise
+
+
 def _run_profile(
     *,
     run_id: str,
@@ -203,6 +343,8 @@ def _run_profile(
     force_model_generation: bool,
     skip_receiver_decode: bool,
     fail_fast: bool,
+    max_transient_sample_retries: int,
+    transient_sample_retry_base_delay_seconds: float,
 ) -> dict[str, Any]:
     with _profile_env(profile, force_model_generation=force_model_generation):
         settings = get_workflow_encoding_settings()
@@ -230,65 +372,29 @@ def _run_profile(
         )
 
         for sample_idx, post_id in enumerate(post_ids):
-            sample_label = f"{post_id}_version_{profile}_{sample_idx:04d}"
-            payload = _payload_for(run_id, profile, post_id, sample_idx)
             t0 = time.perf_counter()
+            sample_label = f"{post_id}_version_{profile}_{sample_idx:04d}"
             try:
-                post = _read_json(angles_dir / f"{post_id}.json")
-                baseline_post = _read_json(dataset_dir / f"{post_id}.json")
-                if not _has_usable_angles(post):
-                    raise ValueError(f"Post {post_id} has no usable angles")
-                _write_json(input_dir / f"{sample_label}.json", post)
-                _write_json(profile_dataset_dir / f"{post_id}.json", baseline_post)
-
-                logger.bind(component="ActualWorkloadE2E").info(
-                    "sample_start",
-                    profile=profile,
-                    post_id=post_id,
-                    sample_index=sample_idx,
-                    payload_hash=stable_hash(payload),
-                )
-                stego_result = stego.encode(
-                    payload=payload,
-                    post=post,
-                    tag=f"version_{profile}",
-                    max_retries=max_retries,
-                )
-                if not stego_result.get("succeeded") or not stego_result.get("stego_text"):
-                    raise RuntimeError(str(stego_result.get("error") or "stego encode failed"))
-                receiver_info = {}
-                if not skip_receiver_decode:
-                    receiver_info = _run_receiver_decode(
-                        receiver=receiver,
-                        post=post,
-                        stego_result=stego_result,
-                        payload=payload,
-                    )
-                output_path = output_dir / f"{sample_label}.json"
-                _write_json(output_path, n8n_save_object_body(stego_result))
-                elapsed_ms = int((time.perf_counter() - t0) * 1000)
                 entries.append(
-                    {
-                        "profile": profile,
-                        "post_id": post_id,
-                        "sample_index": sample_idx,
-                        "payload_hash": stable_hash(payload),
-                        "payload_bytes": len(payload.encode("utf-8")),
-                        "output_file": str(output_path),
-                        "elapsed_ms": elapsed_ms,
-                        "angle_index": stego_result.get("angle_index"),
-                        "retry_count": stego_result.get("retry_count"),
-                        "receiver_decode": receiver_info,
-                    }
-                )
-                logger.bind(component="ActualWorkloadE2E").info(
-                    "sample_complete",
-                    profile=profile,
-                    post_id=post_id,
-                    sample_index=sample_idx,
-                    elapsed_ms=elapsed_ms,
-                    angle_index=stego_result.get("angle_index"),
-                    retry_count=stego_result.get("retry_count"),
+                    _run_sample(
+                        run_id=run_id,
+                        profile=profile,
+                        post_id=post_id,
+                        sample_idx=sample_idx,
+                        angles_dir=angles_dir,
+                        dataset_dir=dataset_dir,
+                        input_dir=input_dir,
+                        profile_dataset_dir=profile_dataset_dir,
+                        output_dir=output_dir,
+                        stego=stego,
+                        receiver=receiver,
+                        max_retries=max_retries,
+                        skip_receiver_decode=skip_receiver_decode,
+                        max_transient_sample_retries=max_transient_sample_retries,
+                        transient_sample_retry_base_delay_seconds=(
+                            transient_sample_retry_base_delay_seconds
+                        ),
+                    )
                 )
             except Exception as exc:
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -328,6 +434,10 @@ def _run_profile(
             "samples_failed": len(failures),
             "force_model_generation": force_model_generation,
             "skip_receiver_decode": skip_receiver_decode,
+            "max_transient_sample_retries": max_transient_sample_retries,
+            "transient_sample_retry_base_delay_seconds": (
+                transient_sample_retry_base_delay_seconds
+            ),
             "entries": entries,
             "failures": failures,
             "metrics_report_path": divergence["report_path"] if divergence else None,
@@ -358,6 +468,10 @@ def run_actual_workload_e2e(
     skip_receiver_decode: bool,
     allow_post_reuse: bool,
     fail_fast: bool,
+    max_transient_sample_retries: int = DEFAULT_MAX_TRANSIENT_SAMPLE_RETRIES,
+    transient_sample_retry_base_delay_seconds: float = (
+        DEFAULT_TRANSIENT_SAMPLE_RETRY_BASE_DELAY_SECONDS
+    ),
 ) -> dict[str, Any]:
     if samples_per_profile <= 0:
         raise ValueError("samples_per_profile must be positive")
@@ -389,6 +503,8 @@ def run_actual_workload_e2e(
         samples_per_profile=samples_per_profile,
         post_ids=selected_post_ids,
         max_retries=max_retries,
+        max_transient_sample_retries=max_transient_sample_retries,
+        transient_sample_retry_base_delay_seconds=transient_sample_retry_base_delay_seconds,
     )
     for profile in profiles:
         profile_summaries.append(
@@ -403,6 +519,10 @@ def run_actual_workload_e2e(
                 force_model_generation=force_model_generation,
                 skip_receiver_decode=skip_receiver_decode,
                 fail_fast=fail_fast,
+                max_transient_sample_retries=max_transient_sample_retries,
+                transient_sample_retry_base_delay_seconds=(
+                    transient_sample_retry_base_delay_seconds
+                ),
             )
         )
 
@@ -428,6 +548,8 @@ def run_actual_workload_e2e(
         "skip_receiver_decode": skip_receiver_decode,
         "allow_post_reuse": allow_post_reuse,
         "max_retries": max_retries,
+        "max_transient_sample_retries": max_transient_sample_retries,
+        "transient_sample_retry_base_delay_seconds": transient_sample_retry_base_delay_seconds,
         "profile_summaries": profile_summaries,
     }
     _write_json(resolved_run_dir / "summary.json", summary)
@@ -474,6 +596,16 @@ def main() -> None:
     parser.add_argument("--skip-receiver-decode", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument(
+        "--max-transient-sample-retries",
+        type=int,
+        default=DEFAULT_MAX_TRANSIENT_SAMPLE_RETRIES,
+    )
+    parser.add_argument(
+        "--transient-sample-retry-base-delay-seconds",
+        type=float,
+        default=DEFAULT_TRANSIENT_SAMPLE_RETRY_BASE_DELAY_SECONDS,
+    )
+    parser.add_argument(
         "--progress-log",
         default=None,
         help="Optional JSONL log containing only ActualWorkloadE2E progress events.",
@@ -502,6 +634,10 @@ def main() -> None:
         skip_receiver_decode=bool(args.skip_receiver_decode),
         allow_post_reuse=bool(args.allow_post_reuse),
         fail_fast=bool(args.fail_fast),
+        max_transient_sample_retries=args.max_transient_sample_retries,
+        transient_sample_retry_base_delay_seconds=(
+            args.transient_sample_retry_base_delay_seconds
+        ),
     )
 
 

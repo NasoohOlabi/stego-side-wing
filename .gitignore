@@ -20,3 +20,5 @@ debug-*.log
 
 
 tmp_*
+metrics
+.tmp

@@ -97,14 +97,20 @@ def get_lm_studio_request_timeout_seconds(default: int = 600) -> int:
 
 # Workflow LLM (non-sensitive defaults; override WORKFLOW_LLM_BACKEND / GOOGLE_AI_STUDIO_MODEL via env).
 DEFAULT_WORKFLOW_LLM_BACKEND = "ai_studio"
+DEFAULT_WORKFLOW_LM_STUDIO_MODEL = "openai/gpt-oss-20b"
 DEFAULT_GOOGLE_AI_STUDIO_MODEL = "gemma-4-26b-a4b-it"
 DEFAULT_GOOGLE_AI_REQUEST_TIMEOUT_SEC = 180
 WorkflowCapacityProfile = Literal["low", "mid", "high"]
 WorkflowEncodingProfile = Literal["balanced", "robustness", "capacity", "security"]
 WorkflowAnglesGenerationMode = Literal["model", "extractive_zero_kld"]
-WorkflowStegoGenerationMode = Literal["model", "extractive_zero_kld"]
-WorkflowPayloadTransform = Literal["plain", "hmac_xor_v1"]
-WorkflowStegoPromptStyle = Literal["natural", "anchored"]
+WorkflowStegoGenerationMode = Literal["model", "extractive_zero_kld", "hybrid_extract"]
+WorkflowPayloadTransform = Literal["plain", "hmac_xor_v1", "secure_compact_v2"]
+WorkflowStegoPromptStyle = Literal[
+    "natural",
+    "anchored",
+    "guided_natural",
+    "natural_then_anchor_retry",
+]
 
 # --- Workflow capacity & URL fetch (defaults in code; WORKFLOW_* overrides: process env only) ---
 DEFAULT_WORKFLOW_ENCODING_PROFILE: WorkflowEncodingProfile = "balanced"
@@ -184,7 +190,7 @@ WORKFLOW_ENCODING_PROFILES: dict[WorkflowEncodingProfile, dict[str, object]] = {
         "capacity_limits_enabled": True,
         "angles_generation_mode": "extractive_zero_kld",
         "stego_generation_mode": "extractive_zero_kld",
-        "payload_transform": "hmac_xor_v1",
+        "payload_transform": "secure_compact_v2",
         "stego_prompt_style": "anchored",
         "stego_sample_angle_count": 5,
         "stego_default_max_retries": 6,
@@ -304,6 +310,16 @@ def get_google_ai_studio_model() -> str:
     )
 
 
+def get_workflow_lm_studio_model(default: str | None = None) -> str:
+    """OpenAI-compatible model id when workflow LLM backend is LM Studio."""
+    raw = _workflow_env_raw("WORKFLOW_LM_STUDIO_MODEL")
+    if raw:
+        return raw
+    if default is not None and default.strip():
+        return default.strip()
+    return DEFAULT_WORKFLOW_LM_STUDIO_MODEL
+
+
 def get_google_ai_request_timeout_seconds(
     default: int = DEFAULT_GOOGLE_AI_REQUEST_TIMEOUT_SEC,
 ) -> int:
@@ -348,6 +364,8 @@ def get_workflow_stego_generation_mode() -> WorkflowStegoGenerationMode:
         _workflow_env_raw("WORKFLOW_STEGO_GENERATION_MODE")
         or str(_workflow_encoding_default("stego_generation_mode"))
     ).lower()
+    if raw in ("hybrid_extract", "hybrid", "hybrid_extractive"):
+        return "hybrid_extract"
     if raw in ("extractive_zero_kld", "zero_kld", "extractive"):
         return "extractive_zero_kld"
     return "model"
@@ -359,6 +377,8 @@ def get_workflow_payload_transform() -> WorkflowPayloadTransform:
         _workflow_env_raw("WORKFLOW_PAYLOAD_TRANSFORM")
         or str(_workflow_encoding_default("payload_transform"))
     ).lower()
+    if raw in ("secure_compact_v2", "compact_secure_v2", "swsec2", "secure_v2"):
+        return "secure_compact_v2"
     if raw in ("hmac_xor_v1", "secure", "xor_hmac"):
         return "hmac_xor_v1"
     return "plain"
@@ -375,6 +395,14 @@ def get_workflow_stego_prompt_style() -> WorkflowStegoPromptStyle:
         _workflow_env_raw("WORKFLOW_STEGO_PROMPT_STYLE")
         or str(_workflow_encoding_default("stego_prompt_style"))
     ).lower()
+    if raw in ("guided_natural", "guided", "natural_guided"):
+        return "guided_natural"
+    if raw in (
+        "natural_then_anchor_retry",
+        "guided_retry_anchor",
+        "natural_retry_anchor",
+    ):
+        return "natural_then_anchor_retry"
     if raw in ("anchored", "anchor", "recoverable"):
         return "anchored"
     return "natural"
@@ -550,6 +578,8 @@ def get_workflow_encoding_settings() -> dict[str, str | int | float | bool | Non
         "decode_llm_max_tries": get_workflow_decode_llm_max_tries(),
         "stego_llm_temperature": get_workflow_stego_llm_temperature(),
         "decode_strict_default": get_workflow_decode_strict_default(),
+        "lm_studio_model": get_workflow_lm_studio_model(),
+        "google_ai_studio_model": get_google_ai_studio_model(),
         "has_encoding_secret": bool(get_workflow_encoding_secret()),
     }
 
@@ -591,7 +621,7 @@ def resolve_workflow_llm_provider_and_model(lm_model: str) -> tuple[str, str]:
     """``(provider, model)`` for :meth:`workflows.adapters.llm.LLMAdapter.call_llm`."""
     if get_workflow_llm_backend() == "google":
         return "gemini", get_google_ai_studio_model()
-    return "lm_studio", lm_model
+    return "lm_studio", get_workflow_lm_studio_model(lm_model)
 
 
 def get_workflow_url_fetch_http_first() -> bool:

@@ -151,17 +151,46 @@ def _angle_summary(angle: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-def _anchor_candidate_text(angle: dict[str, Any]) -> str:
+def _anchor_comment_body(post_augmentation: dict[str, Any] | None) -> str:
+    if not isinstance(post_augmentation, dict):
+        return ""
+    chain = post_augmentation.get("commentEmbedding", {}).get("pickedCommentChain", [])
+    if not isinstance(chain, list):
+        return ""
+    for comment in reversed(chain):
+        if isinstance(comment, dict) and isinstance(comment.get("body"), str):
+            body = " ".join(comment["body"].split())
+            if body:
+                return body
+    return ""
+
+
+def _anchor_reply_cue(tangent: str, quote: str, category: str) -> str:
+    haystack = f"{tangent} {quote} {category}".lower()
+    if any(term in haystack for term in ("immigration", "deport", "ice", "human rights")):
+        return "immigration politics trampling basic rights"
+    if any(term in haystack for term in ("judicial", "justice", "political pressure")):
+        return "political pressure bending the justice system"
+    if any(term in haystack for term in ("labor", "union", "worker", "childcare")):
+        return "working people getting left with no real protection"
+    if any(term in haystack for term in ("coffee", "shop", "poll")):
+        return "treating a serious choice like a casual coffee-shop poll"
+    if any(term in haystack for term in ("dataset", "model", "data", "scraping")):
+        return "bad information turning into bad decisions"
+    return tangent or quote or category or "the bigger issue getting ignored"
+
+
+def _anchor_candidate_text(
+    angle: dict[str, Any],
+    post_augmentation: dict[str, Any] | None = None,
+) -> str:
     tangent = str(angle.get("tangent") or "").strip()
     quote = str(angle.get("source_quote") or "").strip()
     category = str(angle.get("category") or "this issue").strip()
-    if tangent and quote:
-        return f"The part I keep coming back to is {tangent} That detail around {quote} feels central to the broader {category} story."
-    if tangent:
-        return f"The part I keep coming back to is {tangent} It feels central to the broader {category} story."
-    if quote:
-        return f"The detail around {quote} feels like the part people are underestimating in this {category} story."
-    return f"This feels like a bigger {category} issue than the headline makes it sound."
+    last_comment = _anchor_comment_body(post_augmentation)
+    lead = "No, but I get why you ask." if last_comment.endswith("?") else "Yeah, I get why that bothers you."
+    cue = _anchor_reply_cue(tangent, quote, category)
+    return f"{lead} It feels like {cue}, and it is hard not to be angry about it."
 
 
 def _text_preview(text: Any, max_len: int = 180) -> str:
@@ -171,23 +200,28 @@ def _text_preview(text: Any, max_len: int = 180) -> str:
     return stripped if len(stripped) <= max_len else f"{stripped[:max_len]}..."
 
 
-def _joined_comment_bodies(post: dict[str, Any]) -> str:
-    bodies = [
-        body.strip()
-        for comment in flatten_comments(post.get("comments", []))
-        for body in [comment.get("body")]
-        if isinstance(body, str) and body.strip()
-    ]
-    return "\n".join(bodies).strip()
+def _prompt_style_for_attempt(configured_style: str, retry_count: int) -> str:
+    if configured_style == "natural_then_anchor_retry":
+        return "guided_natural" if retry_count == 0 else "anchored"
+    return configured_style
 
 
-def _extractive_stego_text(post: dict[str, Any]) -> str:
-    comment_corpus = _joined_comment_bodies(post)
-    if comment_corpus:
-        return comment_corpus
+def _extractive_candidate_texts(post: dict[str, Any]) -> list[str]:
+    bodies = []
+    for comment in flatten_comments(post.get("comments", [])):
+        body = comment.get("body")
+        if isinstance(body, str) and body.strip():
+            bodies.append(body.strip())
     selftext = post.get("selftext", "")
     if isinstance(selftext, str) and selftext.strip():
-        return selftext.strip()
+        bodies.append(selftext.strip())
+    return bodies
+
+
+def _extractive_stego_text(post: dict[str, Any], selected_angle: dict[str, Any]) -> str:
+    for candidate in _extractive_candidate_texts(post):
+        if _extractive_angle_matches(candidate, selected_angle):
+            return candidate
     return ""
 
 
@@ -225,6 +259,9 @@ def _sender_audit_from_post(
             "original_length": compression.get("originalLength"),
             "compressed_hash": stable_hash(compression.get("compressed", "")),
         },
+        "selection_signature": post_augmentation.get("selectionSignature"),
+        "comment_bits": post_augmentation.get("commentBits"),
+        "angle_bits": post_augmentation.get("angleBits"),
     }
 
 
@@ -389,9 +426,10 @@ class StegoPipeline:
         selected_angle: dict[str, Any],
         selected_idx: Any,
     ) -> dict[str, Any] | None:
-        if get_workflow_stego_generation_mode() != "extractive_zero_kld":
+        generation_mode = get_workflow_stego_generation_mode()
+        if generation_mode not in {"extractive_zero_kld", "hybrid_extract"}:
             return None
-        visible_text = _extractive_stego_text(post)
+        visible_text = _extractive_stego_text(post, selected_angle)
         if not _is_non_empty_string(visible_text):
             return None
         if not _extractive_angle_matches(visible_text, selected_angle):
@@ -421,7 +459,11 @@ class StegoPipeline:
         }
 
     def _build_prompt(
-        self, sample: dict[str, Any], comment_embedding: dict[str, Any]
+        self,
+        sample: dict[str, Any],
+        comment_embedding: dict[str, Any],
+        *,
+        prompt_style: str,
     ) -> tuple[str, str]:
         context = comment_embedding.get("context", {})
         title = context.get("title", "")
@@ -446,12 +488,11 @@ class StegoPipeline:
                 name = raw_name.strip() if isinstance(raw_name, str) else ""
                 if not name:
                     name = "Unknown"
-                label = "commented" if not rendered else "replyed"
+                label = "commented" if not rendered else "replied"
                 rendered.append(f"{name} {label}:\n{body}")
             if rendered:
                 chain_section = "\n---\n" + "\n---\n".join(rendered)
 
-        prompt_style = get_workflow_stego_prompt_style()
         enc = stego_encode_prompts_for_style(prompt_style)
         prompt = enc.user_template.format(
             best_match=str(sample.get("best_match", "")),
@@ -475,6 +516,7 @@ class StegoPipeline:
         sample: dict[str, Any],
         comment_embedding: dict[str, Any],
         *,
+        prompt_style: str,
         sample_index: int = 0,
         encode_run_id: str = "",
     ) -> list[str]:
@@ -487,7 +529,11 @@ class StegoPipeline:
                 return "\n".join(lines[1:-1]).strip()
             return stripped
 
-        prompt, system_message = self._build_prompt(sample, comment_embedding)
+        prompt, system_message = self._build_prompt(
+            sample,
+            comment_embedding,
+            prompt_style=prompt_style,
+        )
         _stego_log_bind("prompt").info(
             "category={} tangent={} source_quote={}",
             sample.get("category"),
@@ -705,10 +751,11 @@ class StegoPipeline:
         )
 
         t_aug = time.perf_counter()
-        post_augmentation = self._augment_post(embedded_payload, post)
+        post_augmentation = self._augment_post(payload, post)
         sender_audit = _sender_audit_from_post(post, post_augmentation)
         sender_audit["encoding"] = get_workflow_encoding_settings()
         sender_audit["payload_transform"] = payload_transform
+        sender_audit["payload_carrier"] = "invisible_suffix_utf8"
         sender_audit["raw_payload_bytes"] = len(payload.encode("utf-8"))
         sender_audit["embedded_payload_bytes"] = len(embedded_payload.encode("utf-8"))
         post_augmentation["senderAudit"] = sender_audit
@@ -791,16 +838,19 @@ class StegoPipeline:
 
         retry_count = 0
         last_breakdown: dict[str, Any] = {}
+        configured_prompt_style = get_workflow_stego_prompt_style()
 
         while retry_count <= resolved_max_retries:
             try:
+                prompt_style = _prompt_style_for_attempt(configured_prompt_style, retry_count)
                 t_attempt = time.perf_counter()
                 _stego_log_bind("attempt").info(
-                    "post_id={} attempt={}/{} selected_idx={}",
+                    "post_id={} attempt={}/{} selected_idx={} prompt_style={}",
                     post_id,
                     retry_count + 1,
                     resolved_max_retries + 1,
                     selected_idx,
+                    prompt_style,
                 )
                 encoded_results: list[dict[str, Any]] = []
                 t_gen = time.perf_counter()
@@ -808,6 +858,7 @@ class StegoPipeline:
                     texts = self._generate_stego_texts(
                         sample=sample,
                         comment_embedding=post_augmentation["commentEmbedding"],
+                        prompt_style=prompt_style,
                         sample_index=sidx,
                         encode_run_id=encode_run_id,
                     )
@@ -816,6 +867,7 @@ class StegoPipeline:
                             "category": sample.get("category"),
                             "source_quote": sample.get("source_quote"),
                             "tangent": sample.get("tangent"),
+                            "prompt_style": prompt_style,
                             "texts": texts,
                         }
                     )
@@ -860,11 +912,13 @@ class StegoPipeline:
                 )
 
                 if validation.get("succeeded"):
-                    stego_text = validation.get("stegoText")
-                    if not _is_non_empty_string(stego_text):
+                    visible_text = validation.get("stegoText")
+                    if not _is_non_empty_string(visible_text):
                         raise RuntimeError(
                             "Cross-validation reported success with empty stego text."
                         )
+                    visible_text = str(visible_text)
+                    stego_text = embed_invisible_payload(visible_text, embedded_payload)
                     _stego_log_bind("success").info(
                         "post_id={} attempt={} success_candidate={} decoded_indices={}",
                         post_id,
@@ -907,7 +961,7 @@ class StegoPipeline:
                     validation.get("decodedIndices", []),
                 )
                 if retry_count >= resolved_max_retries:
-                    anchor_text = _anchor_candidate_text(selected_angle)
+                    anchor_text = _anchor_candidate_text(selected_angle, post_augmentation)
                     anchor_validation = self._cross_validate(
                         candidate_texts=[anchor_text],
                         few_shots=few_shots,
@@ -936,12 +990,13 @@ class StegoPipeline:
                                 "category": selected_angle.get("category"),
                                 "source_quote": selected_angle.get("source_quote"),
                                 "tangent": selected_angle.get("tangent"),
+                                "prompt_style": "anchor_fallback",
                                 "texts": [anchor_text],
                                 "generation_mode": "anchor_fallback",
                             }
                         )
                         return {
-                            "stego_text": anchor_text,
+                            "stego_text": embed_invisible_payload(anchor_text, embedded_payload),
                             "post": post,
                             "selected_angle": selected_angle,
                             "angle_index": selected_idx,

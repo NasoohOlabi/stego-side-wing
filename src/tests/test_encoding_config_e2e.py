@@ -26,8 +26,10 @@ def test_encoding_config_e2e_runner_small_matrix(
     )
 
     assert result["samples_per_profile"] == 3
+    assert result["variants"] == ["robustness", "security"]
     assert [row["profile"] for row in result["summaries"]] == ["robustness", "security"]
     for row in result["summaries"]:
         assert row["unique_payloads"] == 3
         assert row["unique_visible_texts"] == 3
         assert row["metrics_report"]["dataset_summary"]["usable_stego_samples"] == 3
+        assert row["summary_metrics"]["carrier_metrics"]["hidden_payload_bytes"] is not None

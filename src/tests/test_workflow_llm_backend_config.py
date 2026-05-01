@@ -2,14 +2,15 @@
 
 import pytest
 
-import infrastructure.config as infra_config
 from infrastructure.config import (
     DEFAULT_GOOGLE_AI_STUDIO_MODEL,
     DEFAULT_WORKFLOW_LLM_BACKEND,
+    DEFAULT_WORKFLOW_LM_STUDIO_MODEL,
     get_google_ai_studio_model,
     get_google_generative_language_api_key,
     get_google_generative_language_api_keys,
     get_workflow_llm_backend,
+    get_workflow_lm_studio_model,
     resolve_workflow_llm_provider_and_model,
 )
 
@@ -55,6 +56,39 @@ def test_resolve_lm_studio_path(
         "lm_studio",
         "openai/gpt-oss-20b",
     )
+
+
+def test_workflow_lm_studio_model_default(clear_llm_backend_env: None) -> None:
+    assert get_workflow_lm_studio_model() == DEFAULT_WORKFLOW_LM_STUDIO_MODEL
+
+
+def test_workflow_lm_studio_model_override(
+    monkeypatch: pytest.MonkeyPatch, clear_llm_backend_env: None
+) -> None:
+    monkeypatch.setenv("WORKFLOW_LM_STUDIO_MODEL", "qwen/qwen3.5-9b")
+    assert get_workflow_lm_studio_model("openai/gpt-oss-20b") == "qwen/qwen3.5-9b"
+
+
+def test_resolve_lm_studio_path_uses_workflow_model_override(
+    monkeypatch: pytest.MonkeyPatch, clear_llm_backend_env: None
+) -> None:
+    monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "lm_studio")
+    monkeypatch.setenv("WORKFLOW_LM_STUDIO_MODEL", "qwen/qwen3.5-9b")
+    assert resolve_workflow_llm_provider_and_model("openai/gpt-oss-20b") == (
+        "lm_studio",
+        "qwen/qwen3.5-9b",
+    )
+
+
+def test_angles_model_name_uses_workflow_lm_studio_model(
+    monkeypatch: pytest.MonkeyPatch, clear_llm_backend_env: None
+) -> None:
+    from workflows.utils.angles_llm_config import angles_model_name
+
+    monkeypatch.delenv("ANGLES_MODEL", raising=False)
+    monkeypatch.delenv("MODEL", raising=False)
+    monkeypatch.setenv("WORKFLOW_LM_STUDIO_MODEL", "qwen/qwen3.5-9b")
+    assert angles_model_name() == "qwen/qwen3.5-9b"
 
 
 def test_resolve_defaults_to_ai_studio_when_backend_unset(

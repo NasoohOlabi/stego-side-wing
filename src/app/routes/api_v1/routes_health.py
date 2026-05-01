@@ -57,6 +57,24 @@ def state_paths() -> tuple[Any, int]:
     return ok({"paths": get_paths_map()})
 
 
+@bp.route("/state/recent-updates", methods=["GET"])
+def state_recent_updates() -> tuple[Any, int]:
+    days, err = query_int("days", default=7)
+    if err:
+        return err
+    limit, err = query_int("limit", default=20)
+    if err:
+        return err
+    assert days is not None
+    assert limit is not None
+    from app.routes import api_v1_routes as ar
+
+    try:
+        return ok(ar.get_recent_git_updates(days=days, limit=limit))
+    except RuntimeError as exc:
+        return fail(str(exc), status=500)
+
+
 @bp.route("/logging/tags", methods=["GET"])
 def logging_tags() -> tuple[Any, int]:
     """Structured JSONL log tag ids and descriptions (for filtering / UI)."""

@@ -13,6 +13,7 @@ def clear_llm_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strip workflow LLM env keys so defaults are deterministic (no local .env bleed)."""
     strip_keys = (
         "WORKFLOW_LLM_BACKEND",
+        "WORKFLOW_LM_STUDIO_MODEL",
         "GOOGLE_AI_STUDIO_MODEL",
         "GOOGLE_PALM_API_KEY",
         "GOOGLE_AI_API_KEYS",

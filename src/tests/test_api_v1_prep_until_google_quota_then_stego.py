@@ -49,6 +49,34 @@ def test_prep_until_google_quota_then_stego_sync_success(client, monkeypatch):
     assert payload["data"]["stego"]["processed_count"] == 2
 
 
+def test_prep_until_google_quota_then_stego_sync_no_quota_no_stego(client, monkeypatch):
+    from app.routes import api_v1_routes
+
+    expected = {
+        "succeeded": True,
+        "tag": "version_42",
+        "prep": {"stop_reason": "no_more_posts", "quota_detected": False},
+        "stego": {"processed_count": 0, "stopped_reason": "not_started_quota_not_detected"},
+        "phase_transition": None,
+    }
+
+    monkeypatch.setattr(
+        api_v1_routes.runner,
+        "run_prep_until_google_quota_then_stego",
+        lambda **kwargs: expected,
+    )
+
+    response = client.post(
+        "/api/v1/workflows/prep-until-google-quota-then-stego",
+        json={"tag": "version_42", "stream": False},
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["data"]["phase_transition"] is None
+    assert payload["data"]["stego"]["stopped_reason"] == "not_started_quota_not_detected"
+
+
 def test_prep_until_google_quota_then_stego_streaming(client, monkeypatch):
     from app.routes import api_v1_routes
 

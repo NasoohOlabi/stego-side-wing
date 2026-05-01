@@ -124,3 +124,40 @@ def test_secure_payload_transform_roundtrip_and_authentication():
     assert unprotect_payload(protected, transform="hmac_xor_v1", secret="test-secret") == payload
     assert unprotect_payload(protected + "x", transform="hmac_xor_v1", secret="test-secret") is None
     assert unprotect_payload(protected, transform="hmac_xor_v1", secret="wrong") is None
+
+
+def test_secure_compact_v2_roundtrip_sizes_and_authentication():
+    for size in (16, 49, 96, 512, 2048):
+        payload = "x" * size
+        protected = protect_payload(
+            payload,
+            transform="secure_compact_v2",
+            secret="test-secret",
+        )
+
+        assert protected.startswith("swsec2.")
+        assert protected != payload
+        assert (
+            unprotect_payload(
+                protected,
+                transform="secure_compact_v2",
+                secret="test-secret",
+            )
+            == payload
+        )
+        assert (
+            unprotect_payload(
+                protected + "x",
+                transform="secure_compact_v2",
+                secret="test-secret",
+            )
+            is None
+        )
+        assert (
+            unprotect_payload(
+                protected,
+                transform="secure_compact_v2",
+                secret="wrong",
+            )
+            is None
+        )

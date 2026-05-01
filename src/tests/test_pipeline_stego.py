@@ -91,7 +91,8 @@ def test_encode_returns_success_with_mocked_stages():
     result = pipeline.encode(payload="secret", post=post, tag="tag")
 
     assert result["succeeded"] is True
-    assert result["stego_text"] == "candidate text"
+    assert strip_invisible_payload(result["stego_text"]) == "candidate text"
+    assert extract_invisible_payload(result["stego_text"]) == "secret"
     assert result["angle_index"] == 2
 
 
@@ -126,7 +127,8 @@ def test_encode_uses_anchor_fallback_after_validation_exhausted():
     result = pipeline.encode(payload="secret", post=post, tag="tag", max_retries=0)
 
     assert result["succeeded"] is True
-    assert result["stego_text"].startswith("The part I keep coming back to")
+    assert "target tangent" in result["stego_text"]
+    assert not result["stego_text"].startswith("The part I keep coming back to")
     assert result["encoded_samples"][-1]["generation_mode"] == "anchor_fallback"
 
 
@@ -334,7 +336,7 @@ def test_encode_extractive_zero_kld_embeds_large_hidden_payload(
     result = StegoPipeline().encode(payload=payload, post=post, tag="version_test")
 
     assert result["succeeded"] is True
-    assert strip_invisible_payload(result["stego_text"]) == visible_text
+    assert strip_invisible_payload(result["stego_text"]) == visible_text.split("\n")[0]
     assert extract_invisible_payload(result["stego_text"]) == payload
     assert result["breakdown"]["invisible_payload_bits"] == len(payload.encode("utf-8")) * 8
 
@@ -372,4 +374,6 @@ def test_security_profile_embeds_transformed_payload(monkeypatch, clear_workflow
     assert result["succeeded"] is True
     assert isinstance(embedded, str)
     assert embedded != payload
-    assert result["sender_audit"]["payload_transform"] == "hmac_xor_v1"
+    assert embedded.startswith("swsec2.")
+    assert result["embedding"]["compression"]["payload"] == payload
+    assert result["sender_audit"]["payload_transform"] == "secure_compact_v2"

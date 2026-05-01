@@ -11,6 +11,7 @@ import base64
 import hashlib
 import hmac
 import secrets
+import zlib
 from typing import Any
 
 from pydantic import validate_call
@@ -27,7 +28,10 @@ INVISIBLE_PAYLOAD_END = "\u2063\u2060\u2063"
 INVISIBLE_PAYLOAD_ZERO = "\u200c"
 INVISIBLE_PAYLOAD_ONE = "\u200d"
 INVISIBLE_PAYLOAD_LENGTH_BITS = 32
-SECURE_PAYLOAD_PREFIX = "swsec1."
+SECURE_PAYLOAD_V1_PREFIX = "swsec1."
+SECURE_PAYLOAD_V2_PREFIX = "swsec2."
+SECURE_PAYLOAD_NONCE_BYTES = 16
+SECURE_PAYLOAD_MAC_BYTES = 16
 
 
 @validate_call
@@ -67,16 +71,8 @@ def _xor_stream(secret: str, nonce: bytes, length: int) -> bytes:
     return bytes(out[:length])
 
 
-@validate_call
-def protect_payload(payload: str, transform: str = "plain", secret: str | None = None) -> str:
-    """Apply the configured reversible payload transform before embedding."""
-    if transform == "plain":
-        return payload
-    if transform != "hmac_xor_v1":
-        raise ValueError(f"Unsupported payload transform: {transform}")
-    if not secret:
-        raise ValueError("WORKFLOW_ENCODING_SECRET is required for hmac_xor_v1 payloads")
-    nonce = secrets.token_bytes(16)
+def _protect_hmac_xor_v1(payload: str, secret: str) -> str:
+    nonce = secrets.token_bytes(SECURE_PAYLOAD_NONCE_BYTES)
     payload_bytes = payload.encode("utf-8")
     stream = _xor_stream(secret, nonce, len(payload_bytes))
     ciphertext = bytes(a ^ b for a, b in zip(payload_bytes, stream, strict=True))
@@ -84,22 +80,31 @@ def protect_payload(payload: str, transform: str = "plain", secret: str | None =
         secret.encode("utf-8"),
         b"swsec1" + nonce + ciphertext,
         hashlib.sha256,
-    ).digest()[:16]
-    return f"{SECURE_PAYLOAD_PREFIX}{_b64_urlsafe(nonce)}.{_b64_urlsafe(ciphertext)}.{_b64_urlsafe(mac)}"
+    ).digest()[:SECURE_PAYLOAD_MAC_BYTES]
+    return (
+        f"{SECURE_PAYLOAD_V1_PREFIX}{_b64_urlsafe(nonce)}."
+        f"{_b64_urlsafe(ciphertext)}.{_b64_urlsafe(mac)}"
+    )
 
 
-@validate_call
-def unprotect_payload(
-    protected_payload: str, transform: str = "plain", secret: str | None = None
-) -> str | None:
-    """Reverse ``protect_payload``; returns ``None`` on invalid secure payloads."""
-    if transform == "plain":
-        return protected_payload
-    if transform != "hmac_xor_v1" or not secret:
+def _protect_secure_compact_v2(payload: str, secret: str) -> str:
+    nonce = secrets.token_bytes(SECURE_PAYLOAD_NONCE_BYTES)
+    compressed = zlib.compress(payload.encode("utf-8"), level=9)
+    stream = _xor_stream(secret, nonce, len(compressed))
+    ciphertext = bytes(a ^ b for a, b in zip(compressed, stream, strict=True))
+    mac = hmac.new(
+        secret.encode("utf-8"),
+        b"swsec2" + nonce + ciphertext,
+        hashlib.sha256,
+    ).digest()[:SECURE_PAYLOAD_MAC_BYTES]
+    frame = nonce + ciphertext + mac
+    return f"{SECURE_PAYLOAD_V2_PREFIX}{_b64_urlsafe(frame)}"
+
+
+def _unprotect_hmac_xor_v1(protected_payload: str, secret: str) -> str | None:
+    if not protected_payload.startswith(SECURE_PAYLOAD_V1_PREFIX):
         return None
-    if not protected_payload.startswith(SECURE_PAYLOAD_PREFIX):
-        return None
-    parts = protected_payload[len(SECURE_PAYLOAD_PREFIX) :].split(".")
+    parts = protected_payload[len(SECURE_PAYLOAD_V1_PREFIX) :].split(".")
     if len(parts) != 3:
         return None
     nonce = _b64_urlsafe_decode(parts[0])
@@ -111,7 +116,7 @@ def unprotect_payload(
         secret.encode("utf-8"),
         b"swsec1" + nonce + ciphertext,
         hashlib.sha256,
-    ).digest()[:16]
+    ).digest()[:SECURE_PAYLOAD_MAC_BYTES]
     if not hmac.compare_digest(supplied_mac, expected_mac):
         return None
     stream = _xor_stream(secret, nonce, len(ciphertext))
@@ -120,6 +125,62 @@ def unprotect_payload(
         return payload_bytes.decode("utf-8")
     except UnicodeDecodeError:
         return None
+
+
+def _unprotect_secure_compact_v2(protected_payload: str, secret: str) -> str | None:
+    if not protected_payload.startswith(SECURE_PAYLOAD_V2_PREFIX):
+        return None
+    frame = _b64_urlsafe_decode(protected_payload[len(SECURE_PAYLOAD_V2_PREFIX) :])
+    if frame is None:
+        return None
+    min_len = SECURE_PAYLOAD_NONCE_BYTES + SECURE_PAYLOAD_MAC_BYTES
+    if len(frame) <= min_len:
+        return None
+    nonce = frame[:SECURE_PAYLOAD_NONCE_BYTES]
+    supplied_mac = frame[-SECURE_PAYLOAD_MAC_BYTES:]
+    ciphertext = frame[SECURE_PAYLOAD_NONCE_BYTES:-SECURE_PAYLOAD_MAC_BYTES]
+    expected_mac = hmac.new(
+        secret.encode("utf-8"),
+        b"swsec2" + nonce + ciphertext,
+        hashlib.sha256,
+    ).digest()[:SECURE_PAYLOAD_MAC_BYTES]
+    if not hmac.compare_digest(supplied_mac, expected_mac):
+        return None
+    stream = _xor_stream(secret, nonce, len(ciphertext))
+    compressed = bytes(a ^ b for a, b in zip(ciphertext, stream, strict=True))
+    try:
+        payload_bytes = zlib.decompress(compressed)
+        return payload_bytes.decode("utf-8")
+    except (UnicodeDecodeError, zlib.error):
+        return None
+
+
+@validate_call
+def protect_payload(payload: str, transform: str = "plain", secret: str | None = None) -> str:
+    """Apply the configured reversible payload transform before embedding."""
+    if transform == "plain":
+        return payload
+    if transform not in {"hmac_xor_v1", "secure_compact_v2"}:
+        raise ValueError(f"Unsupported payload transform: {transform}")
+    if not secret:
+        raise ValueError(f"WORKFLOW_ENCODING_SECRET is required for {transform} payloads")
+    if transform == "hmac_xor_v1":
+        return _protect_hmac_xor_v1(payload, secret)
+    return _protect_secure_compact_v2(payload, secret)
+
+
+@validate_call
+def unprotect_payload(
+    protected_payload: str, transform: str = "plain", secret: str | None = None
+) -> str | None:
+    """Reverse ``protect_payload``; returns ``None`` on invalid secure payloads."""
+    if transform == "plain":
+        return protected_payload
+    if transform not in {"hmac_xor_v1", "secure_compact_v2"} or not secret:
+        return None
+    if transform == "hmac_xor_v1":
+        return _unprotect_hmac_xor_v1(protected_payload, secret)
+    return _unprotect_secure_compact_v2(protected_payload, secret)
 
 
 @validate_call
@@ -468,13 +529,17 @@ def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
     angle_emb = embed_in_angle_selection(comment_emb["remainingBits"], nested_angles)
     if angle_emb.get("insufficientBits"):
         warnings.append("Padding used in Angle Selection.")
+    selection_signature = comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"]
 
     return {
         "compression": compression,
         "commentEmbedding": comment_emb["result"],
         "angleEmbedding": angle_emb,
         "totalBitsEmbedded": comment_emb["result"]["bitsCount"] + angle_emb["bitsCount"],
-        "fullEncodedBits": comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"],
+        "fullEncodedBits": selection_signature,
+        "commentBits": comment_emb["result"]["bitsUsed"],
+        "angleBits": angle_emb["bitsUsed"],
+        "selectionSignature": selection_signature,
         "warnings": warnings,
     }
 

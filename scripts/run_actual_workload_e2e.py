@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import sys
 import time
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,7 +28,19 @@ from infrastructure.config import (  # noqa: E402
 )
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
 from loguru import logger  # noqa: E402
-from services.stego_metrics_service import run_divergence_metrics  # noqa: E402
+from services.stego_benchmark_service import (  # noqa: E402
+    build_experiment_summary_metrics,
+    build_sample_experiment_metrics,
+)
+from services.stego_experiment_service import (  # noqa: E402
+    ExperimentVariant,
+    applied_experiment_variant,
+    resolve_experiment_variants,
+)
+from services.stego_metrics_service import (  # noqa: E402
+    run_divergence_metrics,
+    run_perplexity_metrics,
+)
 from workflows.pipelines.receiver import (  # noqa: E402
     ReceiverPipeline,
     nested_angles_from_post,
@@ -40,20 +50,15 @@ from workflows.utils.output_results_shape import n8n_save_object_body  # noqa: E
 from workflows.utils.protocol_utils import stable_hash  # noqa: E402
 
 RUNS_ROOT = _REPO_ROOT / "metrics" / "e2e_runs"
-DEFAULT_PROFILES = ("balanced", "robustness", "capacity", "security")
-PROFILE_OVERRIDE_KEYS = (
-    "WORKFLOW_ANGLES_GENERATION_MODE",
-    "WORKFLOW_STEGO_GENERATION_MODE",
-    "WORKFLOW_CAPACITY_PROFILE",
-    "WORKFLOW_CAPACITY_LIMITS_ENABLED",
-    "WORKFLOW_PAYLOAD_TRANSFORM",
-    "WORKFLOW_STEGO_PROMPT_STYLE",
-    "WORKFLOW_STEGO_SAMPLE_ANGLE_COUNT",
-    "WORKFLOW_STEGO_MAX_RETRIES",
-    "WORKFLOW_DECODE_SEMANTIC_TOP_N",
-    "WORKFLOW_DECODE_LLM_MAX_TRIES",
-    "WORKFLOW_STEGO_LLM_TEMPERATURE",
-    "WORKFLOW_DECODE_STRICT_DEFAULT",
+DEFAULT_VARIANTS = (
+    "balanced",
+    "capacity",
+    "security_legacy",
+    "sec_v2_anchored",
+    "sec_v2_guided_natural",
+    "sec_v2_natural_then_anchor_retry",
+    "sec_v2_guided_natural_hybrid_extract",
+    "sec_v2_natural_then_anchor_retry_hybrid_extract",
 )
 TRANSIENT_SAMPLE_ERROR_MARKERS = (
     "Connection aborted",
@@ -82,31 +87,6 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"Expected JSON object: {path}")
     return payload
-
-
-@contextmanager
-def _profile_env(profile: str, *, force_model_generation: bool) -> Iterator[None]:
-    keys = ("WORKFLOW_ENCODING_PROFILE", *PROFILE_OVERRIDE_KEYS, "WORKFLOW_ENCODING_SECRET")
-    old_values = {key: os.environ.get(key) for key in keys}
-    try:
-        for key in PROFILE_OVERRIDE_KEYS:
-            os.environ.pop(key, None)
-        os.environ["WORKFLOW_ENCODING_PROFILE"] = profile
-        if force_model_generation:
-            os.environ["WORKFLOW_ANGLES_GENERATION_MODE"] = "model"
-            os.environ["WORKFLOW_STEGO_GENERATION_MODE"] = "model"
-        if profile == "security":
-            os.environ.setdefault(
-                "WORKFLOW_ENCODING_SECRET",
-                "actual-workload-e2e-security-profile-secret",
-            )
-        yield
-    finally:
-        for key, value in old_values.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
 
 
 def _metric_progress(label: str, current: int, total: int) -> None:
@@ -223,7 +203,7 @@ def _run_receiver_decode(
 def _run_sample(
     *,
     run_id: str,
-    profile: str,
+    variant: ExperimentVariant,
     post_id: str,
     sample_idx: int,
     angles_dir: Path,
@@ -238,8 +218,8 @@ def _run_sample(
     max_transient_sample_retries: int,
     transient_sample_retry_base_delay_seconds: float,
 ) -> dict[str, Any]:
-    sample_label = f"{post_id}_version_{profile}_{sample_idx:04d}"
-    payload = _payload_for(run_id, profile, post_id, sample_idx)
+    sample_label = f"{post_id}_version_{variant.name}_{sample_idx:04d}"
+    payload = _payload_for(run_id, variant.name, post_id, sample_idx)
     payload_hash = stable_hash(payload)
     attempt_index = 0
 
@@ -255,7 +235,8 @@ def _run_sample(
 
             logger.bind(component="ActualWorkloadE2E").info(
                 "sample_start",
-                profile=profile,
+                profile=variant.base_profile,
+                variant=variant.name,
                 post_id=post_id,
                 sample_index=sample_idx,
                 payload_hash=payload_hash,
@@ -264,7 +245,7 @@ def _run_sample(
             stego_result = stego.encode(
                 payload=payload,
                 post=post,
-                tag=f"version_{profile}",
+                tag=f"version_{variant.name}",
                 max_retries=max_retries,
             )
             if not stego_result.get("succeeded") or not stego_result.get("stego_text"):
@@ -280,8 +261,10 @@ def _run_sample(
             output_path = output_dir / f"{sample_label}.json"
             _write_json(output_path, n8n_save_object_body(stego_result))
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            stego_text = str(stego_result.get("stego_text", ""))
             entry = {
-                "profile": profile,
+                "profile": variant.base_profile,
+                "variant": variant.name,
                 "post_id": post_id,
                 "sample_index": sample_idx,
                 "payload_hash": payload_hash,
@@ -293,10 +276,17 @@ def _run_sample(
                 "receiver_decode": receiver_info,
                 "sample_attempt": attempt_index + 1,
                 "transient_retry_count": attempt_index,
+                "sample_metrics": build_sample_experiment_metrics(
+                    stego_result,
+                    stego_text=stego_text,
+                    payload_bytes=len(payload.encode("utf-8")),
+                    receiver_decode=receiver_info or None,
+                ),
             }
             logger.bind(component="ActualWorkloadE2E").info(
                 "sample_complete",
-                profile=profile,
+                profile=variant.base_profile,
+                variant=variant.name,
                 post_id=post_id,
                 sample_index=sample_idx,
                 elapsed_ms=elapsed_ms,
@@ -315,7 +305,8 @@ def _run_sample(
                 )
                 logger.bind(component="ActualWorkloadE2E").warning(
                     "sample_retrying_transient_failure",
-                    profile=profile,
+                    profile=variant.base_profile,
+                    variant=variant.name,
                     post_id=post_id,
                     sample_index=sample_idx,
                     elapsed_ms=elapsed_ms,
@@ -334,7 +325,7 @@ def _run_sample(
 def _run_profile(
     *,
     run_id: str,
-    profile: str,
+    variant: ExperimentVariant,
     post_ids: Sequence[str],
     run_dir: Path,
     angles_dir: Path,
@@ -346,9 +337,18 @@ def _run_profile(
     max_transient_sample_retries: int,
     transient_sample_retry_base_delay_seconds: float,
 ) -> dict[str, Any]:
-    with _profile_env(profile, force_model_generation=force_model_generation):
+    effective_force_model_generation = (
+        variant.real_force_model_generation
+        if variant.real_force_model_generation is not None
+        else force_model_generation
+    )
+    with applied_experiment_variant(
+        variant,
+        force_model_generation=effective_force_model_generation,
+        default_secret="actual-workload-e2e-security-profile-secret",
+    ):
         settings = get_workflow_encoding_settings()
-        profile_dir = run_dir / profile
+        profile_dir = run_dir / variant.name
         input_dir = profile_dir / "input-angles"
         profile_dataset_dir = profile_dir / "dataset"
         output_dir = profile_dir / "output-results"
@@ -364,21 +364,22 @@ def _run_profile(
 
         logger.bind(component="ActualWorkloadE2E").info(
             "profile_start",
-            profile=profile,
+            profile=variant.base_profile,
+            variant=variant.name,
             samples=len(post_ids),
             settings=settings,
-            force_model_generation=force_model_generation,
+            force_model_generation=effective_force_model_generation,
             skip_receiver_decode=skip_receiver_decode,
         )
 
         for sample_idx, post_id in enumerate(post_ids):
             t0 = time.perf_counter()
-            sample_label = f"{post_id}_version_{profile}_{sample_idx:04d}"
+            sample_label = f"{post_id}_version_{variant.name}_{sample_idx:04d}"
             try:
                 entries.append(
                     _run_sample(
                         run_id=run_id,
-                        profile=profile,
+                        variant=variant,
                         post_id=post_id,
                         sample_idx=sample_idx,
                         angles_dir=angles_dir,
@@ -399,7 +400,8 @@ def _run_profile(
             except Exception as exc:
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
                 failure = {
-                    "profile": profile,
+                    "profile": variant.base_profile,
+                    "variant": variant.name,
                     "post_id": post_id,
                     "sample_index": sample_idx,
                     "elapsed_ms": elapsed_ms,
@@ -409,7 +411,8 @@ def _run_profile(
                 _write_json(failures_dir / f"{sample_label}.json", failure)
                 logger.bind(component="ActualWorkloadE2E").exception(
                     "sample_failed",
-                    profile=profile,
+                    profile=variant.base_profile,
+                    variant=variant.name,
                     post_id=post_id,
                     sample_index=sample_idx,
                     elapsed_ms=elapsed_ms,
@@ -418,6 +421,7 @@ def _run_profile(
                     raise
 
         divergence: dict[str, Any] | None = None
+        perplexity: dict[str, Any] | None = None
         if entries:
             divergence = run_divergence_metrics(
                 output_dir,
@@ -425,14 +429,22 @@ def _run_profile(
                 metrics_dir,
                 progress_hook=_metric_progress,
             )
+            perplexity = run_perplexity_metrics(
+                output_dir,
+                metrics_dir,
+                progress_hook=_metric_progress,
+            )
         summary = {
-            "profile": profile,
+            "profile": variant.base_profile,
+            "variant": variant.name,
+            "variant_description": variant.description,
+            "variant_env_overrides": dict(variant.env_overrides),
             "settings": settings,
             "has_encoding_secret": bool(get_workflow_encoding_secret()),
             "requested_samples": len(post_ids),
             "samples_succeeded": len(entries),
             "samples_failed": len(failures),
-            "force_model_generation": force_model_generation,
+            "force_model_generation": effective_force_model_generation,
             "skip_receiver_decode": skip_receiver_decode,
             "max_transient_sample_retries": max_transient_sample_retries,
             "transient_sample_retry_base_delay_seconds": (
@@ -442,11 +454,19 @@ def _run_profile(
             "failures": failures,
             "metrics_report_path": divergence["report_path"] if divergence else None,
             "metrics_report": divergence["report"] if divergence else None,
+            "perplexity_report_path": perplexity["report_path"] if perplexity else None,
+            "perplexity_report": perplexity["report"] if perplexity else None,
         }
+        summary["summary_metrics"] = build_experiment_summary_metrics(
+            entries,
+            divergence_report=divergence["report"] if divergence else None,
+            perplexity_report=perplexity["report"] if perplexity else None,
+        )
         _write_json(profile_dir / "summary.json", summary)
         logger.bind(component="ActualWorkloadE2E").info(
             "profile_complete",
-            profile=profile,
+            profile=variant.base_profile,
+            variant=variant.name,
             samples_succeeded=len(entries),
             samples_failed=len(failures),
             metrics_report_path=summary["metrics_report_path"],
@@ -457,6 +477,7 @@ def _run_profile(
 def run_actual_workload_e2e(
     *,
     profiles: Sequence[str],
+    variants: Sequence[str] | None = None,
     samples_per_profile: int,
     post_ids: Sequence[str],
     angles_dir: Path,
@@ -475,6 +496,8 @@ def run_actual_workload_e2e(
 ) -> dict[str, Any]:
     if samples_per_profile <= 0:
         raise ValueError("samples_per_profile must be positive")
+    variant_names = list(variants or profiles)
+    resolved_variants = resolve_experiment_variants(variant_names)
     selected_post_ids = _select_post_ids(
         explicit_post_ids=post_ids,
         angles_dir=angles_dir,
@@ -484,9 +507,7 @@ def run_actual_workload_e2e(
     )[:samples_per_profile]
     created = datetime.now(UTC)
     run_id = created.strftime("%Y%m%dT%H%M%SZ")
-    resolved_run_dir = (
-        run_dir or RUNS_ROOT / f"actual_workload_e2e_{run_id}"
-    ).resolve()
+    resolved_run_dir = (run_dir or RUNS_ROOT / f"actual_workload_e2e_{run_id}").resolve()
     if resolved_run_dir.exists():
         if not overwrite:
             raise FileExistsError(
@@ -495,22 +516,23 @@ def run_actual_workload_e2e(
         shutil.rmtree(resolved_run_dir)
     resolved_run_dir.mkdir(parents=True, exist_ok=True)
 
-    profile_summaries = []
+    profile_summaries: list[dict[str, Any]] = []
     logger.bind(component="ActualWorkloadE2E").info(
         "actual_workload_run_start",
         run_dir=str(resolved_run_dir),
         profiles=list(profiles),
+        variants=variant_names,
         samples_per_profile=samples_per_profile,
         post_ids=selected_post_ids,
         max_retries=max_retries,
         max_transient_sample_retries=max_transient_sample_retries,
         transient_sample_retry_base_delay_seconds=transient_sample_retry_base_delay_seconds,
     )
-    for profile in profiles:
+    for variant in resolved_variants:
         profile_summaries.append(
             _run_profile(
                 run_id=run_id,
-                profile=profile,
+                variant=variant,
                 post_ids=selected_post_ids,
                 run_dir=resolved_run_dir,
                 angles_dir=angles_dir,
@@ -533,10 +555,11 @@ def run_actual_workload_e2e(
         "created_at_utc": created.isoformat(),
         "run_dir": str(resolved_run_dir),
         "profiles": list(profiles),
+        "variants": variant_names,
         "samples_per_profile": samples_per_profile,
         "selected_post_ids": selected_post_ids,
         "unique_selected_post_ids": sorted(set(selected_post_ids)),
-        "total_requested_samples": len(profiles) * samples_per_profile,
+        "total_requested_samples": len(resolved_variants) * samples_per_profile,
         "total_succeeded_samples": total_succeeded,
         "total_failed_samples": total_failed,
         "source": {
@@ -572,9 +595,14 @@ def main() -> None:
     parser.add_argument(
         "--profile",
         action="append",
-        choices=DEFAULT_PROFILES,
         default=None,
-        help="Encoding profile to run. Repeat for multiple profiles.",
+        help="Base profile to run. Repeat for multiple profiles.",
+    )
+    parser.add_argument(
+        "--variant",
+        action="append",
+        default=None,
+        help="Named experiment variant to run. Repeat for multiple variants.",
     )
     parser.add_argument("--samples-per-profile", type=int, default=1)
     parser.add_argument("--post-id", action="append", default=[])
@@ -621,8 +649,11 @@ def main() -> None:
             serialize=True,
             filter=lambda record: record["extra"].get("component") == "ActualWorkloadE2E",
         )
+    profiles = tuple(args.profile or ("balanced",))
+    variants = tuple(args.variant) if args.variant else tuple(args.profile or DEFAULT_VARIANTS)
     run_actual_workload_e2e(
-        profiles=tuple(args.profile or DEFAULT_PROFILES),
+        profiles=profiles,
+        variants=variants,
         samples_per_profile=args.samples_per_profile,
         post_ids=args.post_id,
         angles_dir=Path(args.angles_dir),

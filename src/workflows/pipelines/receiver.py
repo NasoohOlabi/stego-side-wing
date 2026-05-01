@@ -364,6 +364,31 @@ class ReceiverPipeline:
                 "payload_bytes": len(payload.encode("utf-8")),
                 "embedded_payload_bytes": len(hidden_payload.encode("utf-8")),
             }
+            if compressed_full is not None:
+                got = recover_payload_with_compressed_full(
+                    compressed_full,
+                    dictionary,
+                    pre_sender_post,
+                    nested_angles,
+                    authoritative_idx,
+                )
+                if got is None:
+                    raise RuntimeError(
+                        "Visible selection channel does not match the decoded angle index."
+                    )
+                visible_payload, visible_meta = got
+                if visible_payload != payload:
+                    raise RuntimeError(
+                        "Invisible payload does not match the visible selection channel."
+                    )
+                recovery_meta["visible_channel_verified"] = True
+                recovery_meta["visible_comment_bits"] = visible_meta.get("comment_bits")
+                recovery_meta["visible_angle_bits"] = visible_meta.get("angle_bits")
+                recovery_meta["selection_signature"] = (
+                    f"{visible_meta.get('comment_bits', '')}{visible_meta.get('angle_bits', '')}"
+                )
+            else:
+                recovery_meta["visible_channel_verified"] = False
             info = {
                 "decoded_angle_index": authoritative_idx,
                 "recovery_meta": recovery_meta,

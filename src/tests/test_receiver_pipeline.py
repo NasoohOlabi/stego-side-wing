@@ -261,7 +261,7 @@ def test_receiver_run_unwraps_security_profile_payload(
 
     assert out["succeeded"] is True
     assert out["payload"] == secret
-    assert out["recovery_meta"]["payload_transform"] == "hmac_xor_v1"
+    assert out["recovery_meta"]["payload_transform"] == "secure_compact_v2"
 
 
 def test_receiver_decode_payload_canonicalizes_duplicate_angle_signature_index():

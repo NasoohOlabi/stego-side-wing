@@ -13,8 +13,7 @@ import random
 import shutil
 import string
 import sys
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,7 +30,19 @@ from infrastructure.config import (  # noqa: E402
 )
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
 from loguru import logger  # noqa: E402
-from services.stego_metrics_service import run_divergence_metrics  # noqa: E402
+from services.stego_benchmark_service import (  # noqa: E402
+    build_experiment_summary_metrics,
+    build_sample_experiment_metrics,
+)
+from services.stego_experiment_service import (  # noqa: E402
+    ExperimentVariant,
+    applied_experiment_variant,
+    resolve_experiment_variants,
+)
+from services.stego_metrics_service import (  # noqa: E402
+    run_divergence_metrics,
+    run_perplexity_metrics,
+)
 from workflows.pipelines.gen_angles import GenAnglesPipeline  # noqa: E402
 from workflows.pipelines.stego import StegoPipeline  # noqa: E402
 from workflows.utils.output_results_shape import n8n_save_object_body  # noqa: E402
@@ -44,47 +55,21 @@ from workflows.utils.stego_codec import (  # noqa: E402
 
 RUNS_ROOT = _REPO_ROOT / "metrics" / "e2e_runs"
 DEFAULT_PROFILES = ("robustness", "capacity", "security")
-PROFILE_OVERRIDE_KEYS = (
-    "WORKFLOW_ANGLES_GENERATION_MODE",
-    "WORKFLOW_STEGO_GENERATION_MODE",
-    "WORKFLOW_CAPACITY_PROFILE",
-    "WORKFLOW_CAPACITY_LIMITS_ENABLED",
-    "WORKFLOW_PAYLOAD_TRANSFORM",
-    "WORKFLOW_STEGO_PROMPT_STYLE",
-    "WORKFLOW_STEGO_SAMPLE_ANGLE_COUNT",
-    "WORKFLOW_STEGO_MAX_RETRIES",
-    "WORKFLOW_DECODE_SEMANTIC_TOP_N",
-    "WORKFLOW_DECODE_LLM_MAX_TRIES",
-    "WORKFLOW_STEGO_LLM_TEMPERATURE",
-    "WORKFLOW_DECODE_STRICT_DEFAULT",
+DEFAULT_VARIANTS = (
+    "balanced",
+    "capacity",
+    "security_legacy",
+    "sec_v2_anchored",
+    "sec_v2_guided_natural",
+    "sec_v2_natural_then_anchor_retry",
+    "sec_v2_guided_natural_hybrid_extract",
+    "sec_v2_natural_then_anchor_retry_hybrid_extract",
 )
 
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-@contextmanager
-def _profile_env(profile: str) -> Iterator[None]:
-    keys = ("WORKFLOW_ENCODING_PROFILE", *PROFILE_OVERRIDE_KEYS, "WORKFLOW_ENCODING_SECRET")
-    old_values = {key: os.environ.get(key) for key in keys}
-    try:
-        for key in PROFILE_OVERRIDE_KEYS:
-            os.environ.pop(key, None)
-        os.environ["WORKFLOW_ENCODING_PROFILE"] = profile
-        if profile == "security":
-            os.environ.setdefault(
-                "WORKFLOW_ENCODING_SECRET",
-                "local-e2e-security-profile-secret",
-            )
-        yield
-    finally:
-        for key, value in old_values.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
 
 
 def _body_for(profile: str, idx: int, slot: int, rng: random.Random) -> str:
@@ -152,14 +137,16 @@ def _metric_progress(label: str, current: int, total: int) -> None:
 
 def _run_profile(
     *,
-    profile: str,
+    variant: ExperimentVariant,
     samples: int,
     payload_bytes: int,
     run_dir: Path,
     seed: int,
     max_primary_kl: float,
+    compute_perplexity: bool,
 ) -> dict[str, Any]:
     rng = random.Random(seed)
+    profile = variant.name
     profile_dir = run_dir / profile
     dataset_dir = profile_dir / "dataset"
     output_dir = profile_dir / "output-results"
@@ -173,16 +160,18 @@ def _run_profile(
     settings = get_workflow_encoding_settings()
     logger.bind(component="EncodingConfigE2E").info(
         "profile_start",
-        profile=profile,
+        profile=variant.base_profile,
+        variant=variant.name,
         samples=samples,
         settings=settings,
     )
 
+    entries: list[dict[str, Any]] = []
     for idx in range(samples):
         post = _build_post(profile, idx, rng)
         payload = _payload_for(profile, idx, rng, payload_bytes)
         angles_post = gen_angles.process_post(post)
-        result = stego.encode(payload=payload, post=angles_post, tag=f"version_{profile}")
+        result = stego.encode(payload=payload, post=angles_post, tag=f"version_{variant.name}")
         stego_text = str(result.get("stego_text", ""))
         decoded_payload = _decode_embedded_payload(stego_text)
         visible_text = strip_invisible_payload(stego_text)
@@ -195,15 +184,32 @@ def _run_profile(
         payload_hashes.add(stable_hash(payload))
         visible_hashes.add(stable_hash(visible_text))
         embedded_hashes.add(stable_hash(embedded))
+        entries.append(
+            {
+                "profile": variant.base_profile,
+                "variant": variant.name,
+                "sample_index": idx,
+                "payload_hash": stable_hash(payload),
+                "visible_text_hash": stable_hash(visible_text),
+                "embedded_payload_hash": stable_hash(embedded),
+                "sample_metrics": build_sample_experiment_metrics(
+                    result,
+                    stego_text=stego_text,
+                    payload_bytes=len(payload.encode("utf-8")),
+                    receiver_decode={"decoded": True},
+                ),
+            }
+        )
         _write_json(dataset_dir / f"{post['id']}.json", post)
         _write_json(
-            output_dir / f"{post['id']}_version_{profile}.json",
+            output_dir / f"{post['id']}_version_{variant.name}.json",
             n8n_save_object_body(result),
         )
         if idx == 0 or (idx + 1) % max(1, samples // 20) == 0 or idx + 1 == samples:
             logger.bind(component="EncodingConfigE2E").info(
                 "profile_progress",
-                profile=profile,
+                profile=variant.base_profile,
+                variant=variant.name,
                 current=idx + 1,
                 total=samples,
                 unique_payloads=len(payload_hashes),
@@ -216,6 +222,13 @@ def _run_profile(
         metrics_dir,
         progress_hook=_metric_progress,
     )
+    perplexity = None
+    if compute_perplexity:
+        perplexity = run_perplexity_metrics(
+            output_dir,
+            metrics_dir,
+            progress_hook=_metric_progress,
+        )
     report = divergence["report"]
     primary_kl = report["primary_baseline_matched_post"][
         "average_kl_stego_vs_matched_post"
@@ -225,7 +238,10 @@ def _run_profile(
             f"profile {profile} primary KL {primary_kl} exceeds {max_primary_kl}"
         )
     summary = {
-        "profile": profile,
+        "profile": variant.base_profile,
+        "variant": variant.name,
+        "variant_description": variant.description,
+        "variant_env_overrides": dict(variant.env_overrides),
         "settings": settings,
         "samples": samples,
         "payload_bytes": payload_bytes,
@@ -234,11 +250,20 @@ def _run_profile(
         "unique_embedded_payloads": len(embedded_hashes),
         "metrics_report_path": divergence["report_path"],
         "metrics_report": report,
+        "perplexity_report_path": perplexity["report_path"] if perplexity else None,
+        "perplexity_report": perplexity["report"] if perplexity else None,
+        "entries": entries,
     }
+    summary["summary_metrics"] = build_experiment_summary_metrics(
+        entries,
+        divergence_report=report,
+        perplexity_report=perplexity["report"] if perplexity else None,
+    )
     _write_json(profile_dir / "summary.json", summary)
     logger.bind(component="EncodingConfigE2E").info(
         "profile_complete",
-        profile=profile,
+        profile=variant.base_profile,
+        variant=variant.name,
         samples=samples,
         primary_kl=primary_kl,
         unique_payloads=len(payload_hashes),
@@ -249,12 +274,15 @@ def _run_profile(
 def run_encoding_config_e2e(
     *,
     profiles: Sequence[str],
+    variants: Sequence[str] | None = None,
     samples_per_profile: int,
     payload_bytes: int,
     run_dir: Path,
     overwrite: bool,
     seed: int,
     max_primary_kl: float,
+    compute_perplexity: bool = False,
+    force_extractive_generation: bool = False,
 ) -> dict[str, Any]:
     resolved_run_dir = run_dir.resolve()
     if resolved_run_dir.exists():
@@ -264,25 +292,38 @@ def run_encoding_config_e2e(
     resolved_run_dir.mkdir(parents=True, exist_ok=True)
 
     summaries: list[dict[str, Any]] = []
-    for profile_index, profile in enumerate(profiles):
-        with _profile_env(profile):
+    variant_names = list(variants or profiles)
+    resolved_variants = resolve_experiment_variants(variant_names)
+    for profile_index, variant in enumerate(resolved_variants):
+        with applied_experiment_variant(
+            variant,
+            force_model_generation=bool(variant.synthetic_force_model_generation),
+            default_secret="local-e2e-security-profile-secret",
+        ):
+            if force_extractive_generation:
+                os.environ["WORKFLOW_ANGLES_GENERATION_MODE"] = "extractive_zero_kld"
+                os.environ["WORKFLOW_STEGO_GENERATION_MODE"] = "extractive_zero_kld"
             summaries.append(
                 _run_profile(
-                    profile=profile,
+                    variant=variant,
                     samples=samples_per_profile,
                     payload_bytes=payload_bytes,
                     run_dir=resolved_run_dir,
                     seed=seed + profile_index,
                     max_primary_kl=max_primary_kl,
+                    compute_perplexity=compute_perplexity,
                 )
             )
     combined = {
         "created_at_utc": datetime.now(UTC).isoformat(),
         "run_dir": str(resolved_run_dir),
         "profiles": list(profiles),
+        "variants": variant_names,
         "samples_per_profile": samples_per_profile,
         "payload_bytes": payload_bytes,
         "seed": seed,
+        "compute_perplexity": compute_perplexity,
+        "force_extractive_generation": force_extractive_generation,
         "summaries": summaries,
     }
     _write_json(resolved_run_dir / "summary.json", combined)
@@ -290,6 +331,7 @@ def run_encoding_config_e2e(
         "run_complete",
         run_dir=str(resolved_run_dir),
         profiles=list(profiles),
+        variants=variant_names,
         samples_per_profile=samples_per_profile,
     )
     return combined
@@ -304,15 +346,27 @@ def _parse_profiles(raw_profiles: Sequence[str]) -> list[str]:
     return profiles or list(DEFAULT_PROFILES)
 
 
+def _parse_variants(raw_variants: Sequence[str]) -> list[str] | None:
+    if not raw_variants:
+        return None
+    variants: list[str] = []
+    for raw in raw_variants:
+        variants.extend(part.strip() for part in raw.split(",") if part.strip())
+    return variants or None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run local e2e checks for encoding profiles.")
     parser.add_argument("--profile", action="append", default=[])
+    parser.add_argument("--variant", action="append", default=[])
     parser.add_argument("--samples-per-profile", type=int, default=200)
     parser.add_argument("--payload-bytes", type=int, default=512)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--max-primary-kl", type=float, default=1e-12)
     parser.add_argument("--run-dir", default=None)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--compute-perplexity", action="store_true")
+    parser.add_argument("--force-extractive-generation", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
@@ -322,14 +376,24 @@ def main() -> None:
         if args.run_dir
         else RUNS_ROOT / f"encoding_profiles_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
     )
+    profiles = _parse_profiles(args.profile)
+    variants = _parse_variants(args.variant)
+    if variants is None and not args.profile:
+        variants = list(DEFAULT_VARIANTS)
+    force_extract = bool(args.force_extractive_generation)
+    if variants is not None and not args.profile and not args.variant:
+        force_extract = True
     run_encoding_config_e2e(
-        profiles=_parse_profiles(args.profile),
+        profiles=profiles,
+        variants=variants,
         samples_per_profile=max(1, args.samples_per_profile),
         payload_bytes=max(1, args.payload_bytes),
         run_dir=run_dir,
         overwrite=bool(args.overwrite),
         seed=args.seed,
         max_primary_kl=args.max_primary_kl,
+        compute_perplexity=bool(args.compute_perplexity),
+        force_extractive_generation=force_extract,
     )
 
 

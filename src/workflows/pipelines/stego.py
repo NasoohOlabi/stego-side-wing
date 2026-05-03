@@ -190,7 +190,10 @@ def _anchor_candidate_text(
     last_comment = _anchor_comment_body(post_augmentation)
     lead = "No, but I get why you ask." if last_comment.endswith("?") else "Yeah, I get why that bothers you."
     cue = _anchor_reply_cue(tangent, quote, category)
-    return f"{lead} It feels like {cue}, and it is hard not to be angry about it."
+    return (
+        f"{lead} It feels like {cue}, and it is hard not to be angry about it. "
+        "Personally, I'd rate this about 3/10."
+    )
 
 
 def _text_preview(text: Any, max_len: int = 180) -> str:

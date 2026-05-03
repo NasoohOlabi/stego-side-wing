@@ -38,7 +38,9 @@ _DEFAULT_STEGO_ENCODE_SYSTEM = (
     "   * what they are thinking or doing (action),\n"
     "   * how they feel about it (emotion).\n"
     "     Do not force grammar; keep phrasing natural.\n"
-    "11. Priority rule: If any rules conflict, prioritize natural fit as a reply, then target-angle recoverability.\n\n"
+    "11. Include one personal rating in each comment (for example, \"I'd rate this 7/10\").\n"
+    "    Keep it natural and relevant to the discussion.\n"
+    "12. Priority rule: If any rules conflict, prioritize natural fit as a reply, then target-angle recoverability.\n\n"
     "IMPORTANT: Your entire reply must be only valid JSON (one array of three strings). "
     "Do not include chain-of-thought, explanations, or text outside an optional ```json code fence.\n"
 )
@@ -78,7 +80,8 @@ _ANCHORED_STEGO_ENCODE_SYSTEM = (
     "2. Do not add labels, numbering, explanations, markdown, or any wrapper text.\n"
     "3. Keep the tone human: casual, spontaneous, slightly imperfect, and easy to read.\n"
     "4. Do not paste, quote, or concatenate existing thread comments. Write new replies.\n"
-    "5. If rules conflict, preserve reply naturalness first, then target-angle recoverability.\n\n"
+    "5. Include one personal rating in each comment (for example, \"I'd rate this 7/10\").\n"
+    "6. If rules conflict, preserve reply naturalness first, then target-angle recoverability.\n\n"
     "IMPORTANT: Your entire reply must be only valid JSON.\n"
 )
 

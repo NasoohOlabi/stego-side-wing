@@ -1,8 +1,8 @@
-# Frontend Integration Guide
+﻿# Frontend Integration Guide
 
 This file is the frontend handoff for the current backend at `/api/v1`.
 
-For full backend detail, see [api-spec.md](/D:/Master/code/stego-side-wing/docs/api-spec.md).
+For full backend detail, see [api-spec.md](api-spec.md).
 
 ## 1. Base Contract
 
@@ -285,8 +285,8 @@ UI interpretation:
 ```json
 {
   "stego_text": "text to decode",
-  "angles": [],
-  "few_shots": [],
+  "angles": a],
+  "few_shots": a],
   "strict_mode": false,
   "stream": true
 }
@@ -427,3 +427,4 @@ If you want this fully data-driven, the backend should eventually expose a run-s
 - final run outcome
 
 Right now, the frontend will need to derive that view from file listings and workflow results.
+

@@ -4,6 +4,7 @@ import pytest
 
 from workflows.pipelines import stego
 from workflows.pipelines.stego import StegoPipeline
+from workflows.utils.stego_codec import extract_invisible_payload, strip_invisible_payload
 from workflows.utils.output_results_shape import n8n_save_object_body
 
 
@@ -90,8 +91,45 @@ def test_encode_returns_success_with_mocked_stages():
     result = pipeline.encode(payload="secret", post=post, tag="tag")
 
     assert result["succeeded"] is True
-    assert result["stego_text"] == "candidate text"
+    assert strip_invisible_payload(result["stego_text"]) == "candidate text"
+    assert extract_invisible_payload(result["stego_text"]) == "secret"
     assert result["angle_index"] == 2
+
+
+def test_encode_uses_anchor_fallback_after_validation_exhausted():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    angle = {"idx": 2, "category": "c", "tangent": "target tangent", "source_quote": "q"}
+    pipeline._augment_post = lambda payload, post: {
+        "commentEmbedding": {"context": {"title": "t", "author": "a"}},
+        "angleEmbedding": {
+            "selectedAngle": angle,
+            "totalAnglesSelectedFirst": [],
+            "TangentsDB": [angle],
+        },
+    }
+    pipeline._build_samples = lambda aug, post: ([angle], [angle])
+    pipeline._generate_stego_texts = lambda **kwargs: ["drifted candidate"]
+
+    def fake_cross_validate(**kwargs):
+        text = kwargs["candidate_texts"][0]
+        if "target tangent" in text:
+            return {
+                "succeeded": True,
+                "stegoText": text,
+                "decodedIndices": [2],
+                "validationDetails": {},
+            }
+        return {"succeeded": False, "decodedIndices": [9], "validationDetails": {}}
+
+    pipeline._cross_validate = fake_cross_validate
+
+    post = {"id": "p1", "angles": [angle]}
+    result = pipeline.encode(payload="secret", post=post, tag="tag", max_retries=0)
+
+    assert result["succeeded"] is True
+    assert "target tangent" in result["stego_text"]
+    assert not result["stego_text"].startswith("The part I keep coming back to")
+    assert result["encoded_samples"][-1]["generation_mode"] == "anchor_fallback"
 
 
 def test_encode_returns_error_when_no_samples():
@@ -265,3 +303,77 @@ def test_process_post_skips_save_when_stego_text_empty_on_success():
 
     assert result["succeeded"] is True
     assert saved == []
+
+
+def test_encode_extractive_zero_kld_embeds_large_hidden_payload(
+    monkeypatch, clear_workflow_capacity_env
+):
+    monkeypatch.setenv("WORKFLOW_STEGO_GENERATION_MODE", "extractive_zero_kld")
+
+    payload = "PAYLOAD-" + ("ABCD1234" * 512)
+    visible_text = (
+        "I keep the wording close to the original comments when I want distribution compatibility.\n"
+        "That makes the text look natural because it is literally drawn from the same discussion."
+    )
+    post = {
+        "id": "p-extractive",
+        "title": "Extractive",
+        "selftext": "",
+        "comments": [
+            {"id": "c1", "author": "alice", "body": visible_text.split("\n")[0], "replies": []},
+            {"id": "c2", "author": "bob", "body": visible_text.split("\n")[1], "replies": []},
+        ],
+        "angles": [
+            {
+                "source_quote": "I keep the wording close to the original comments when I want distribution compatibility.",
+                "tangent": "I keep the wording close to the original comments when I want distribution compatibility.",
+                "category": "Community Discussion",
+                "source_document": 0,
+            }
+        ],
+    }
+
+    result = StegoPipeline().encode(payload=payload, post=post, tag="version_test")
+
+    assert result["succeeded"] is True
+    assert strip_invisible_payload(result["stego_text"]) == visible_text.split("\n")[0]
+    assert extract_invisible_payload(result["stego_text"]) == payload
+    assert result["breakdown"]["invisible_payload_bits"] == len(payload.encode("utf-8")) * 8
+
+
+def test_security_profile_embeds_transformed_payload(monkeypatch, clear_workflow_capacity_env):
+    monkeypatch.setenv("WORKFLOW_ENCODING_PROFILE", "security")
+    monkeypatch.setenv("WORKFLOW_ENCODING_SECRET", "unit-test-secret")
+
+    post = {
+        "id": "p-secure",
+        "title": "Secure",
+        "selftext": "",
+        "comments": [
+            {
+                "id": "c1",
+                "author": "alice",
+                "body": "This comment is stable source text for the extractive carrier.",
+                "replies": [],
+            }
+        ],
+        "angles": [
+            {
+                "source_quote": "This comment is stable source text for the extractive carrier.",
+                "tangent": "This comment is stable source text for the extractive carrier.",
+                "category": "Community Discussion",
+                "source_document": 0,
+            }
+        ],
+    }
+    payload = "secret-value"
+
+    result = StegoPipeline().encode(payload=payload, post=post, tag="version_security")
+    embedded = extract_invisible_payload(result["stego_text"])
+
+    assert result["succeeded"] is True
+    assert isinstance(embedded, str)
+    assert embedded != payload
+    assert embedded.startswith("swsec2.")
+    assert result["embedding"]["compression"]["payload"] == payload
+    assert result["sender_audit"]["payload_transform"] == "secure_compact_v2"

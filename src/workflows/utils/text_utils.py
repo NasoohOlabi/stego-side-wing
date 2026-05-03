@@ -254,6 +254,7 @@ def build_post_text_dictionary_bundle(
     if apply_capacity_profile:
         final_entries, capacity_meta = apply_post_text_dictionary_capacity(raw_entries)
     return {
+        "entries": [dict(entry) for entry in final_entries],
         "texts": [str(entry.get("text", "")) for entry in final_entries],
         "report": _dictionary_report(raw_entries, final_entries, capacity_meta),
     }

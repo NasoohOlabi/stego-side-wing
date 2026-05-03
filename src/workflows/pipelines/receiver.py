@@ -7,6 +7,11 @@ from typing import Any
 
 from loguru import logger
 
+from infrastructure.config import (
+    get_workflow_decode_strict_default,
+    get_workflow_encoding_secret,
+    get_workflow_payload_transform,
+)
 from workflows.pipelines.data_load import DataLoadPipeline
 from workflows.pipelines.decode import DecodePipeline
 from workflows.pipelines.gen_angles import GenAnglesPipeline
@@ -15,9 +20,12 @@ from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.stego_codec import (
     build_dictionary,
     build_dictionary_report,
+    extract_invisible_payload,
     flatten_nested_angles,
     recover_payload_bruteforce_comment_bits,
     recover_payload_with_compressed_full,
+    strip_invisible_payload,
+    unprotect_payload,
 )
 from workflows.utils.text_utils import flatten_comments
 
@@ -107,6 +115,37 @@ def nested_angles_from_post(post: dict[str, Any]) -> list[list[dict[str, Any]]]:
     return [x if isinstance(x, list) else [x] for x in raw if x is not None]
 
 
+def _angle_signature(angle: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(angle.get("category", "")),
+        str(angle.get("source_quote", "")),
+        str(angle.get("tangent", "")),
+    )
+
+
+def _canonicalize_decoded_angle_index(
+    decoded_idx: int,
+    expected_angle_index: int | None,
+    tangents_db: list[dict[str, Any]],
+) -> int:
+    if expected_angle_index is None or decoded_idx == expected_angle_index:
+        return decoded_idx
+    if not (0 <= decoded_idx < len(tangents_db)):
+        return decoded_idx
+    if not (0 <= expected_angle_index < len(tangents_db)):
+        return decoded_idx
+    if _angle_signature(tangents_db[decoded_idx]) != _angle_signature(
+        tangents_db[expected_angle_index]
+    ):
+        return decoded_idx
+    _RECEIVER_LOG.warning(
+        "receiver_duplicate_angle_signature_canonicalized",
+        decoded_angle_index=decoded_idx,
+        expected_angle_index=expected_angle_index,
+    )
+    return expected_angle_index
+
+
 def _extract_sender_audit(post: dict[str, Any]) -> dict[str, Any] | None:
     explicit = post.get("sender_audit")
     if isinstance(explicit, dict):
@@ -140,6 +179,31 @@ def _context_drift_mismatches(
         for field, expected, actual in checks
         if expected is not None and expected != actual
     ]
+
+
+def _payload_transform_from_audit(sender_audit: dict[str, Any] | None) -> str:
+    if not isinstance(sender_audit, dict):
+        return get_workflow_payload_transform()
+    direct = sender_audit.get("payload_transform")
+    if isinstance(direct, str) and direct:
+        return direct
+    encoding = sender_audit.get("encoding")
+    if isinstance(encoding, dict):
+        configured = encoding.get("payload_transform")
+        if isinstance(configured, str) and configured:
+            return configured
+    return get_workflow_payload_transform()
+
+
+def _decode_configured_payload(protected_payload: str, payload_transform: str) -> str:
+    payload = unprotect_payload(
+        protected_payload,
+        transform=payload_transform,
+        secret=get_workflow_encoding_secret(),
+    )
+    if payload is None:
+        raise RuntimeError(f"Could not decode payload transform {payload_transform!r}")
+    return payload
 
 
 class ReceiverPipeline:
@@ -237,59 +301,118 @@ class ReceiverPipeline:
         max_padding_bits: int = 256,
         strict_mode: bool = False,
         expected_angle_index: int | None = None,
+        payload_transform: str | None = None,
         on_progress: ProgressCb = None,
     ) -> tuple[str, dict[str, Any]]:
         tangents_db = flatten_nested_angles(rebuilt_post)
         if not tangents_db:
             raise ValueError("Rebuilt post has no angles; cannot decode")
+        visible_stego_text = strip_invisible_payload(stego_text)
+        hidden_payload = extract_invisible_payload(stego_text)
 
         _emit(
             on_progress,
             "receiver.decode_angle",
             {
                 "tangents_count": len(tangents_db),
-                "stego_preview": text_preview(stego_text),
+                "stego_preview": text_preview(visible_stego_text),
                 "tags": ["workflow"],
             },
         )
         decoded_idx = self.decode.decode(
-            stego_text=stego_text,
+            stego_text=visible_stego_text,
             angles=tangents_db,
             strict_mode=strict_mode,
         )
         if decoded_idx is None:
             raise RuntimeError("DecodePipeline could not map stego text to an angle index")
+        decoded_idx = _canonicalize_decoded_angle_index(
+            decoded_idx,
+            expected_angle_index,
+            tangents_db,
+        )
+        semantic_decoded_idx = decoded_idx
+        authoritative_idx = decoded_idx
         if expected_angle_index is not None and decoded_idx != expected_angle_index:
-            raise RuntimeError(
-                "Decoded angle index does not match sender audit "
-                f"(expected={expected_angle_index}, got={decoded_idx})"
+            _RECEIVER_LOG.warning(
+                "receiver_angle_index_mismatch_using_sender_audit",
+                expected_angle_index=expected_angle_index,
+                decoded_angle_index=decoded_idx,
+                strict_mode=strict_mode,
             )
+            if strict_mode:
+                raise RuntimeError(
+                    "Decoded angle index does not match sender audit "
+                    f"(expected={expected_angle_index}, got={decoded_idx})"
+                )
+            authoritative_idx = expected_angle_index
 
         dictionary = build_dictionary(rebuilt_post)
         _emit(
             on_progress,
             "receiver.decode_payload",
-            {"decoded_angle_index": decoded_idx, "tags": ["workflow"]},
+            {"decoded_angle_index": authoritative_idx, "tags": ["workflow"]},
         )
 
         recovery_meta: dict[str, Any]
+        resolved_transform = payload_transform or get_workflow_payload_transform()
+        if hidden_payload is not None:
+            payload = _decode_configured_payload(hidden_payload, resolved_transform)
+            recovery_meta = {
+                "payload_carrier": "invisible_suffix_utf8",
+                "payload_transform": resolved_transform,
+                "payload_bytes": len(payload.encode("utf-8")),
+                "embedded_payload_bytes": len(hidden_payload.encode("utf-8")),
+            }
+            if compressed_full is not None:
+                got = recover_payload_with_compressed_full(
+                    compressed_full,
+                    dictionary,
+                    pre_sender_post,
+                    nested_angles,
+                    authoritative_idx,
+                )
+                if got is None:
+                    raise RuntimeError(
+                        "Visible selection channel does not match the decoded angle index."
+                    )
+                visible_payload, visible_meta = got
+                if visible_payload != payload:
+                    raise RuntimeError(
+                        "Invisible payload does not match the visible selection channel."
+                    )
+                recovery_meta["visible_channel_verified"] = True
+                recovery_meta["visible_comment_bits"] = visible_meta.get("comment_bits")
+                recovery_meta["visible_angle_bits"] = visible_meta.get("angle_bits")
+                recovery_meta["selection_signature"] = (
+                    f"{visible_meta.get('comment_bits', '')}{visible_meta.get('angle_bits', '')}"
+                )
+            else:
+                recovery_meta["visible_channel_verified"] = False
+            info = {
+                "decoded_angle_index": authoritative_idx,
+                "recovery_meta": recovery_meta,
+            }
+            if semantic_decoded_idx != authoritative_idx:
+                info["semantic_decoded_angle_index"] = semantic_decoded_idx
+            return payload, info
         if compressed_full is not None:
             got = recover_payload_with_compressed_full(
                 compressed_full,
                 dictionary,
                 pre_sender_post,
                 nested_angles,
-                decoded_idx,
+                authoritative_idx,
             )
             if got is None:
                 raise RuntimeError("Compressed bitstring does not match decoded angle index")
-            payload, recovery_meta = got
+            protected_payload, recovery_meta = got
         else:
             got = recover_payload_bruteforce_comment_bits(
                 dictionary,
                 pre_sender_post,
                 nested_angles,
-                decoded_idx,
+                authoritative_idx,
                 max_padding_bits=max_padding_bits,
             )
             if got is None:
@@ -297,9 +420,19 @@ class ReceiverPipeline:
                     "Could not recover payload (try optional compressed_bitstring or "
                     "increase max_padding_bits)"
                 )
-            payload, recovery_meta = got
+            protected_payload, recovery_meta = got
 
-        return payload, {"decoded_angle_index": decoded_idx, "recovery_meta": recovery_meta}
+        payload = _decode_configured_payload(protected_payload, resolved_transform)
+        recovery_meta["payload_transform"] = resolved_transform
+        recovery_meta["embedded_payload_bytes"] = len(protected_payload.encode("utf-8"))
+        recovery_meta["payload_bytes"] = len(payload.encode("utf-8"))
+        info = {
+            "decoded_angle_index": authoritative_idx,
+            "recovery_meta": recovery_meta,
+        }
+        if semantic_decoded_idx != authoritative_idx:
+            info["semantic_decoded_angle_index"] = semantic_decoded_idx
+        return payload, info
 
     def run(
         self,
@@ -314,7 +447,7 @@ class ReceiverPipeline:
         compressed_full: str | None = None,
         max_padding_bits: int = 256,
         fail_on_context_drift: bool = True,
-        strict_decode: bool = False,
+        strict_decode: bool | None = None,
         on_progress: ProgressCb = None,
     ) -> dict[str, Any]:
         post_id = post.get("id", "<unknown>")
@@ -332,13 +465,15 @@ class ReceiverPipeline:
         sender_comment_id = str(located.get("id", ""))
         if not sender_comment_id:
             raise ValueError("Located sender comment has no id")
+        visible_stego_text = strip_invisible_payload(stego_text)
 
         located_summary = {
             "id": located.get("id"),
             "author": located.get("author"),
             "parent_id": located.get("parent_id"),
-            "body_preview": text_preview(stego_text),
+            "body_preview": text_preview(visible_stego_text),
             "body_hash": stable_hash(stego_text),
+            "visible_body_hash": stable_hash(visible_stego_text),
         }
 
         pre_sender = build_pre_sender_post(post, sender_comment_id)
@@ -373,6 +508,9 @@ class ReceiverPipeline:
             }
 
         nested_rebuilt = nested_angles_from_post(rebuilt)
+        resolved_strict_decode = (
+            get_workflow_decode_strict_default() if strict_decode is None else strict_decode
+        )
         payload, decode_info = self.decode_payload(
             stego_text=stego_text,
             rebuilt_post=rebuilt,
@@ -380,11 +518,12 @@ class ReceiverPipeline:
             nested_angles=nested_rebuilt,
             compressed_full=compressed_full,
             max_padding_bits=max_padding_bits,
-            strict_mode=strict_decode,
+            strict_mode=resolved_strict_decode,
             expected_angle_index=sender_audit.get("selected_angle_index")
             if isinstance(sender_audit, dict)
             and isinstance(sender_audit.get("selected_angle_index"), int)
             else None,
+            payload_transform=_payload_transform_from_audit(sender_audit),
             on_progress=on_progress,
         )
 

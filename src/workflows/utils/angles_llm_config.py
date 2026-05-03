@@ -23,10 +23,13 @@ TEMPERATURE = _TEMPERATURE
 
 
 def angles_model_name() -> str:
-    """LLM id for angles chat/completions; ANGLES_MODEL overrides MODEL."""
+    """LLM id for angles chat/completions; ANGLES_MODEL overrides workflow/default model."""
     explicit = (get_env("ANGLES_MODEL") or "").strip()
     if explicit:
         return explicit
+    workflow_model = (get_env("WORKFLOW_LM_STUDIO_MODEL") or "").strip()
+    if workflow_model:
+        return workflow_model
     fallback = (get_env("MODEL") or "").strip()
     if fallback:
         return fallback

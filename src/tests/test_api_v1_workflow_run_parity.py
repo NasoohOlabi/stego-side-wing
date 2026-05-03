@@ -30,13 +30,16 @@ def test_workflows_run_gen_angles_calls_same_runner_as_dedicated_route(
 
     monkeypatch.setattr(api_v1_routes.runner, "run_gen_angles", _run_gen_angles)
 
-    r1 = client.post("/api/v1/workflows/gen-angles", json={"count": 1, "offset": 0, "stream": False})
+    r1 = client.post(
+        "/api/v1/workflows/gen-angles",
+        json={"count": 1, "offset": 0, "tag": "exp", "stream": False},
+    )
     assert r1.status_code == 200
     assert r1.get_json()["ok"] is True
 
     r2 = client.post(
         "/api/v1/workflows/run",
-        json={"command": "gen-angles", "count": 1, "offset": 0, "stream": False},
+        json={"command": "gen-angles", "count": 1, "offset": 0, "tag": "exp", "stream": False},
     )
     assert r2.status_code == 200
     body = r2.get_json()

@@ -12,6 +12,7 @@ from services.stego_metrics_service import (
     run_perplexity_metrics,
     run_single_post_metrics,
 )
+from services.recent_updates_service import get_recent_git_updates
 from services.workflow_facade import (
     default_workflow_llm_prompts,
     get_prompts,
@@ -31,6 +32,7 @@ __all__ = [
     "run_divergence_metrics",
     "run_perplexity_metrics",
     "run_single_post_metrics",
+    "get_recent_git_updates",
     "default_workflow_llm_prompts",
     "get_prompts",
     "reload_prompts",

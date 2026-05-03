@@ -5,6 +5,17 @@ build/
 dist/
 wheels/
 *.egg-info
+*.json
+*.csv
+*.tsv
+*.db
+*.sqlite*
+*.parquet
+*.feather
+*.pkl
+*.pickle
+*.npy
+*.npz
 
 # Virtual environments
 .venv
@@ -20,3 +31,5 @@ debug-*.log
 
 
 tmp_*
+metrics
+.tmp

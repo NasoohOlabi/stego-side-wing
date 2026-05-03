@@ -224,15 +224,19 @@ def test_gemini_rotates_to_second_key_after_transport_failure(
     assert calls == ["key-a", "key-b"]
 
 
-def test_gemini_retries_without_system_message_after_transport_failure(
+def test_gemini_folds_system_message_into_prompt_after_transport_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, str, str | None]] = []
 
     def fake_genai_generate_text(
-        *, api_key: str, system_message: str | None, **_kwargs: object
+        *,
+        api_key: str,
+        user_text: str,
+        system_message: str | None,
+        **_kwargs: object,
     ) -> str:
-        calls.append((api_key, system_message))
+        calls.append((api_key, user_text, system_message))
         if system_message is not None:
             raise httpx.RemoteProtocolError(
                 "Server disconnected without sending a response."
@@ -260,18 +264,26 @@ def test_gemini_retries_without_system_message_after_transport_failure(
     )
 
     assert out == "ok"
-    assert calls == [("key-a", "Return JSON only."), ("key-a", None)]
+    assert calls[0] == ("key-a", "hi", "Return JSON only.")
+    assert calls[1][0] == "key-a"
+    assert calls[1][2] is None
+    assert "Return JSON only." in calls[1][1]
+    assert calls[1][1].endswith("hi")
 
 
 def test_gemini_system_message_fallback_can_rotate_to_second_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, str, str | None]] = []
 
     def fake_genai_generate_text(
-        *, api_key: str, system_message: str | None, **_kwargs: object
+        *,
+        api_key: str,
+        user_text: str,
+        system_message: str | None,
+        **_kwargs: object,
     ) -> str:
-        calls.append((api_key, system_message))
+        calls.append((api_key, user_text, system_message))
         if api_key == "key-a":
             raise httpx.RemoteProtocolError(
                 "Server disconnected without sending a response."
@@ -303,12 +315,14 @@ def test_gemini_system_message_fallback_can_rotate_to_second_key(
     )
 
     assert out == "ok"
-    assert calls == [
+    assert [(api_key, system_message) for api_key, _, system_message in calls] == [
         ("key-a", "Return JSON only."),
         ("key-a", None),
         ("key-b", "Return JSON only."),
         ("key-b", None),
     ]
+    assert "Return JSON only." in calls[1][1]
+    assert "Return JSON only." in calls[3][1]
 
 
 def test_gemini_client_uses_default_sdk_timeout(

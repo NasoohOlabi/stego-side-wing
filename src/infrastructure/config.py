@@ -97,12 +97,26 @@ def get_lm_studio_request_timeout_seconds(default: int = 600) -> int:
 
 # Workflow LLM (non-sensitive defaults; override WORKFLOW_LLM_BACKEND / GOOGLE_AI_STUDIO_MODEL via env).
 DEFAULT_WORKFLOW_LLM_BACKEND = "ai_studio"
+DEFAULT_WORKFLOW_LM_STUDIO_MODEL = "openai/gpt-oss-20b"
 DEFAULT_GOOGLE_AI_STUDIO_MODEL = "gemma-4-26b-a4b-it"
 DEFAULT_GOOGLE_AI_REQUEST_TIMEOUT_SEC = 180
 WorkflowCapacityProfile = Literal["low", "mid", "high"]
+WorkflowEncodingProfile = Literal["balanced", "robustness", "capacity", "security"]
+WorkflowAnglesGenerationMode = Literal["model", "extractive_zero_kld"]
+WorkflowStegoGenerationMode = Literal["model", "extractive_zero_kld", "hybrid_extract"]
+WorkflowPayloadTransform = Literal["plain", "hmac_xor_v1", "secure_compact_v2"]
+WorkflowStegoPromptStyle = Literal[
+    "natural",
+    "anchored",
+    "guided_natural",
+    "natural_then_anchor_retry",
+]
 
 # --- Workflow capacity & URL fetch (defaults in code; WORKFLOW_* overrides: process env only) ---
+DEFAULT_WORKFLOW_ENCODING_PROFILE: WorkflowEncodingProfile = "balanced"
 DEFAULT_WORKFLOW_CAPACITY_PROFILE: WorkflowCapacityProfile = "mid"
+DEFAULT_WORKFLOW_ANGLES_GENERATION_MODE: WorkflowAnglesGenerationMode = "model"
+DEFAULT_WORKFLOW_STEGO_GENERATION_MODE: WorkflowStegoGenerationMode = "model"
 # When WORKFLOW_* on/off env vars are unset, default to this (same semantics as ``=1`` before).
 DEFAULT_WORKFLOW_ENV_FLAG_ON = True
 
@@ -128,6 +142,76 @@ DEFAULT_WORKFLOW_CRAWL4AI_PAGE_TIMEOUT_MS = 45_000
 WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED = 10_000_000
 DEFAULT_WORKFLOW_CAPACITY_LIMITS_ENABLED = False
 
+WORKFLOW_ENCODING_PROFILES: dict[WorkflowEncodingProfile, dict[str, object]] = {
+    "balanced": {
+        "capacity_profile": "mid",
+        "capacity_limits_enabled": False,
+        "angles_generation_mode": "model",
+        "stego_generation_mode": "model",
+        "payload_transform": "plain",
+        "stego_prompt_style": "natural",
+        "stego_sample_angle_count": 4,
+        "stego_default_max_retries": 4,
+        "decode_semantic_top_n": 20,
+        "decode_llm_max_tries": 5,
+        "stego_llm_temperature": 0.7,
+        "decode_strict_default": False,
+    },
+    "robustness": {
+        "capacity_profile": "mid",
+        "capacity_limits_enabled": True,
+        "angles_generation_mode": "extractive_zero_kld",
+        "stego_generation_mode": "extractive_zero_kld",
+        "payload_transform": "plain",
+        "stego_prompt_style": "anchored",
+        "stego_sample_angle_count": 6,
+        "stego_default_max_retries": 8,
+        "decode_semantic_top_n": 40,
+        "decode_llm_max_tries": 7,
+        "stego_llm_temperature": 0.45,
+        "decode_strict_default": False,
+    },
+    "capacity": {
+        "capacity_profile": "high",
+        "capacity_limits_enabled": True,
+        "angles_generation_mode": "extractive_zero_kld",
+        "stego_generation_mode": "extractive_zero_kld",
+        "payload_transform": "plain",
+        "stego_prompt_style": "natural",
+        "stego_sample_angle_count": 4,
+        "stego_default_max_retries": 4,
+        "decode_semantic_top_n": 24,
+        "decode_llm_max_tries": 5,
+        "stego_llm_temperature": 0.7,
+        "decode_strict_default": False,
+    },
+    "security": {
+        "capacity_profile": "high",
+        "capacity_limits_enabled": True,
+        "angles_generation_mode": "extractive_zero_kld",
+        "stego_generation_mode": "extractive_zero_kld",
+        "payload_transform": "secure_compact_v2",
+        "stego_prompt_style": "anchored",
+        "stego_sample_angle_count": 5,
+        "stego_default_max_retries": 6,
+        "decode_semantic_top_n": 32,
+        "decode_llm_max_tries": 7,
+        "stego_llm_temperature": 0.55,
+        "decode_strict_default": True,
+    },
+}
+
+WORKFLOW_ENCODING_PROFILE_ALIASES: dict[str, WorkflowEncodingProfile] = {
+    "default": "balanced",
+    "standard": "balanced",
+    "robust": "robustness",
+    "reliable": "robustness",
+    "high_capacity": "capacity",
+    "zero_kld": "capacity",
+    "extractive_zero_kld": "capacity",
+    "secure": "security",
+}
+
 
 def _workflow_env_raw(key: str) -> str | None:
     """Non-empty ``WORKFLOW_*`` value from the process environment only (not ``.env`` cache)."""
@@ -145,11 +229,95 @@ def get_workflow_llm_backend() -> Literal["lm_studio", "google"]:
     return "lm_studio"
 
 
+def get_workflow_encoding_profile() -> WorkflowEncodingProfile:
+    """Named sender/receiver behavior profile used by workflow stego code."""
+    raw = (
+        _workflow_env_raw("WORKFLOW_ENCODING_PROFILE") or DEFAULT_WORKFLOW_ENCODING_PROFILE
+    ).lower()
+    if raw in WORKFLOW_ENCODING_PROFILE_ALIASES:
+        return WORKFLOW_ENCODING_PROFILE_ALIASES[raw]
+    if raw == "balanced":
+        return "balanced"
+    if raw == "robustness":
+        return "robustness"
+    if raw == "capacity":
+        return "capacity"
+    if raw == "security":
+        return "security"
+    return DEFAULT_WORKFLOW_ENCODING_PROFILE
+
+
+def _workflow_encoding_default(key: str) -> object:
+    return WORKFLOW_ENCODING_PROFILES[get_workflow_encoding_profile()][key]
+
+
+def _workflow_encoding_int_default(key: str, fallback: int) -> int:
+    value = _workflow_encoding_default(key)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return fallback
+    return fallback
+
+
+def _workflow_encoding_float_default(key: str, fallback: float) -> float:
+    value = _workflow_encoding_default(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return fallback
+    return fallback
+
+
+def _workflow_env_positive_int(key: str, default: int, *, min_value: int = 1) -> int:
+    raw = _workflow_env_raw(key)
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    return max(min_value, parsed)
+
+
+def _workflow_env_float(
+    key: str,
+    default: float,
+    *,
+    min_value: float,
+    max_value: float,
+) -> float:
+    raw = _workflow_env_raw(key)
+    if raw is None:
+        return default
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return default
+    return max(min_value, min(parsed, max_value))
+
+
 def get_google_ai_studio_model() -> str:
     """Generative Language API model id when workflow LLM backend is AI Studio / Google."""
     return get_env("GOOGLE_AI_STUDIO_MODEL", DEFAULT_GOOGLE_AI_STUDIO_MODEL) or (
         DEFAULT_GOOGLE_AI_STUDIO_MODEL
     )
+
+
+def get_workflow_lm_studio_model(default: str | None = None) -> str:
+    """OpenAI-compatible model id when workflow LLM backend is LM Studio."""
+    raw = _workflow_env_raw("WORKFLOW_LM_STUDIO_MODEL")
+    if raw:
+        return raw
+    if default is not None and default.strip():
+        return default.strip()
+    return DEFAULT_WORKFLOW_LM_STUDIO_MODEL
 
 
 def get_google_ai_request_timeout_seconds(
@@ -172,10 +340,115 @@ def get_google_ai_request_timeout_seconds(
 
 def get_workflow_capacity_profile() -> WorkflowCapacityProfile:
     """Global capacity preset for workflow fan-out and angle input sizing."""
-    raw = (_workflow_env_raw("WORKFLOW_CAPACITY_PROFILE") or DEFAULT_WORKFLOW_CAPACITY_PROFILE).lower()
+    default = str(_workflow_encoding_default("capacity_profile"))
+    raw = (_workflow_env_raw("WORKFLOW_CAPACITY_PROFILE") or default).lower()
     if raw in ("low", "mid", "high"):
         return raw
     return DEFAULT_WORKFLOW_CAPACITY_PROFILE
+
+
+def get_workflow_angles_generation_mode() -> WorkflowAnglesGenerationMode:
+    """Angle generation strategy for the gen-angles workflow."""
+    raw = (
+        _workflow_env_raw("WORKFLOW_ANGLES_GENERATION_MODE")
+        or str(_workflow_encoding_default("angles_generation_mode"))
+    ).lower()
+    if raw in ("extractive_zero_kld", "zero_kld", "extractive"):
+        return "extractive_zero_kld"
+    return "model"
+
+
+def get_workflow_stego_generation_mode() -> WorkflowStegoGenerationMode:
+    """Stego text generation strategy for the final sender output."""
+    raw = (
+        _workflow_env_raw("WORKFLOW_STEGO_GENERATION_MODE")
+        or str(_workflow_encoding_default("stego_generation_mode"))
+    ).lower()
+    if raw in ("hybrid_extract", "hybrid", "hybrid_extractive"):
+        return "hybrid_extract"
+    if raw in ("extractive_zero_kld", "zero_kld", "extractive"):
+        return "extractive_zero_kld"
+    return "model"
+
+
+def get_workflow_payload_transform() -> WorkflowPayloadTransform:
+    """Payload transform applied before codec compression or invisible carrier embedding."""
+    raw = (
+        _workflow_env_raw("WORKFLOW_PAYLOAD_TRANSFORM")
+        or str(_workflow_encoding_default("payload_transform"))
+    ).lower()
+    if raw in ("secure_compact_v2", "compact_secure_v2", "swsec2", "secure_v2"):
+        return "secure_compact_v2"
+    if raw in ("hmac_xor_v1", "secure", "xor_hmac"):
+        return "hmac_xor_v1"
+    return "plain"
+
+
+def get_workflow_encoding_secret() -> str | None:
+    """Optional shared secret for payload transforms that need one."""
+    return _workflow_env_raw("WORKFLOW_ENCODING_SECRET") or get_env("WORKFLOW_ENCODING_SECRET")
+
+
+def get_workflow_stego_prompt_style() -> WorkflowStegoPromptStyle:
+    """Prompt contract used by model-based sender generation."""
+    raw = (
+        _workflow_env_raw("WORKFLOW_STEGO_PROMPT_STYLE")
+        or str(_workflow_encoding_default("stego_prompt_style"))
+    ).lower()
+    if raw in ("guided_natural", "guided", "natural_guided"):
+        return "guided_natural"
+    if raw in (
+        "natural_then_anchor_retry",
+        "guided_retry_anchor",
+        "natural_retry_anchor",
+    ):
+        return "natural_then_anchor_retry"
+    if raw in ("anchored", "anchor", "recoverable"):
+        return "anchored"
+    return "natural"
+
+
+def get_workflow_stego_sample_angle_count() -> int:
+    """Number of angle samples sent to source matching / few-shot generation."""
+    default = _workflow_encoding_int_default("stego_sample_angle_count", 4)
+    return _workflow_env_positive_int("WORKFLOW_STEGO_SAMPLE_ANGLE_COUNT", default)
+
+
+def get_workflow_stego_default_max_retries() -> int:
+    """Default retry budget for sender validation attempts."""
+    default = _workflow_encoding_int_default("stego_default_max_retries", 4)
+    return _workflow_env_positive_int("WORKFLOW_STEGO_MAX_RETRIES", default, min_value=0)
+
+
+def get_workflow_decode_semantic_top_n() -> int:
+    """Decode semantic shortlist size."""
+    default = _workflow_encoding_int_default("decode_semantic_top_n", 20)
+    return _workflow_env_positive_int("WORKFLOW_DECODE_SEMANTIC_TOP_N", default)
+
+
+def get_workflow_decode_llm_max_tries() -> int:
+    """Decode LLM retry budget."""
+    default = _workflow_encoding_int_default("decode_llm_max_tries", 5)
+    return _workflow_env_positive_int("WORKFLOW_DECODE_LLM_MAX_TRIES", default)
+
+
+def get_workflow_stego_llm_temperature() -> float:
+    """Encode/decode LLM sampling temperature for the selected profile."""
+    default = _workflow_encoding_float_default("stego_llm_temperature", 0.7)
+    return _workflow_env_float(
+        "WORKFLOW_STEGO_LLM_TEMPERATURE",
+        default,
+        min_value=0.0,
+        max_value=2.0,
+    )
+
+
+def get_workflow_decode_strict_default() -> bool:
+    """Default receiver strict-decode behavior for the selected profile."""
+    return _workflow_env_on_off(
+        "WORKFLOW_DECODE_STRICT_DEFAULT",
+        default=bool(_workflow_encoding_default("decode_strict_default")),
+    )
 
 
 def _workflow_env_on_off(key: str, *, default: bool) -> bool:
@@ -190,7 +463,7 @@ def get_workflow_capacity_limits_enabled() -> bool:
     """When False, profile presets are ignored; per-key WORKFLOW_* overrides still apply."""
     return _workflow_env_on_off(
         "WORKFLOW_CAPACITY_LIMITS_ENABLED",
-        default=DEFAULT_WORKFLOW_CAPACITY_LIMITS_ENABLED,
+        default=bool(_workflow_encoding_default("capacity_limits_enabled")),
     )
 
 
@@ -289,6 +562,28 @@ def get_workflow_capacity_settings() -> dict[str, str | int | bool]:
     }
 
 
+def get_workflow_encoding_settings() -> dict[str, str | int | float | bool | None]:
+    """Structured sender/receiver profile settings for reports and audits."""
+    return {
+        "encoding_profile": get_workflow_encoding_profile(),
+        "capacity_profile": get_workflow_capacity_profile(),
+        "capacity_limits_enabled": get_workflow_capacity_limits_enabled(),
+        "angles_generation_mode": get_workflow_angles_generation_mode(),
+        "stego_generation_mode": get_workflow_stego_generation_mode(),
+        "payload_transform": get_workflow_payload_transform(),
+        "stego_prompt_style": get_workflow_stego_prompt_style(),
+        "stego_sample_angle_count": get_workflow_stego_sample_angle_count(),
+        "stego_default_max_retries": get_workflow_stego_default_max_retries(),
+        "decode_semantic_top_n": get_workflow_decode_semantic_top_n(),
+        "decode_llm_max_tries": get_workflow_decode_llm_max_tries(),
+        "stego_llm_temperature": get_workflow_stego_llm_temperature(),
+        "decode_strict_default": get_workflow_decode_strict_default(),
+        "lm_studio_model": get_workflow_lm_studio_model(),
+        "google_ai_studio_model": get_google_ai_studio_model(),
+        "has_encoding_secret": bool(get_workflow_encoding_secret()),
+    }
+
+
 def _parse_api_key_list(raw: str | None) -> list[str]:
     """Split comma- or whitespace-separated API key tokens."""
     if not raw:
@@ -326,7 +621,7 @@ def resolve_workflow_llm_provider_and_model(lm_model: str) -> tuple[str, str]:
     """``(provider, model)`` for :meth:`workflows.adapters.llm.LLMAdapter.call_llm`."""
     if get_workflow_llm_backend() == "google":
         return "gemini", get_google_ai_studio_model()
-    return "lm_studio", lm_model
+    return "lm_studio", get_workflow_lm_studio_model(lm_model)
 
 
 def get_workflow_url_fetch_http_first() -> bool:

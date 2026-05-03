@@ -458,8 +458,7 @@ class WorkflowRunner:
                 },
             )
             if not produced_prepared_posts:
-                prep_stop_reason = "no_prepared_posts_in_batch"
-                break
+                continue
 
         prep_result = {
             "iterations": prep_iterations,
@@ -473,13 +472,32 @@ class WorkflowRunner:
         }
         self._emit(on_progress, "phase_done", {"phase": "prep", **prep_result})
 
-        if quota_detected:
-            phase_transition = {
-                "from_phase": "prep",
-                "to_phase": "stego",
-                "reason": "google_search_quota_detected",
+        if not quota_detected:
+            stego_result = {
+                "run_all": True,
+                "tag": tag,
+                "list_offset": 0,
+                "processed_count": 0,
+                "succeeded_count": 0,
+                "failed_count": 0,
+                "stopped_reason": "not_started_quota_not_detected",
+                "results": [],
+                "elapsed_ms": 0,
             }
-            self._emit(on_progress, "phase_transition", phase_transition)
+            return {
+                "succeeded": True,
+                "tag": tag,
+                "prep": prep_result,
+                "stego": stego_result,
+                "phase_transition": None,
+            }
+
+        phase_transition = {
+            "from_phase": "prep",
+            "to_phase": "stego",
+            "reason": "google_search_quota_detected",
+        }
+        self._emit(on_progress, "phase_transition", phase_transition)
 
         self._emit(on_progress, "phase_start", {"phase": "stego"})
         self._emit(
@@ -613,19 +631,21 @@ class WorkflowRunner:
         self,
         count: int = 1,
         offset: int = 0,
+        tag: str | None = None,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> list[dict]:
         """Run GenAngles pipeline."""
         self._emit(
             on_progress,
             "stage_start",
-            {"stage": "gen-angles", "count": count, "offset": offset},
+            {"stage": "gen-angles", "count": count, "offset": offset, "tag": tag},
         )
         t0 = time.perf_counter()
         results = self.gen_angles.process_posts(
             step="angles-step",
             count=count,
             offset=offset,
+            tag=tag,
         )
         batch_ms = int((time.perf_counter() - t0) * 1000)
         summary = dict(getattr(self.gen_angles, "_last_batch_summary", {}) or {})
@@ -650,6 +670,7 @@ class WorkflowRunner:
                 "processed_count": len(results),
                 "elapsed_ms": batch_ms,
                 "requested_count": summary.get("requested_count"),
+                "tag": summary.get("tag"),
                 "listed_count": summary.get("listed_count"),
                 "loaded_count": summary.get("loaded_count"),
                 "load_failed_count": summary.get("load_failed_count"),

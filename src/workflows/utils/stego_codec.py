@@ -7,6 +7,11 @@ comment/angle embedding, and payload recovery after stripping embed prefixes.
 from __future__ import annotations
 
 import math
+import base64
+import hashlib
+import hmac
+import secrets
+import zlib
 from typing import Any
 
 from pydantic import validate_call
@@ -18,6 +23,15 @@ from workflows.utils.text_utils import (
 )
 
 MAX_LITERAL_LEN = 250
+INVISIBLE_PAYLOAD_START = "\u2060\u2063\u2060"
+INVISIBLE_PAYLOAD_END = "\u2063\u2060\u2063"
+INVISIBLE_PAYLOAD_ZERO = "\u200c"
+INVISIBLE_PAYLOAD_ONE = "\u200d"
+INVISIBLE_PAYLOAD_LENGTH_BITS = 32
+SECURE_PAYLOAD_V1_PREFIX = "swsec1."
+SECURE_PAYLOAD_V2_PREFIX = "swsec2."
+SECURE_PAYLOAD_NONCE_BYTES = 16
+SECURE_PAYLOAD_MAC_BYTES = 16
 
 
 @validate_call
@@ -28,6 +42,204 @@ def is_non_empty_string(value: Any) -> bool:
 @validate_call
 def to_binary_utf8(text: str) -> str:
     return "".join(format(b, "08b") for b in text.encode("utf-8"))
+
+
+def _b64_urlsafe(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64_urlsafe_decode(text: str) -> bytes | None:
+    try:
+        padded = text + ("=" * (-len(text) % 4))
+        return base64.urlsafe_b64decode(padded.encode("ascii"))
+    except (ValueError, UnicodeEncodeError):
+        return None
+
+
+def _xor_stream(secret: str, nonce: bytes, length: int) -> bytes:
+    secret_bytes = secret.encode("utf-8")
+    out = bytearray()
+    counter = 0
+    while len(out) < length:
+        block = hmac.new(
+            secret_bytes,
+            nonce + counter.to_bytes(4, "big"),
+            hashlib.sha256,
+        ).digest()
+        out.extend(block)
+        counter += 1
+    return bytes(out[:length])
+
+
+def _protect_hmac_xor_v1(payload: str, secret: str) -> str:
+    nonce = secrets.token_bytes(SECURE_PAYLOAD_NONCE_BYTES)
+    payload_bytes = payload.encode("utf-8")
+    stream = _xor_stream(secret, nonce, len(payload_bytes))
+    ciphertext = bytes(a ^ b for a, b in zip(payload_bytes, stream, strict=True))
+    mac = hmac.new(
+        secret.encode("utf-8"),
+        b"swsec1" + nonce + ciphertext,
+        hashlib.sha256,
+    ).digest()[:SECURE_PAYLOAD_MAC_BYTES]
+    return (
+        f"{SECURE_PAYLOAD_V1_PREFIX}{_b64_urlsafe(nonce)}."
+        f"{_b64_urlsafe(ciphertext)}.{_b64_urlsafe(mac)}"
+    )
+
+
+def _protect_secure_compact_v2(payload: str, secret: str) -> str:
+    nonce = secrets.token_bytes(SECURE_PAYLOAD_NONCE_BYTES)
+    compressed = zlib.compress(payload.encode("utf-8"), level=9)
+    stream = _xor_stream(secret, nonce, len(compressed))
+    ciphertext = bytes(a ^ b for a, b in zip(compressed, stream, strict=True))
+    mac = hmac.new(
+        secret.encode("utf-8"),
+        b"swsec2" + nonce + ciphertext,
+        hashlib.sha256,
+    ).digest()[:SECURE_PAYLOAD_MAC_BYTES]
+    frame = nonce + ciphertext + mac
+    return f"{SECURE_PAYLOAD_V2_PREFIX}{_b64_urlsafe(frame)}"
+
+
+def _unprotect_hmac_xor_v1(protected_payload: str, secret: str) -> str | None:
+    if not protected_payload.startswith(SECURE_PAYLOAD_V1_PREFIX):
+        return None
+    parts = protected_payload[len(SECURE_PAYLOAD_V1_PREFIX) :].split(".")
+    if len(parts) != 3:
+        return None
+    nonce = _b64_urlsafe_decode(parts[0])
+    ciphertext = _b64_urlsafe_decode(parts[1])
+    supplied_mac = _b64_urlsafe_decode(parts[2])
+    if nonce is None or ciphertext is None or supplied_mac is None:
+        return None
+    expected_mac = hmac.new(
+        secret.encode("utf-8"),
+        b"swsec1" + nonce + ciphertext,
+        hashlib.sha256,
+    ).digest()[:SECURE_PAYLOAD_MAC_BYTES]
+    if not hmac.compare_digest(supplied_mac, expected_mac):
+        return None
+    stream = _xor_stream(secret, nonce, len(ciphertext))
+    payload_bytes = bytes(a ^ b for a, b in zip(ciphertext, stream, strict=True))
+    try:
+        return payload_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _unprotect_secure_compact_v2(protected_payload: str, secret: str) -> str | None:
+    if not protected_payload.startswith(SECURE_PAYLOAD_V2_PREFIX):
+        return None
+    frame = _b64_urlsafe_decode(protected_payload[len(SECURE_PAYLOAD_V2_PREFIX) :])
+    if frame is None:
+        return None
+    min_len = SECURE_PAYLOAD_NONCE_BYTES + SECURE_PAYLOAD_MAC_BYTES
+    if len(frame) <= min_len:
+        return None
+    nonce = frame[:SECURE_PAYLOAD_NONCE_BYTES]
+    supplied_mac = frame[-SECURE_PAYLOAD_MAC_BYTES:]
+    ciphertext = frame[SECURE_PAYLOAD_NONCE_BYTES:-SECURE_PAYLOAD_MAC_BYTES]
+    expected_mac = hmac.new(
+        secret.encode("utf-8"),
+        b"swsec2" + nonce + ciphertext,
+        hashlib.sha256,
+    ).digest()[:SECURE_PAYLOAD_MAC_BYTES]
+    if not hmac.compare_digest(supplied_mac, expected_mac):
+        return None
+    stream = _xor_stream(secret, nonce, len(ciphertext))
+    compressed = bytes(a ^ b for a, b in zip(ciphertext, stream, strict=True))
+    try:
+        payload_bytes = zlib.decompress(compressed)
+        return payload_bytes.decode("utf-8")
+    except (UnicodeDecodeError, zlib.error):
+        return None
+
+
+@validate_call
+def protect_payload(payload: str, transform: str = "plain", secret: str | None = None) -> str:
+    """Apply the configured reversible payload transform before embedding."""
+    if transform == "plain":
+        return payload
+    if transform not in {"hmac_xor_v1", "secure_compact_v2"}:
+        raise ValueError(f"Unsupported payload transform: {transform}")
+    if not secret:
+        raise ValueError(f"WORKFLOW_ENCODING_SECRET is required for {transform} payloads")
+    if transform == "hmac_xor_v1":
+        return _protect_hmac_xor_v1(payload, secret)
+    return _protect_secure_compact_v2(payload, secret)
+
+
+@validate_call
+def unprotect_payload(
+    protected_payload: str, transform: str = "plain", secret: str | None = None
+) -> str | None:
+    """Reverse ``protect_payload``; returns ``None`` on invalid secure payloads."""
+    if transform == "plain":
+        return protected_payload
+    if transform not in {"hmac_xor_v1", "secure_compact_v2"} or not secret:
+        return None
+    if transform == "hmac_xor_v1":
+        return _unprotect_hmac_xor_v1(protected_payload, secret)
+    return _unprotect_secure_compact_v2(protected_payload, secret)
+
+
+@validate_call
+def embed_invisible_payload(visible_text: str, payload: str) -> str:
+    payload_bytes = payload.encode("utf-8")
+    length_bits = format(len(payload_bytes), f"0{INVISIBLE_PAYLOAD_LENGTH_BITS}b")
+    payload_bits = "".join(format(b, "08b") for b in payload_bytes)
+    invisible_bits = "".join(
+        INVISIBLE_PAYLOAD_ONE if bit == "1" else INVISIBLE_PAYLOAD_ZERO
+        for bit in length_bits + payload_bits
+    )
+    return f"{visible_text}{INVISIBLE_PAYLOAD_START}{invisible_bits}{INVISIBLE_PAYLOAD_END}"
+
+
+def _split_invisible_payload(text: str) -> tuple[str, str | None]:
+    start = text.find(INVISIBLE_PAYLOAD_START)
+    if start < 0:
+        return text, None
+    payload_start = start + len(INVISIBLE_PAYLOAD_START)
+    end = text.find(INVISIBLE_PAYLOAD_END, payload_start)
+    if end < 0:
+        return text, None
+    visible = text[:start] + text[end + len(INVISIBLE_PAYLOAD_END) :]
+    return visible, text[payload_start:end]
+
+
+def _decode_invisible_payload_chars(payload_chars: str) -> str | None:
+    bits_chars = set(payload_chars)
+    if not bits_chars.issubset({INVISIBLE_PAYLOAD_ZERO, INVISIBLE_PAYLOAD_ONE}):
+        return None
+    bits = "".join("1" if ch == INVISIBLE_PAYLOAD_ONE else "0" for ch in payload_chars)
+    if len(bits) < INVISIBLE_PAYLOAD_LENGTH_BITS:
+        return None
+    payload_len = int(bits[:INVISIBLE_PAYLOAD_LENGTH_BITS], 2)
+    total_bits = INVISIBLE_PAYLOAD_LENGTH_BITS + (payload_len * 8)
+    if len(bits) != total_bits:
+        return None
+    payload_bits = bits[INVISIBLE_PAYLOAD_LENGTH_BITS:]
+    try:
+        payload_bytes = bytes(
+            int(payload_bits[idx : idx + 8], 2) for idx in range(0, len(payload_bits), 8)
+        )
+        return payload_bytes.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
+@validate_call
+def strip_invisible_payload(text: str) -> str:
+    visible, _ = _split_invisible_payload(text)
+    return visible
+
+
+@validate_call
+def extract_invisible_payload(text: str) -> str | None:
+    _, payload_chars = _split_invisible_payload(text)
+    if payload_chars is None:
+        return None
+    return _decode_invisible_payload_chars(payload_chars)
 
 
 @validate_call
@@ -317,13 +529,17 @@ def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
     angle_emb = embed_in_angle_selection(comment_emb["remainingBits"], nested_angles)
     if angle_emb.get("insufficientBits"):
         warnings.append("Padding used in Angle Selection.")
+    selection_signature = comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"]
 
     return {
         "compression": compression,
         "commentEmbedding": comment_emb["result"],
         "angleEmbedding": angle_emb,
         "totalBitsEmbedded": comment_emb["result"]["bitsCount"] + angle_emb["bitsCount"],
-        "fullEncodedBits": comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"],
+        "fullEncodedBits": selection_signature,
+        "commentBits": comment_emb["result"]["bitsUsed"],
+        "angleBits": angle_emb["bitsUsed"],
+        "selectionSignature": selection_signature,
         "warnings": warnings,
     }
 
@@ -344,6 +560,24 @@ def angle_bits_for_index(idx: int, n_angles: int) -> str:
         return ""
     idx = idx % n_angles
     return encode_int(idx, n_angles - 1)
+
+
+def angle_bits_decode_to_index(bits: str, idx: int, n_angles: int) -> bool:
+    if n_angles <= 0 or not bits:
+        return False
+    return int(bits, 2) % n_angles == idx % n_angles
+
+
+def angle_bit_aliases_for_index(idx: int, n_angles: int) -> list[str]:
+    width = angle_selection_bit_width(n_angles)
+    if width <= 0 or n_angles <= 0:
+        return [""]
+    target = idx % n_angles
+    return [
+        format(value, f"0{width}b")
+        for value in range(1 << width)
+        if value % n_angles == target
+    ]
 
 
 def _decompress_standard_suffix(utf8_bit_suffix: str) -> str | None:
@@ -483,11 +717,10 @@ def recover_payload_with_compressed_full(
     la = angle_selection_bit_width(len(angles))
     if len(angles) == 0:
         return None
-    expected_angle_bits = angle_bits_for_index(decoded_angle_index, len(angles))
     if len(compressed_full) < lc + la:
         return None
     actual_angle = compressed_full[lc : lc + la]
-    if actual_angle != expected_angle_bits:
+    if not angle_bits_decode_to_index(actual_angle, decoded_angle_index, len(angles)):
         return None
     comment_bits = compressed_full[:lc]
     payload = decompress_after_embed_prefix(compressed_full, dictionary, lc, la)
@@ -500,6 +733,43 @@ def recover_payload_with_compressed_full(
         "la": la,
     }
     return payload, meta
+
+
+def _recovery_candidate(
+    candidate: str,
+    *,
+    dictionary: list[str],
+    lc: int,
+    la: int,
+    prefix: str,
+    comment_bits: str,
+    angle_bits: str,
+) -> tuple[str, dict[str, Any], int] | None:
+    check = compress_payload(candidate, dictionary)
+    cfull = check.get("compressed", "")
+    if not isinstance(cfull, str) or not cfull.startswith(prefix):
+        return None
+    if decompress_after_embed_prefix(cfull, dictionary, lc, la) != candidate:
+        return None
+    meta = {
+        "comment_bits": comment_bits,
+        "angle_bits": angle_bits,
+        "lc": lc,
+        "la": la,
+        "method": check.get("method"),
+    }
+    return candidate, meta, len(cfull)
+
+
+def _shorter_recovery(
+    current: tuple[str, dict[str, Any], int] | None,
+    candidate: tuple[str, dict[str, Any], int] | None,
+) -> tuple[str, dict[str, Any], int] | None:
+    if candidate is None:
+        return current
+    if current is None or candidate[2] < current[2]:
+        return candidate
+    return current
 
 
 def recover_payload_bruteforce_comment_bits(
@@ -528,11 +798,11 @@ def recover_payload_bruteforce_comment_bits(
     if not angles:
         return None
 
-    angle_bits = angle_bits_for_index(decoded_angle_index, len(angles))
     if compressed_full is not None:
         if len(compressed_full) < lc + la:
             return None
-        if compressed_full[lc : lc + la] != angle_bits:
+        angle_bits = compressed_full[lc : lc + la]
+        if not angle_bits_decode_to_index(angle_bits, decoded_angle_index, len(angles)):
             return None
         payload = decompress_after_embed_prefix(compressed_full, dictionary, lc, la)
         if payload is None:
@@ -546,70 +816,56 @@ def recover_payload_bruteforce_comment_bits(
         }
 
     n_comment_guesses = 1 << lc if lc > 0 else 1
-
-    def _accepts(candidate: str, check: dict[str, Any], b_comment: str) -> bool:
-        cfull = check.get("compressed", "")
-        if not isinstance(cfull, str):
-            return False
-        prefix = b_comment + angle_bits
-        if not cfull.startswith(prefix):
-            return False
-        recovered = decompress_after_embed_prefix(cfull, dictionary, lc, la)
-        return recovered == candidate
-
+    angle_bits_candidates = angle_bit_aliases_for_index(decoded_angle_index, len(angles))
     best: tuple[str, dict[str, Any], int] | None = None
 
     for guess in range(n_comment_guesses):
         b_comment = format(guess, f"0{lc}b") if lc > 0 else ""
-        prefix = b_comment + angle_bits
+        for angle_bits in angle_bits_candidates:
+            prefix = b_comment + angle_bits
 
-        # Standard mode completion: first bit of full compressed is '0'.
-        if prefix and prefix[0] == "0":
-            utf8_partial = prefix[1:]
-            for pad in range(0, max_padding_bits + 1):
-                extended = utf8_partial + ("0" * pad)
-                candidate = _decompress_standard_suffix(extended)
-                if candidate is None:
-                    continue
-                check = compress_payload(candidate, dictionary)
-                if not _accepts(candidate, check, b_comment):
-                    continue
-                cfull = check.get("compressed", "")
-                assert isinstance(cfull, str)
-                meta = {
-                    "comment_bits": b_comment,
-                    "angle_bits": angle_bits,
-                    "lc": lc,
-                    "la": la,
-                    "method": check.get("method"),
-                }
-                score = len(cfull)
-                if best is None or score < best[2]:
-                    best = (candidate, meta, score)
+            # Standard mode completion: first bit of full compressed is '0'.
+            if prefix and prefix[0] == "0":
+                utf8_partial = prefix[1:]
+                for pad in range(0, max_padding_bits + 1):
+                    candidate = _decompress_standard_suffix(utf8_partial + ("0" * pad))
+                    if candidate is None:
+                        continue
+                    best = _shorter_recovery(
+                        best,
+                        _recovery_candidate(
+                            candidate,
+                            dictionary=dictionary,
+                            lc=lc,
+                            la=la,
+                            prefix=prefix,
+                            comment_bits=b_comment,
+                            angle_bits=angle_bits,
+                        ),
+                    )
 
-        # Dictionary mode: first bit is '1'.
-        if prefix and prefix[0] == "1":
-            body_partial = prefix[1:]
-            for pad in range(0, max_padding_bits + 1):
-                extended = body_partial + ("0" * pad)
-                candidate = _decompress_dictionary_bitstream(extended, dictionary)
-                if candidate is None:
-                    continue
-                check = compress_payload(candidate, dictionary)
-                if not _accepts(candidate, check, b_comment):
-                    continue
-                cfull = check.get("compressed", "")
-                assert isinstance(cfull, str)
-                meta = {
-                    "comment_bits": b_comment,
-                    "angle_bits": angle_bits,
-                    "lc": lc,
-                    "la": la,
-                    "method": check.get("method"),
-                }
-                score = len(cfull)
-                if best is None or score < best[2]:
-                    best = (candidate, meta, score)
+            # Dictionary mode: first bit is '1'.
+            if prefix and prefix[0] == "1":
+                body_partial = prefix[1:]
+                for pad in range(0, max_padding_bits + 1):
+                    candidate = _decompress_dictionary_bitstream(
+                        body_partial + ("0" * pad),
+                        dictionary,
+                    )
+                    if candidate is None:
+                        continue
+                    best = _shorter_recovery(
+                        best,
+                        _recovery_candidate(
+                            candidate,
+                            dictionary=dictionary,
+                            lc=lc,
+                            la=la,
+                            prefix=prefix,
+                            comment_bits=b_comment,
+                            angle_bits=angle_bits,
+                        ),
+                    )
 
     if best is None:
         return None

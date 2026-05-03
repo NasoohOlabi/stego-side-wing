@@ -1,8 +1,8 @@
-# stego-side-wing
+﻿# stego-side-wing
 
 Python backend and workflow runtime for the stego pipelines.
 
-Contributor notes: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+Contributor notes: **[docs/development/contributing.md](docs/development/contributing.md)**.
 
 ## Requirements
 
@@ -34,19 +34,53 @@ uv run python src/API.py --dev --host 127.0.0.1 --port 5001
 
 You can also enable dev mode with `API_DEBUG=1`.
 
-HTTP contract for `/api/v1/*` (workflows, tools, metrics, state): **[docs/api-spec.md](docs/api-spec.md)**. Workflow LLM templates live in `config/workflow_llm_prompts.json` and are exposed at `GET` / `PUT` / `POST …/reset` under `/api/v1/prompts/workflow-llm` (see **Concepts → Workflow LLM prompts** and **State** in that doc).
+HTTP contract for `/api/v1/*` (workflows, tools, metrics, state): **[docs/reference/api-spec.md](docs/reference/api-spec.md)**. Workflow LLM templates live in `config/workflow_llm_prompts.json` and are exposed at `GET` / `PUT` / `POST â€¦/reset` under `/api/v1/prompts/workflow-llm` (see **Concepts â†’ Workflow LLM prompts** and **State** in that doc).
 
 ## Metrics (perplexity, KL/JSD)
 
-- **Reports directory:** `<repo>/metrics` — timestamped JSON files from perplexity and divergence runs.
+- **Reports directory:** `<repo>/metrics` â€” timestamped JSON files from perplexity and divergence runs.
 - **CLI (repo root):** `uv run python scripts/avg_perplexity.py` and `uv run python scripts/avg_kld.py` (`-h` for options). Defaults write under `metrics/`.
-- **API:** `POST /api/v1/tools/metrics/perplexity`, `POST /api/v1/tools/metrics/divergence`, `GET /api/v1/tools/metrics/history` — see **[docs/api-spec.md](docs/api-spec.md)** (Tools → metrics). `GET /api/v1/state/paths` includes `metrics.dir`.
-- **Note:** Perplexity evaluation needs `torch` and `transformers` — install with `uv sync --extra metrics` (see `pyproject.toml` `[project.optional-dependencies]`; divergence does not need them).
+- **API:** `POST /api/v1/tools/metrics/perplexity`, `POST /api/v1/tools/metrics/divergence`, `GET /api/v1/tools/metrics/history` â€” see **[docs/reference/api-spec.md](docs/reference/api-spec.md)** (Tools â†’ metrics). `GET /api/v1/state/paths` includes `metrics.dir`.
+- **Note:** Perplexity evaluation needs `torch` and `transformers` â€” install with `uv sync --extra metrics` (see `pyproject.toml` `[project.optional-dependencies]`; divergence does not need them).
 
 ## Run tests
 
 ```bash
 uv run pytest
+```
+
+## Testing, Pareto search, and sample generation
+
+Runbook and artifact layout: [docs/results/workload-runs-and-artifacts.md](docs/results/workload-runs-and-artifacts.md).
+
+The usual checks are:
+
+- Targeted pytest for touched modules first.
+- Full validation with `uv run pytest -q` for non-trivial edits.
+- Strict type checks with `uv run pyright`.
+- Pareto screening with `uv run python scripts/run_pareto_search.py`.
+- Synthetic sample generation with `uv run python scripts/run_encoding_config_e2e.py`.
+- Real sample generation with `uv run python scripts/run_actual_workload_e2e.py`.
+
+How to view latest workload results quickly (PowerShell):
+
+```powershell
+# Latest progress log
+$log = Get-ChildItem metrics/automation_logs -Filter 'pareto_security_retry_rating_*.progress.jsonl' |
+  Sort-Object LastWriteTimeUtc -Descending |
+  Select-Object -First 1
+$log.FullName
+
+# Tail progress/events
+Get-Content $log.FullName -Tail 40
+
+# Key run milestones and failures
+Select-String -Path $log.FullName -Pattern 'actual_workload_run_complete|profile_complete|sample_failed'
+
+# Latest run directory
+Get-ChildItem metrics/e2e_runs -Directory |
+  Sort-Object LastWriteTimeUtc -Descending |
+  Select-Object -First 1 FullName, LastWriteTimeUtc
 ```
 
 ## Lint and format
@@ -90,8 +124,8 @@ Some endpoints/pipelines require provider credentials (for example):
 - `OPENAI_API_KEY`
 - `GOOGLE_PALM_API_KEY` (Generative Language API / AI Studio; alias: `GOOGLE_AI_API_KEY` if `GOOGLE_PALM_API_KEY` is unset)
 - `GROQ_API_KEY`
-- `WORKFLOW_LLM_BACKEND` — `ai_studio` (default; aliases `google` / `gemini`) or `lm_studio` for workflow pipelines (`LLMAdapter` → Google `generateContent` when not `lm_studio`)
-- `GOOGLE_AI_STUDIO_MODEL` — model id when using Google backend (default `gemma-4-26b-a4b-it`)
+- `WORKFLOW_LLM_BACKEND` â€” `ai_studio` (default; aliases `google` / `gemini`) or `lm_studio` for workflow pipelines (`LLMAdapter` â†’ Google `generateContent` when not `lm_studio`)
+- `GOOGLE_AI_STUDIO_MODEL` â€” model id when using Google backend (default `gemma-4-26b-a4b-it`)
 - `LM_STUDIO_URL`
 - `LM_STUDIO_API_TOKEN`
 - `GOOGLE_CSE_ID`
@@ -99,6 +133,7 @@ Some endpoints/pipelines require provider credentials (for example):
 - `SCRAPINGDOG_API_KEY`
 - `OLLAMA_API_KEY`
 - `NEWS_API_KEY`
-- `DOUBLE_PROCESS_VALIDATION_ROOT` — optional base directory for double-process dedicated caches: `pass_1/` and `pass_2/` each contain their own `url_cache/`, `angles_cache/`, and `research_terms_cache.db` (default: `datasets/double_process_validation` under the repo)
+- `DOUBLE_PROCESS_VALIDATION_ROOT` â€” optional base directory for double-process dedicated caches: `pass_1/` and `pass_2/` each contain their own `url_cache/`, `angles_cache/`, and `research_terms_cache.db` (default: `datasets/double_process_validation` under the repo)
 
 Use a local `.env` file (loaded by `python-dotenv`) for development.
+

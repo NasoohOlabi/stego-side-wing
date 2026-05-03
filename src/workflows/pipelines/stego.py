@@ -8,11 +8,20 @@ from uuid import uuid4
 
 from loguru import logger
 
-from infrastructure.config import resolve_workflow_llm_provider_and_model
+from infrastructure.config import (
+    get_workflow_encoding_secret,
+    get_workflow_encoding_settings,
+    get_workflow_payload_transform,
+    get_workflow_stego_default_max_retries,
+    get_workflow_stego_generation_mode,
+    get_workflow_stego_llm_temperature,
+    get_workflow_stego_prompt_style,
+    get_workflow_stego_sample_angle_count,
+    resolve_workflow_llm_provider_and_model,
+)
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
-from workflows.llm_temperatures import STEGO_CYCLE_LLM_TEMPERATURE
 from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
 from workflows.utils import stego_codec
 from workflows.utils.output_results_shape import (
@@ -32,6 +41,12 @@ from workflows.utils.stego_codec import (
     compress_payload as codec_compress_payload,
 )
 from workflows.utils.stego_codec import (
+    embed_invisible_payload,
+)
+from workflows.utils.stego_codec import (
+    protect_payload,
+)
+from workflows.utils.stego_codec import (
     embed_in_angle_selection as codec_embed_in_angle_selection,
 )
 from workflows.utils.stego_codec import (
@@ -40,8 +55,11 @@ from workflows.utils.stego_codec import (
 from workflows.utils.stego_codec import (
     flatten_comments,
 )
+from workflows.utils.stego_codec import (
+    strip_invisible_payload,
+)
 from workflows.utils.protocol_utils import stable_hash
-from workflows.utils.workflow_llm_prompts import get_prompts
+from workflows.utils.workflow_llm_prompts import stego_encode_prompts_for_style
 
 # Backward-compatible names for tests and callers.
 MAX_LITERAL_LEN = stego_codec.MAX_LITERAL_LEN
@@ -133,11 +151,90 @@ def _angle_summary(angle: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def _anchor_comment_body(post_augmentation: dict[str, Any] | None) -> str:
+    if not isinstance(post_augmentation, dict):
+        return ""
+    chain = post_augmentation.get("commentEmbedding", {}).get("pickedCommentChain", [])
+    if not isinstance(chain, list):
+        return ""
+    for comment in reversed(chain):
+        if isinstance(comment, dict) and isinstance(comment.get("body"), str):
+            body = " ".join(comment["body"].split())
+            if body:
+                return body
+    return ""
+
+
+def _anchor_reply_cue(tangent: str, quote: str, category: str) -> str:
+    haystack = f"{tangent} {quote} {category}".lower()
+    if any(term in haystack for term in ("immigration", "deport", "ice", "human rights")):
+        return "immigration politics trampling basic rights"
+    if any(term in haystack for term in ("judicial", "justice", "political pressure")):
+        return "political pressure bending the justice system"
+    if any(term in haystack for term in ("labor", "union", "worker", "childcare")):
+        return "working people getting left with no real protection"
+    if any(term in haystack for term in ("coffee", "shop", "poll")):
+        return "treating a serious choice like a casual coffee-shop poll"
+    if any(term in haystack for term in ("dataset", "model", "data", "scraping")):
+        return "bad information turning into bad decisions"
+    return tangent or quote or category or "the bigger issue getting ignored"
+
+
+def _anchor_candidate_text(
+    angle: dict[str, Any],
+    post_augmentation: dict[str, Any] | None = None,
+) -> str:
+    tangent = str(angle.get("tangent") or "").strip()
+    quote = str(angle.get("source_quote") or "").strip()
+    category = str(angle.get("category") or "this issue").strip()
+    last_comment = _anchor_comment_body(post_augmentation)
+    lead = "No, but I get why you ask." if last_comment.endswith("?") else "Yeah, I get why that bothers you."
+    cue = _anchor_reply_cue(tangent, quote, category)
+    return (
+        f"{lead} It feels like {cue}, and it is hard not to be angry about it. "
+        "Personally, I'd rate this about 3/10."
+    )
+
+
 def _text_preview(text: Any, max_len: int = 180) -> str:
     if not isinstance(text, str):
         return ""
     stripped = " ".join(text.split())
     return stripped if len(stripped) <= max_len else f"{stripped[:max_len]}..."
+
+
+def _prompt_style_for_attempt(configured_style: str, retry_count: int) -> str:
+    if configured_style == "natural_then_anchor_retry":
+        return "guided_natural" if retry_count == 0 else "anchored"
+    return configured_style
+
+
+def _extractive_candidate_texts(post: dict[str, Any]) -> list[str]:
+    bodies = []
+    for comment in flatten_comments(post.get("comments", [])):
+        body = comment.get("body")
+        if isinstance(body, str) and body.strip():
+            bodies.append(body.strip())
+    selftext = post.get("selftext", "")
+    if isinstance(selftext, str) and selftext.strip():
+        bodies.append(selftext.strip())
+    return bodies
+
+
+def _extractive_stego_text(post: dict[str, Any], selected_angle: dict[str, Any]) -> str:
+    for candidate in _extractive_candidate_texts(post):
+        if _extractive_angle_matches(candidate, selected_angle):
+            return candidate
+    return ""
+
+
+def _extractive_angle_matches(candidate_text: str, selected_angle: dict[str, Any]) -> bool:
+    visible_text = strip_invisible_payload(candidate_text)
+    for key in ("source_quote", "tangent"):
+        value = selected_angle.get(key)
+        if isinstance(value, str) and value.strip() and value.strip() in visible_text:
+            return True
+    return False
 
 
 def _sender_audit_from_post(
@@ -165,6 +262,9 @@ def _sender_audit_from_post(
             "original_length": compression.get("originalLength"),
             "compressed_hash": stable_hash(compression.get("compressed", "")),
         },
+        "selection_signature": post_augmentation.get("selectionSignature"),
+        "comment_bits": post_augmentation.get("commentBits"),
+        "angle_bits": post_augmentation.get("angleBits"),
     }
 
 
@@ -292,7 +392,8 @@ class StegoPipeline:
         self, post_augmentation: dict[str, Any], post: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         angle_embedding = post_augmentation.get("angleEmbedding", {})
-        candidate_angles = angle_embedding.get("totalAnglesSelectedFirst", [])[:4]
+        sample_count = get_workflow_stego_sample_angle_count()
+        candidate_angles = angle_embedding.get("totalAnglesSelectedFirst", [])[:sample_count]
         needles = [str(a.get("source_quote", "")) for a in candidate_angles if isinstance(a, dict)]
         haystack = post.get("search_results", [])
         if not isinstance(haystack, list):
@@ -316,8 +417,56 @@ class StegoPipeline:
             tangents_db = []
         return samples, tangents_db
 
+    def _encode_extractive_zero_kld(
+        self,
+        *,
+        payload: str,
+        embedded_payload: str,
+        post: dict[str, Any],
+        tag: str | None,
+        sender_audit: dict[str, Any],
+        post_augmentation: dict[str, Any],
+        selected_angle: dict[str, Any],
+        selected_idx: Any,
+    ) -> dict[str, Any] | None:
+        generation_mode = get_workflow_stego_generation_mode()
+        if generation_mode not in {"extractive_zero_kld", "hybrid_extract"}:
+            return None
+        visible_text = _extractive_stego_text(post, selected_angle)
+        if not _is_non_empty_string(visible_text):
+            return None
+        if not _extractive_angle_matches(visible_text, selected_angle):
+            return None
+        stego_text = embed_invisible_payload(visible_text, embedded_payload)
+        sender_audit["payload_carrier"] = "invisible_suffix_utf8"
+        sender_audit["payload_bytes"] = len(payload.encode("utf-8"))
+        sender_audit["embedded_payload_bytes"] = len(embedded_payload.encode("utf-8"))
+        return {
+            "stego_text": stego_text,
+            "post": post,
+            "selected_angle": selected_angle,
+            "angle_index": selected_idx,
+            "succeeded": True,
+            "retry_count": 0,
+            "tag": tag,
+            "sender_audit": sender_audit,
+            "breakdown": {
+                "mode": "extractive_zero_kld",
+                "payload_carrier": "invisible_suffix_utf8",
+                "visible_text_len": len(visible_text),
+                "invisible_payload_bytes": len(embedded_payload.encode("utf-8")),
+                "invisible_payload_bits": len(embedded_payload.encode("utf-8")) * 8,
+                "raw_payload_bytes": len(payload.encode("utf-8")),
+            },
+            "embedding": post_augmentation,
+        }
+
     def _build_prompt(
-        self, sample: dict[str, Any], comment_embedding: dict[str, Any]
+        self,
+        sample: dict[str, Any],
+        comment_embedding: dict[str, Any],
+        *,
+        prompt_style: str,
     ) -> tuple[str, str]:
         context = comment_embedding.get("context", {})
         title = context.get("title", "")
@@ -342,14 +491,17 @@ class StegoPipeline:
                 name = raw_name.strip() if isinstance(raw_name, str) else ""
                 if not name:
                     name = "Unknown"
-                label = "commented" if not rendered else "replyed"
+                label = "commented" if not rendered else "replied"
                 rendered.append(f"{name} {label}:\n{body}")
             if rendered:
                 chain_section = "\n---\n" + "\n---\n".join(rendered)
 
-        enc = get_prompts().stego_encode
+        enc = stego_encode_prompts_for_style(prompt_style)
         prompt = enc.user_template.format(
             best_match=str(sample.get("best_match", "")),
+            target_category=str(sample.get("category", "")),
+            target_tangent=str(sample.get("tangent", "")),
+            target_source_quote=str(sample.get("source_quote", "")),
             title=title,
             author=author,
             selftext=selftext,
@@ -358,6 +510,7 @@ class StegoPipeline:
         system_message = enc.system_template.format(
             tangent=str(sample.get("tangent", "")),
             category=str(sample.get("category", "")),
+            source_quote=str(sample.get("source_quote", "")),
         )
         return prompt, system_message
 
@@ -366,6 +519,7 @@ class StegoPipeline:
         sample: dict[str, Any],
         comment_embedding: dict[str, Any],
         *,
+        prompt_style: str,
         sample_index: int = 0,
         encode_run_id: str = "",
     ) -> list[str]:
@@ -378,7 +532,11 @@ class StegoPipeline:
                 return "\n".join(lines[1:-1]).strip()
             return stripped
 
-        prompt, system_message = self._build_prompt(sample, comment_embedding)
+        prompt, system_message = self._build_prompt(
+            sample,
+            comment_embedding,
+            prompt_style=prompt_style,
+        )
         _stego_log_bind("prompt").info(
             "category={} tangent={} source_quote={}",
             sample.get("category"),
@@ -394,7 +552,7 @@ class StegoPipeline:
             system_message=system_message,
             model=model,
             provider=provider,
-            temperature=STEGO_CYCLE_LLM_TEMPERATURE,
+            temperature=get_workflow_stego_llm_temperature(),
         )
         llm_wall_ms = _elapsed_ms_since(t_llm)
         meta = self.llm.last_call_metadata or {}
@@ -560,7 +718,7 @@ class StegoPipeline:
         payload: str,
         post: dict[str, Any],
         tag: str | None = None,
-        max_retries: int = 4,
+        max_retries: int | None = None,
     ) -> dict[str, Any]:
         """
         Encode payload into post using steganography.
@@ -575,25 +733,65 @@ class StegoPipeline:
         if not isinstance(angles, list) or not angles:
             raise ValueError("Post must have angles")
 
+        resolved_max_retries = (
+            get_workflow_stego_default_max_retries() if max_retries is None else max_retries
+        )
+        payload_transform = get_workflow_payload_transform()
+        embedded_payload = protect_payload(
+            payload,
+            transform=payload_transform,
+            secret=get_workflow_encoding_secret(),
+        )
         post_id = post.get("id")
         encode_run_id = uuid4().hex
         t_encode = time.perf_counter()
         _stego_log_bind("start").bind(stego_encode_run_id=encode_run_id).info(
-            "post_id={} payload_len={} max_retries={}",
+            "post_id={} payload_len={} max_retries={} encoding_profile={}",
             post_id,
             len(payload),
-            max_retries,
+            resolved_max_retries,
+            get_workflow_encoding_settings().get("encoding_profile"),
         )
 
         t_aug = time.perf_counter()
         post_augmentation = self._augment_post(payload, post)
         sender_audit = _sender_audit_from_post(post, post_augmentation)
+        sender_audit["encoding"] = get_workflow_encoding_settings()
+        sender_audit["payload_transform"] = payload_transform
+        sender_audit["payload_carrier"] = "invisible_suffix_utf8"
+        sender_audit["raw_payload_bytes"] = len(payload.encode("utf-8"))
+        sender_audit["embedded_payload_bytes"] = len(embedded_payload.encode("utf-8"))
         post_augmentation["senderAudit"] = sender_audit
         augment_ms = _elapsed_ms_since(t_aug)
         _stego_log_bind("timing", timing_phase="augment_post").bind(
             stego_encode_run_id=encode_run_id,
             elapsed_ms=augment_ms,
         ).info("post_id={} elapsed_ms={}", post_id, augment_ms)
+
+        selected_angle = post_augmentation["angleEmbedding"].get("selectedAngle", {})
+        selected_idx = selected_angle.get("idx")
+        extractive_result = self._encode_extractive_zero_kld(
+            payload=payload,
+            embedded_payload=embedded_payload,
+            post=post,
+            tag=tag,
+            sender_audit=sender_audit,
+            post_augmentation=post_augmentation,
+            selected_angle=selected_angle,
+            selected_idx=selected_idx,
+        )
+        if extractive_result is not None:
+            _log_encode_timing_complete(
+                encode_run_id=encode_run_id,
+                post_id=post_id,
+                augment_ms=augment_ms,
+                build_samples_ms=0,
+                encode_total_ms=_elapsed_ms_since(t_encode),
+                succeeded=True,
+                retry_count=0,
+                timing_outcome="extractive_zero_kld",
+            )
+            return extractive_result
 
         t_samp = time.perf_counter()
         samples, tangents_db = self._build_samples(post_augmentation, post)
@@ -641,20 +839,21 @@ class StegoPipeline:
                 "embedding": post_augmentation,
             }
 
-        selected_angle = post_augmentation["angleEmbedding"].get("selectedAngle", {})
-        selected_idx = selected_angle.get("idx")
         retry_count = 0
         last_breakdown: dict[str, Any] = {}
+        configured_prompt_style = get_workflow_stego_prompt_style()
 
-        while retry_count <= max_retries:
+        while retry_count <= resolved_max_retries:
             try:
+                prompt_style = _prompt_style_for_attempt(configured_prompt_style, retry_count)
                 t_attempt = time.perf_counter()
                 _stego_log_bind("attempt").info(
-                    "post_id={} attempt={}/{} selected_idx={}",
+                    "post_id={} attempt={}/{} selected_idx={} prompt_style={}",
                     post_id,
                     retry_count + 1,
-                    max_retries + 1,
+                    resolved_max_retries + 1,
                     selected_idx,
+                    prompt_style,
                 )
                 encoded_results: list[dict[str, Any]] = []
                 t_gen = time.perf_counter()
@@ -662,6 +861,7 @@ class StegoPipeline:
                     texts = self._generate_stego_texts(
                         sample=sample,
                         comment_embedding=post_augmentation["commentEmbedding"],
+                        prompt_style=prompt_style,
                         sample_index=sidx,
                         encode_run_id=encode_run_id,
                     )
@@ -670,6 +870,7 @@ class StegoPipeline:
                             "category": sample.get("category"),
                             "source_quote": sample.get("source_quote"),
                             "tangent": sample.get("tangent"),
+                            "prompt_style": prompt_style,
                             "texts": texts,
                         }
                     )
@@ -714,11 +915,13 @@ class StegoPipeline:
                 )
 
                 if validation.get("succeeded"):
-                    stego_text = validation.get("stegoText")
-                    if not _is_non_empty_string(stego_text):
+                    visible_text = validation.get("stegoText")
+                    if not _is_non_empty_string(visible_text):
                         raise RuntimeError(
                             "Cross-validation reported success with empty stego text."
                         )
+                    visible_text = str(visible_text)
+                    stego_text = embed_invisible_payload(visible_text, embedded_payload)
                     _stego_log_bind("success").info(
                         "post_id={} attempt={} success_candidate={} decoded_indices={}",
                         post_id,
@@ -760,7 +963,57 @@ class StegoPipeline:
                     selected_idx,
                     validation.get("decodedIndices", []),
                 )
-                if retry_count >= max_retries:
+                if retry_count >= resolved_max_retries:
+                    anchor_text = _anchor_candidate_text(selected_angle, post_augmentation)
+                    anchor_validation = self._cross_validate(
+                        candidate_texts=[anchor_text],
+                        few_shots=few_shots,
+                        tangents_db=tangents_db,
+                        selected_angle=selected_angle,
+                        encode_run_id=encode_run_id,
+                    )
+                    if anchor_validation.get("succeeded"):
+                        _stego_log_bind("validation").warning(
+                            "post_id={} attempt={} recovered_with_anchor_fallback",
+                            post_id,
+                            retry_count + 1,
+                        )
+                        _log_encode_timing_complete(
+                            encode_run_id=encode_run_id,
+                            post_id=post_id,
+                            augment_ms=augment_ms,
+                            build_samples_ms=build_samples_ms,
+                            encode_total_ms=_elapsed_ms_since(t_encode),
+                            succeeded=True,
+                            retry_count=retry_count,
+                            timing_outcome="anchor_fallback",
+                        )
+                        encoded_results.append(
+                            {
+                                "category": selected_angle.get("category"),
+                                "source_quote": selected_angle.get("source_quote"),
+                                "tangent": selected_angle.get("tangent"),
+                                "prompt_style": "anchor_fallback",
+                                "texts": [anchor_text],
+                                "generation_mode": "anchor_fallback",
+                            }
+                        )
+                        return {
+                            "stego_text": embed_invisible_payload(anchor_text, embedded_payload),
+                            "post": post,
+                            "selected_angle": selected_angle,
+                            "angle_index": selected_idx,
+                            "succeeded": True,
+                            "retry_count": retry_count,
+                            "tag": tag,
+                            "sender_audit": sender_audit,
+                            "embedding": post_augmentation,
+                            "encoded_samples": encoded_results,
+                            "decoded_indices": anchor_validation.get("decodedIndices", []),
+                            "validation_details": anchor_validation.get(
+                                "validationDetails"
+                            ),
+                        }
                     error_details = {
                         "reason": (
                             "None of the generated primary candidate texts decoded to the selected angle."
@@ -808,7 +1061,7 @@ class StegoPipeline:
                     retry_count + 1,
                     type(exc).__name__,
                 )
-                if retry_count >= max_retries:
+                if retry_count >= resolved_max_retries:
                     _log_encode_timing_complete(
                         encode_run_id=encode_run_id,
                         post_id=post_id,

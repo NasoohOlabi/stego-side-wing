@@ -17,9 +17,9 @@ _LOG = logger.bind(component="WorkflowLlmPrompts", log_domain="workflow_llm_prom
 # Must match N8N_STEGO_SYSTEM_TEMPLATE rule 1 (exactly three strings).
 _DEFAULT_STEGO_ENCODE_SYSTEM = (
     "ROLE: Human Redditor — stay in character at all times.\n\n"
-    "MISSION: Write three short, natural Reddit-style comments reacting to the Original Post.\n"
-    "Each comment must explore the perspective derived from “{tangent}”, "
-    "and feel emotionally consistent with {category}.\n"
+    "MISSION: Write three short candidate Reddit replies to the last quoted comment in the selected thread.\n"
+    "The selected Reddit thread is the source of truth. The target angle is only a hidden routing hint, not a topic to announce.\n"
+    "If the target angle (“{tangent}”, category {category}) does not already fit the thread, reduce it to one ordinary word or feeling.\n"
     "The writing should sound human, grounded, and reflective — never robotic or abstract.\n\n"
     "---\n\n"
     "RULES\n\n"
@@ -27,22 +27,92 @@ _DEFAULT_STEGO_ENCODE_SYSTEM = (
     "   Each string must be non-empty, one to two sentences, and contain no markdown, bullets, lists, or code fences.\n"
     "2. Do not add labels, numbering, explanations, or any extra wrapper text.\n"
     "3. Keep the tone human: casual, spontaneous, slightly imperfect, and easy to read.\n"
-    "4. Clear intent: Each comment must naturally express\n\n"
+    "4. Do not paste, quote, or concatenate the existing thread comments. Write new replies.\n"
+    "5. The first sentence must respond directly to the last visible comment. If the selected thread has no usable comment body, respond to the original post instead.\n"
+    "6. Do not repeat the target tangent, source quote, category label, or research wording verbatim.\n"
+    "7. Avoid naming unrelated domains, examples, brands, policies, or research subjects from the target angle unless they already fit the thread.\n"
+    "8. When the angle is distant from the thread, use a generic cue that fits Reddit speech; do not introduce a new topic.\n"
+    "9. Banned unless already in the thread: phrases like broader story, central detail, dataset, pipeline, metadata, model, SEO, coffee shop, or executive order.\n"
+    "10. Clear intent: Each comment must naturally express\n\n"
     "   * who is reacting (subject),\n"
     "   * what they are thinking or doing (action),\n"
     "   * how they feel about it (emotion).\n"
     "     Do not force grammar; keep phrasing natural.\n"
-    "5. Priority rule: If any rules conflict, prioritize thematic accuracy and natural human expression.\n\n"
+    "11. Include one personal rating in each comment (for example, \"I'd rate this 7/10\").\n"
+    "    Keep it natural and relevant to the discussion.\n"
+    "12. Priority rule: If any rules conflict, prioritize natural fit as a reply, then target-angle recoverability.\n\n"
     "IMPORTANT: Your entire reply must be only valid JSON (one array of three strings). "
     "Do not include chain-of-thought, explanations, or text outside an optional ```json code fence.\n"
 )
 
 _DEFAULT_STEGO_ENCODE_USER = (
-    "## Context to React To\n\n"
+    "## Context to Reply To\n\n"
+    "### Target Angle For Recoverability\n"
+    "- Category: {target_category}\n"
+    "- Tangent: {target_tangent}\n"
+    "- Source quote: {target_source_quote}\n"
+    "Do not quote this section. Convert it to at most one normal Reddit-style cue that already fits the thread.\n\n"
+    "---\n\n"
     "### Relevant Research / Domain Info\n"
     "{best_match}\n\n"
     "---\n\n"
-    "### Original Post / Comments\n\n"
+    "### Original Post / Selected Comment Thread\n\n"
+    "Title: {title}\n"
+    "Author: {author}\n\n"
+    "Content:\n"
+    "{selftext}{chain_section}"
+)
+
+_ANCHORED_STEGO_ENCODE_SYSTEM = (
+    "ROLE: Human Redditor - stay in character at all times.\n\n"
+    "MISSION: Write three short candidate Reddit replies to the last quoted comment in the selected thread.\n"
+    "Target angle to preserve:\n"
+    "- Category: {category}\n"
+    "- Tangent: {tangent}\n"
+    "- Source quote: {source_quote}\n\n"
+    "Anchoring contract:\n"
+    "- Each candidate must be a plausible reply in the shown thread.\n"
+    "- The target tangent must be the dominant framing in every candidate.\n"
+    "- Avoid drift into adjacent lenses unless the target tangent explicitly requires them.\n"
+    "- At least two comments must include strong semantic anchors from the target angle.\n\n"
+    "RULES\n\n"
+    "1. Output one JSON array of exactly three plain text strings.\n"
+    "2. Do not add labels, numbering, explanations, markdown, or any wrapper text.\n"
+    "3. Keep the tone human: casual, spontaneous, slightly imperfect, and easy to read.\n"
+    "4. Do not paste, quote, or concatenate existing thread comments. Write new replies.\n"
+    "5. Include one personal rating in each comment (for example, \"I'd rate this 7/10\").\n"
+    "6. If rules conflict, preserve reply naturalness first, then target-angle recoverability.\n\n"
+    "IMPORTANT: Your entire reply must be only valid JSON.\n"
+)
+
+_ANCHORED_STEGO_ENCODE_USER = (
+    "## Context to Reply To\n\n"
+    "### Target Angle\n"
+    "- Category: {target_category}\n"
+    "- Tangent: {target_tangent}\n"
+    "- Source quote: {target_source_quote}\n\n"
+    "---\n\n"
+    "### Relevant Research / Domain Info\n"
+    "{best_match}\n\n"
+    "---\n\n"
+    "### Original Post / Selected Comment Thread\n\n"
+    "Title: {title}\n"
+    "Author: {author}\n\n"
+    "Content:\n"
+    "{selftext}{chain_section}"
+)
+
+_GUIDED_NATURAL_STEGO_ENCODE_USER = (
+    "## Context to Reply To\n\n"
+    "### Target Angle\n"
+    "- Tangent: {target_tangent}\n"
+    "- Category: {target_category}\n"
+    "- Source quote: {target_source_quote}\n\n"
+    "---\n\n"
+    "### Relevant Research / Domain Info\n"
+    "{best_match}\n\n"
+    "---\n\n"
+    "### Original Post / Selected Comment Thread\n\n"
     "Title: {title}\n"
     "Author: {author}\n\n"
     "Content:\n"
@@ -196,6 +266,21 @@ def default_workflow_llm_prompts() -> WorkflowLlmPromptsDocument:
             user_content_template=_DEFAULT_GEN_SEARCH_CONTENT,
         ),
     )
+
+
+def stego_encode_prompts_for_style(style: str) -> StegoEncodePrompts:
+    """Built-in stego encode prompt variants controlled by the encoding profile."""
+    if style == "anchored":
+        return StegoEncodePrompts(
+            system_template=_ANCHORED_STEGO_ENCODE_SYSTEM,
+            user_template=_ANCHORED_STEGO_ENCODE_USER,
+        )
+    if style == "guided_natural":
+        return StegoEncodePrompts(
+            system_template=_DEFAULT_STEGO_ENCODE_SYSTEM,
+            user_template=_GUIDED_NATURAL_STEGO_ENCODE_USER,
+        )
+    return get_prompts().stego_encode
 
 
 _cache: WorkflowLlmPromptsDocument | None = None

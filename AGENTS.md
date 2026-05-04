@@ -1,6 +1,9 @@
 ﻿# Agent rules
 
 
+- **LLM prompt red line:** Never change workflow/system LLM prompts without double-checking with the user first. Any edit to prompt text in `config/workflow_llm_prompts.json`, `src/workflows/utils/workflow_llm_prompts.py`, or related prompt files requires explicit confirmation twice before making the change.
+- **Local/dev API assumption:** This repository is treated as local/dev-only by default. Do not repeatedly raise missing auth on admin/state endpoints as a blocking issue unless the user indicates non-local exposure (LAN/public deploy, shared host, reverse proxy, or cloud runtime).
+
 # Project
 
 **stego-side-wing** â€” Python backend and workflow runtime for stego pipelines. Package manager: **uv** (`pyproject.toml`, `uv.lock`). Python **3.13+**.
@@ -39,6 +42,9 @@ One switch chooses how most workflow and pipeline code talks to an LLM:
 - **Sender** path: embed payload into workflow output (e.g. `StegoPipeline`, `workflows.utils.stego_codec.augment_post` and related pure functions).
 - **Receiver** path: locate senderâ€™s stego comment, `ReceiverPipeline.rebuild_context`, then `decode_payload`.
 - **Shared contract** (must stay consistent across both sides): `src/workflows/utils/stego_codec.py` â€” not alternate encoding rules in pipelines beyond I/O and orchestration.
+- **Forbidden carrier rule**: Never embed payloads using zero-width, invisible, control-format, homoglyph, or otherwise non-rendering Unicode characters. Generated `stego_text` / `stegoText` must be ordinary visible text.
+- **Prompt/encoding hygiene rule**: Avoid mojibake and accidental character corruption in prompts or generated stego text (for example `â€”`, `â€œ`, replacement glyphs, malformed Unicode, or unintended hidden characters). These can severely degrade steganography reliability by shifting tokenization and sender/receiver alignment.
+- **Generated-text rule**: Do not inject explicit ratings, quality scores, or quality opinions into stego text unless the source thread naturally asks for one.
 - After codec or pipeline contract changes: run targeted tests (`test_stego_codec.py`, `test_receiver_pipeline.py`, `test_pipeline_stego.py`, `test_api_v1_*`) and keep sender/receiver symmetry in mind (details in senderâ€“receiver rule).
 
 ## Imports and entrypoints

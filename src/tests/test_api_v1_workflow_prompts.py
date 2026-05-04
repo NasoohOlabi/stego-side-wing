@@ -80,6 +80,21 @@ def test_prompts_workflow_llm_put_invalid(client):
     assert response.get_json()["ok"] is False
 
 
+def test_prompts_workflow_llm_put_rejects_unknown_keys(client):
+    from workflows.utils import workflow_llm_prompts as wlp
+
+    doc = wlp.default_workflow_llm_prompts().model_dump(mode="json")
+    doc["unknown_root_field"] = "x"
+
+    response = client.put(
+        "/api/v1/prompts/workflow-llm",
+        data=json.dumps({"prompts": doc}),
+        content_type="application/json",
+    )
+    assert response.status_code == 400
+    assert response.get_json()["ok"] is False
+
+
 def test_prompts_workflow_llm_reset(client, tmp_path, monkeypatch):
     from app.routes import api_v1_routes
     from workflows.utils import workflow_llm_prompts as wlp

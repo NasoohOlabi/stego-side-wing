@@ -73,8 +73,25 @@ TRANSIENT_SAMPLE_ERROR_MARKERS = (
     "SSLError",
     "ProtocolError",
 )
+RETRYABLE_STEGO_OUTPUT_ERROR_MARKERS = (
+    "Stego LLM output must be valid JSON",
+)
 DEFAULT_MAX_TRANSIENT_SAMPLE_RETRIES = 3
 DEFAULT_TRANSIENT_SAMPLE_RETRY_BASE_DELAY_SECONDS = 30.0
+INFRA_ERROR_MARKERS = (
+    "404",
+    "500",
+    "502",
+    "503",
+    "504",
+    "timeout",
+    "timed out",
+    "connection",
+    "name resolution",
+    "permission_denied",
+    "api_key",
+    "service unavailable",
+)
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -158,6 +175,12 @@ def _is_retryable_sample_error(exc: BaseException) -> bool:
     message = " ".join(str(part) for part in exc.args) if exc.args else str(exc)
     normalized = message.lower()
     return any(marker.lower() in normalized for marker in TRANSIENT_SAMPLE_ERROR_MARKERS)
+
+
+def _is_retryable_stego_output_error(exc: BaseException) -> bool:
+    message = " ".join(str(part) for part in exc.args) if exc.args else str(exc)
+    normalized = message.lower()
+    return any(marker.lower() in normalized for marker in RETRYABLE_STEGO_OUTPUT_ERROR_MARKERS)
 
 
 def _transient_sample_retry_delay_seconds(
@@ -298,13 +321,18 @@ def _run_sample(
             return entry
         except Exception as exc:
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
-            if attempt_index < max_transient_sample_retries and _is_retryable_sample_error(exc):
+            should_retry = _is_retryable_sample_error(exc) or _is_retryable_stego_output_error(exc)
+            if attempt_index < max_transient_sample_retries and should_retry:
                 wait_seconds = _transient_sample_retry_delay_seconds(
                     attempt_index,
-                    base_delay_seconds=transient_sample_retry_base_delay_seconds,
+                    base_delay_seconds=(
+                        0.0
+                        if _is_retryable_stego_output_error(exc)
+                        else transient_sample_retry_base_delay_seconds
+                    ),
                 )
                 logger.bind(component="ActualWorkloadE2E").warning(
-                    "sample_retrying_transient_failure",
+                    "sample_retrying_after_failure",
                     profile=variant.base_profile,
                     variant=variant.name,
                     post_id=post_id,
@@ -313,6 +341,11 @@ def _run_sample(
                     sample_attempt=attempt_index + 1,
                     transient_retry_count=attempt_index,
                     wait_seconds=wait_seconds,
+                    retryable_failure_kind=(
+                        "stego_output"
+                        if _is_retryable_stego_output_error(exc)
+                        else "transient"
+                    ),
                     error=f"{type(exc).__name__}: {exc}",
                 )
                 if wait_seconds > 0:
@@ -474,6 +507,110 @@ def _run_profile(
         return summary
 
 
+def _classify_failure(error_text: str) -> str:
+    normalized = error_text.lower()
+    if any(marker in normalized for marker in INFRA_ERROR_MARKERS):
+        return "infrastructure_failure"
+    if "decoded a different payload" in normalized or "decode" in normalized:
+        return "decode_failure"
+    if "no usable angles" in normalized or "not found" in normalized:
+        return "data_failure"
+    return "generation_failure"
+
+
+def _build_progress_payload(
+    *,
+    run_id: str,
+    run_dir: Path,
+    samples_per_profile: int,
+    selected_post_ids: Sequence[str],
+    variant_names: Sequence[str],
+    profile_summaries: Sequence[dict[str, Any]],
+    summary_path: Path,
+) -> dict[str, Any]:
+    lanes: list[dict[str, Any]] = []
+    total_failures = {
+        "infrastructure_failure": 0,
+        "generation_failure": 0,
+        "decode_failure": 0,
+        "metric_failure": 0,
+        "data_failure": 0,
+        "judge_failure": 0,
+    }
+    for name, lane_summary in zip(variant_names, profile_summaries, strict=False):
+        failures = lane_summary.get("failures")
+        failures_list = failures if isinstance(failures, list) else []
+        classified = {
+            "infrastructure_failure": 0,
+            "generation_failure": 0,
+            "decode_failure": 0,
+            "metric_failure": 0,
+            "data_failure": 0,
+            "judge_failure": 0,
+        }
+        for failure in failures_list:
+            if not isinstance(failure, dict):
+                continue
+            failure_class = _classify_failure(str(failure.get("error") or ""))
+            classified[failure_class] += 1
+            total_failures[failure_class] += 1
+        metrics = lane_summary.get("summary_metrics")
+        quality = metrics.get("quality_metrics") if isinstance(metrics, dict) else {}
+        lanes.append(
+            {
+                "lane_id": name,
+                "lane_type": "variant",
+                "requested": samples_per_profile,
+                "succeeded": int(lane_summary.get("samples_succeeded") or 0),
+                "failed": int(lane_summary.get("samples_failed") or 0),
+                "infrastructure_failures": classified["infrastructure_failure"],
+                "generation_failures": classified["generation_failure"],
+                "decode_failures": classified["decode_failure"],
+                "metric_failures": classified["metric_failure"],
+                "data_failures": classified["data_failure"],
+                "judge_failures": classified["judge_failure"],
+                "receiver_success_rate": (
+                    quality.get("receiver_success_rate") if isinstance(quality, dict) else None
+                ),
+                "matched_post_kl": quality.get("matched_post_kl") if isinstance(quality, dict) else None,
+                "matched_post_jsd": quality.get("matched_post_jsd") if isinstance(quality, dict) else None,
+                "perplexity": quality.get("perplexity") if isinstance(quality, dict) else None,
+                "judge_naturalness_mean": None,
+                "last_updated_utc": datetime.now(UTC).isoformat(),
+            }
+        )
+    any_failed = any(int(item.get("failed") or 0) > 0 for item in lanes)
+    all_met_target = all(int(item.get("succeeded") or 0) >= samples_per_profile for item in lanes)
+    status = "complete" if all_met_target else ("blocked" if any_failed else "running")
+    return {
+        "run_id": run_id,
+        "track": "sample_generation",
+        "status": status,
+        "stage": "pilot" if samples_per_profile <= 25 else "main",
+        "target_successful_samples_per_lane": samples_per_profile,
+        "git_commit": "",
+        "git_branch": "",
+        "git_status_clean": False,
+        "dataset_manifest": {"post_ids": list(selected_post_ids)},
+        "lanes": lanes,
+        "artifacts": {
+            "post_ids": str((run_dir / "post_ids.json").resolve()),
+            "summary": str(summary_path.resolve()),
+            "leaderboard": "",
+            "frontier": "",
+            "judge_samples": "",
+            "latest_heartbeat": str((RUNS_ROOT / "latest_actual_workload_e2e.json").resolve()),
+        },
+        "blockers": [],
+        "next_action": (
+            "Run metrics rerun for failed samples and retry infrastructure failures with same post IDs."
+            if any_failed
+            else "Promote to next sample size stage."
+        ),
+        "failure_totals": total_failures,
+    }
+
+
 def run_actual_workload_e2e(
     *,
     profiles: Sequence[str],
@@ -576,6 +713,17 @@ def run_actual_workload_e2e(
         "profile_summaries": profile_summaries,
     }
     _write_json(resolved_run_dir / "summary.json", summary)
+    _write_json(resolved_run_dir / "post_ids.json", {"post_ids": selected_post_ids})
+    progress = _build_progress_payload(
+        run_id=run_id,
+        run_dir=resolved_run_dir,
+        samples_per_profile=samples_per_profile,
+        selected_post_ids=selected_post_ids,
+        variant_names=variant_names,
+        profile_summaries=profile_summaries,
+        summary_path=resolved_run_dir / "summary.json",
+    )
+    _write_json(resolved_run_dir / "progress.json", progress)
     _write_json(RUNS_ROOT / "latest_actual_workload_e2e.json", summary)
     logger.bind(component="ActualWorkloadE2E").info(
         "actual_workload_run_complete",

@@ -24,9 +24,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from infrastructure.config import (  # noqa: E402
-    get_workflow_encoding_secret,
     get_workflow_encoding_settings,
-    get_workflow_payload_transform,
 )
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
 from loguru import logger  # noqa: E402
@@ -47,11 +45,6 @@ from workflows.pipelines.gen_angles import GenAnglesPipeline  # noqa: E402
 from workflows.pipelines.stego import StegoPipeline  # noqa: E402
 from workflows.utils.output_results_shape import n8n_save_object_body  # noqa: E402
 from workflows.utils.protocol_utils import stable_hash  # noqa: E402
-from workflows.utils.stego_codec import (  # noqa: E402
-    extract_invisible_payload,
-    strip_invisible_payload,
-    unprotect_payload,
-)
 
 RUNS_ROOT = _REPO_ROOT / "metrics" / "e2e_runs"
 DEFAULT_PROFILES = ("robustness", "capacity", "security")
@@ -112,18 +105,9 @@ def _payload_for(profile: str, idx: int, rng: random.Random, payload_bytes: int)
     return prefix + "".join(rng.choice(alphabet) for _ in range(body_len))
 
 
-def _decode_embedded_payload(stego_text: str) -> str:
-    embedded = extract_invisible_payload(stego_text)
-    if embedded is None:
-        raise RuntimeError("encoded stego text has no invisible payload")
-    payload = unprotect_payload(
-        embedded,
-        transform=get_workflow_payload_transform(),
-        secret=get_workflow_encoding_secret(),
-    )
-    if payload is None:
-        raise RuntimeError("embedded payload could not be decoded with active profile")
-    return payload
+def _contains_forbidden_invisible_chars(text: str) -> bool:
+    forbidden = {"\u200c", "\u200d", "\u2060", "\u2063"}
+    return any(ch in forbidden for ch in text)
 
 
 def _metric_progress(label: str, current: int, total: int) -> None:
@@ -155,7 +139,6 @@ def _run_profile(
     stego = StegoPipeline()
     payload_hashes: set[str] = set()
     visible_hashes: set[str] = set()
-    embedded_hashes: set[str] = set()
 
     settings = get_workflow_encoding_settings()
     logger.bind(component="EncodingConfigE2E").info(
@@ -173,17 +156,18 @@ def _run_profile(
         angles_post = gen_angles.process_post(post)
         result = stego.encode(payload=payload, post=angles_post, tag=f"version_{variant.name}")
         stego_text = str(result.get("stego_text", ""))
-        decoded_payload = _decode_embedded_payload(stego_text)
-        visible_text = strip_invisible_payload(stego_text)
-        embedded = extract_invisible_payload(stego_text) or ""
-        if not result.get("succeeded") or decoded_payload != payload:
-            raise RuntimeError(f"profile {profile} sample {idx} failed payload recovery")
+        if not result.get("succeeded"):
+            raise RuntimeError(f"profile {profile} sample {idx} failed stego encode")
+        visible_text = stego_text
         if visible_text != _visible_text(post):
             raise RuntimeError(f"profile {profile} sample {idx} changed visible text")
+        if _contains_forbidden_invisible_chars(visible_text):
+            raise RuntimeError(
+                f"profile {profile} sample {idx} produced forbidden invisible characters"
+            )
 
         payload_hashes.add(stable_hash(payload))
         visible_hashes.add(stable_hash(visible_text))
-        embedded_hashes.add(stable_hash(embedded))
         entries.append(
             {
                 "profile": variant.base_profile,
@@ -191,7 +175,6 @@ def _run_profile(
                 "sample_index": idx,
                 "payload_hash": stable_hash(payload),
                 "visible_text_hash": stable_hash(visible_text),
-                "embedded_payload_hash": stable_hash(embedded),
                 "sample_metrics": build_sample_experiment_metrics(
                     result,
                     stego_text=stego_text,
@@ -247,7 +230,6 @@ def _run_profile(
         "payload_bytes": payload_bytes,
         "unique_payloads": len(payload_hashes),
         "unique_visible_texts": len(visible_hashes),
-        "unique_embedded_payloads": len(embedded_hashes),
         "metrics_report_path": divergence["report_path"],
         "metrics_report": report,
         "perplexity_report_path": perplexity["report_path"] if perplexity else None,

@@ -109,8 +109,22 @@ def _stderr_has_fatal(stderr_path: Path) -> bool:
         tail = stderr_path.read_text(encoding="utf-8", errors="ignore")[-20000:]
     except OSError:
         return False
-    markers = ("Traceback (most recent call last)", "FileExistsError", "RuntimeError", "ValueError")
+    markers = (
+        "Traceback (most recent call last)",
+        "FileExistsError",
+        "RuntimeError",
+        "ValueError",
+        "API_KEY_SERVICE_BLOCKED",
+        "403 PERMISSION_DENIED",
+    )
     return any(m in tail for m in markers)
+
+
+def _backend_env() -> dict[str, str]:
+    backend = os.environ.get("WORKFLOW_LLM_BACKEND") or _read_dotenv_value("WORKFLOW_LLM_BACKEND")
+    if backend and backend.lower() == "lm_studio":
+        return {"WORKFLOW_LLM_BACKEND": "lm_studio"}
+    return {"WORKFLOW_LLM_BACKEND": "ai_studio", **_preferred_google_key_env()}
 
 
 def _start_new_run(reason: str) -> None:
@@ -148,8 +162,7 @@ def _start_new_run(reason: str) -> None:
         cwd=str(REPO_ROOT),
         env={
             **os.environ,
-            "WORKFLOW_LLM_BACKEND": "ai_studio",
-            **_preferred_google_key_env(),
+            **_backend_env(),
         },
         stdout=out,
         stderr=err,
@@ -179,10 +192,11 @@ def main() -> None:
 
     is_stalled = _stale(latest, now)
     has_fatal = _stderr_has_fatal(stderr)
-    # Fatal markers may be historical in long logs; only restart when stalled.
+    if has_fatal:
+        _start_new_run("fatal_error")
+        return
     if is_stalled:
-        reason = "stalled_with_fatal" if has_fatal else "stalled"
-        _start_new_run(reason)
+        _start_new_run("stalled")
         return
 
     _event("healthy", run_dir=str(run_dir), progress_log=str(latest))

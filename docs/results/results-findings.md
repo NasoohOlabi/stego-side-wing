@@ -2,6 +2,29 @@
 
 Generated from existing repo artifacts on 2026-05-01. This is an interpretation of the saved metrics, not a fresh experiment run.
 
+## Status Update (2026-05-03)
+
+Current generated samples are not good enough for final quality claims.
+
+Latest run artifact:
+
+- `metrics/e2e_runs/latest_actual_workload_e2e.json`
+- run timestamp: `2026-05-03T17:32:05Z`
+- requested samples: `300`
+- succeeded: `0`
+- failed: `300`
+
+Primary blocker is infrastructure, not variant logic:
+
+- repeated `404 Client Error` from the configured LM Studio/ngrok endpoint
+- some decode mapping failures mixed into the same failed run
+
+Interpretation:
+
+- This run is invalid for comparing variants.
+- No KLD/JSD/perplexity conclusions should be drawn from this run.
+- It is still valid as evidence that backend health gates sample quality.
+
 ## Executive Summary
 
 The repo has useful metric data, but it is not yet organized as a single final experiment report. Results are split across `metrics/e2e_runs`, `metrics/pareto_runs`, per-variant `summary.json` files, and automation logs.

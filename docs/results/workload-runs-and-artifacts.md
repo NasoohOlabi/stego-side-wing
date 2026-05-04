@@ -31,6 +31,36 @@ This repo keeps validation, Pareto screening, and sample-generation artifacts un
   - Real: `input-angles/`, `dataset/`, `output-results/`, `failures/`, `metrics/`, `summary.json`
 - The latest real-workload summary is also copied to `metrics/e2e_runs/latest_actual_workload_e2e.json`.
 
+### Real-workload smoke command
+
+Run this first after any backend change:
+
+```bash
+uv run python scripts/run_actual_workload_e2e.py \
+  --variant security_legacy \
+  --samples-per-profile 5 \
+  --max-retries 1 \
+  --log-level INFO
+```
+
+### Pilot command (security shortlist)
+
+```bash
+uv run python scripts/run_actual_workload_e2e.py \
+  --variant security_legacy \
+  --variant sec_v2_anchored \
+  --variant sec_v2_natural_then_anchor_retry \
+  --samples-per-profile 25 \
+  --max-retries 1 \
+  --log-level INFO
+```
+
+### Resume policy
+
+- If failures are infra-class (`404`, auth, timeout), fix backend then rerun.
+- Keep post IDs fixed for cross-variant comparability.
+- Use `metrics/e2e_runs/latest_actual_workload_e2e.json` as the first status check after each run.
+
 ## Storage map
 
 - `metrics/e2e_runs/` - sample runs, profile summaries, and per-run summaries.

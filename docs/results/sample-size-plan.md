@@ -270,3 +270,26 @@ Most practical next benchmark:
 3. Target `100` successful real samples per variant.
 4. Add `balanced` as a non-security language-quality baseline.
 5. Generate a final insight report only from that clean run.
+
+## Execution Direction (2026-05-03)
+
+Immediate direction for next runs:
+
+1. Treat backend availability as a hard gate before any multi-variant run.
+2. Run a smoke batch of `5` samples on `security_legacy` only.
+3. If smoke success rate is below `80%`, stop and fix backend routing first.
+4. After smoke passes, run `25` samples for:
+   - `security_legacy`
+   - `sec_v2_anchored`
+   - `sec_v2_natural_then_anchor_retry`
+5. Promote to `100` successful samples per variant only after pilot stability.
+
+Operational pass/fail:
+
+- Pass: no recurring `404` and decode succeeds on successful generations.
+- Fail: recurring `404` or infra failures above `10%` of attempts.
+
+Recovery rule:
+
+- On infra failure, rerun the same post ID for the same variant after backend recovery.
+- Do not replace failed samples with new post IDs during benchmark counting.

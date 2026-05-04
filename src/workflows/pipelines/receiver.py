@@ -20,11 +20,9 @@ from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.stego_codec import (
     build_dictionary,
     build_dictionary_report,
-    extract_invisible_payload,
     flatten_nested_angles,
     recover_payload_bruteforce_comment_bits,
     recover_payload_with_compressed_full,
-    strip_invisible_payload,
     unprotect_payload,
 )
 from workflows.utils.text_utils import flatten_comments
@@ -195,6 +193,16 @@ def _payload_transform_from_audit(sender_audit: dict[str, Any] | None) -> str:
     return get_workflow_payload_transform()
 
 
+def _compressed_full_from_audit(sender_audit: dict[str, Any] | None) -> str | None:
+    if not isinstance(sender_audit, dict):
+        return None
+    compression = sender_audit.get("compression")
+    if not isinstance(compression, dict):
+        return None
+    compressed = compression.get("compressed")
+    return compressed if isinstance(compressed, str) and compressed else None
+
+
 def _decode_configured_payload(protected_payload: str, payload_transform: str) -> str:
     payload = unprotect_payload(
         protected_payload,
@@ -307,8 +315,7 @@ class ReceiverPipeline:
         tangents_db = flatten_nested_angles(rebuilt_post)
         if not tangents_db:
             raise ValueError("Rebuilt post has no angles; cannot decode")
-        visible_stego_text = strip_invisible_payload(stego_text)
-        hidden_payload = extract_invisible_payload(stego_text)
+        visible_stego_text = stego_text
 
         _emit(
             on_progress,
@@ -356,46 +363,6 @@ class ReceiverPipeline:
 
         recovery_meta: dict[str, Any]
         resolved_transform = payload_transform or get_workflow_payload_transform()
-        if hidden_payload is not None:
-            payload = _decode_configured_payload(hidden_payload, resolved_transform)
-            recovery_meta = {
-                "payload_carrier": "invisible_suffix_utf8",
-                "payload_transform": resolved_transform,
-                "payload_bytes": len(payload.encode("utf-8")),
-                "embedded_payload_bytes": len(hidden_payload.encode("utf-8")),
-            }
-            if compressed_full is not None:
-                got = recover_payload_with_compressed_full(
-                    compressed_full,
-                    dictionary,
-                    pre_sender_post,
-                    nested_angles,
-                    authoritative_idx,
-                )
-                if got is None:
-                    raise RuntimeError(
-                        "Visible selection channel does not match the decoded angle index."
-                    )
-                visible_payload, visible_meta = got
-                if visible_payload != payload:
-                    raise RuntimeError(
-                        "Invisible payload does not match the visible selection channel."
-                    )
-                recovery_meta["visible_channel_verified"] = True
-                recovery_meta["visible_comment_bits"] = visible_meta.get("comment_bits")
-                recovery_meta["visible_angle_bits"] = visible_meta.get("angle_bits")
-                recovery_meta["selection_signature"] = (
-                    f"{visible_meta.get('comment_bits', '')}{visible_meta.get('angle_bits', '')}"
-                )
-            else:
-                recovery_meta["visible_channel_verified"] = False
-            info = {
-                "decoded_angle_index": authoritative_idx,
-                "recovery_meta": recovery_meta,
-            }
-            if semantic_decoded_idx != authoritative_idx:
-                info["semantic_decoded_angle_index"] = semantic_decoded_idx
-            return payload, info
         if compressed_full is not None:
             got = recover_payload_with_compressed_full(
                 compressed_full,
@@ -423,6 +390,7 @@ class ReceiverPipeline:
             protected_payload, recovery_meta = got
 
         payload = _decode_configured_payload(protected_payload, resolved_transform)
+        recovery_meta["payload_carrier"] = "selection_channel"
         recovery_meta["payload_transform"] = resolved_transform
         recovery_meta["embedded_payload_bytes"] = len(protected_payload.encode("utf-8"))
         recovery_meta["payload_bytes"] = len(payload.encode("utf-8"))
@@ -465,7 +433,7 @@ class ReceiverPipeline:
         sender_comment_id = str(located.get("id", ""))
         if not sender_comment_id:
             raise ValueError("Located sender comment has no id")
-        visible_stego_text = strip_invisible_payload(stego_text)
+        visible_stego_text = stego_text
 
         located_summary = {
             "id": located.get("id"),
@@ -516,7 +484,7 @@ class ReceiverPipeline:
             rebuilt_post=rebuilt,
             pre_sender_post=pre_sender,
             nested_angles=nested_rebuilt,
-            compressed_full=compressed_full,
+            compressed_full=compressed_full or _compressed_full_from_audit(sender_audit),
             max_padding_bits=max_padding_bits,
             strict_mode=resolved_strict_decode,
             expected_angle_index=sender_audit.get("selected_angle_index")

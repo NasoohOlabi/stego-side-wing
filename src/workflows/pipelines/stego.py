@@ -41,9 +41,6 @@ from workflows.utils.stego_codec import (
     compress_payload as codec_compress_payload,
 )
 from workflows.utils.stego_codec import (
-    embed_invisible_payload,
-)
-from workflows.utils.stego_codec import (
     protect_payload,
 )
 from workflows.utils.stego_codec import (
@@ -54,9 +51,6 @@ from workflows.utils.stego_codec import (
 )
 from workflows.utils.stego_codec import (
     flatten_comments,
-)
-from workflows.utils.stego_codec import (
-    strip_invisible_payload,
 )
 from workflows.utils.protocol_utils import stable_hash
 from workflows.utils.workflow_llm_prompts import stego_encode_prompts_for_style
@@ -192,7 +186,7 @@ def _anchor_candidate_text(
     cue = _anchor_reply_cue(tangent, quote, category)
     return (
         f"{lead} It feels like {cue}, and it is hard not to be angry about it. "
-        "Personally, I'd rate this about 3/10."
+        "That part is what keeps sticking with me."
     )
 
 
@@ -222,17 +216,17 @@ def _extractive_candidate_texts(post: dict[str, Any]) -> list[str]:
 
 
 def _extractive_stego_text(post: dict[str, Any], selected_angle: dict[str, Any]) -> str:
-    for candidate in _extractive_candidate_texts(post):
+    candidates = _extractive_candidate_texts(post)
+    for candidate in candidates:
         if _extractive_angle_matches(candidate, selected_angle):
-            return candidate
+            return "\n".join(candidates)
     return ""
 
 
 def _extractive_angle_matches(candidate_text: str, selected_angle: dict[str, Any]) -> bool:
-    visible_text = strip_invisible_payload(candidate_text)
     for key in ("source_quote", "tangent"):
         value = selected_angle.get(key)
-        if isinstance(value, str) and value.strip() and value.strip() in visible_text:
+        if isinstance(value, str) and value.strip() and value.strip() in candidate_text:
             return True
     return False
 
@@ -258,6 +252,7 @@ def _sender_audit_from_post(
         .get("idx"),
         "compression": {
             "method": compression.get("method"),
+            "compressed": compression.get("compressed"),
             "compressed_length": compression.get("compressedLength"),
             "original_length": compression.get("originalLength"),
             "compressed_hash": stable_hash(compression.get("compressed", "")),
@@ -437,8 +432,8 @@ class StegoPipeline:
             return None
         if not _extractive_angle_matches(visible_text, selected_angle):
             return None
-        stego_text = embed_invisible_payload(visible_text, embedded_payload)
-        sender_audit["payload_carrier"] = "invisible_suffix_utf8"
+        stego_text = visible_text
+        sender_audit["payload_carrier"] = "selection_channel"
         sender_audit["payload_bytes"] = len(payload.encode("utf-8"))
         sender_audit["embedded_payload_bytes"] = len(embedded_payload.encode("utf-8"))
         return {
@@ -452,10 +447,10 @@ class StegoPipeline:
             "sender_audit": sender_audit,
             "breakdown": {
                 "mode": "extractive_zero_kld",
-                "payload_carrier": "invisible_suffix_utf8",
+                "payload_carrier": "selection_channel",
                 "visible_text_len": len(visible_text),
-                "invisible_payload_bytes": len(embedded_payload.encode("utf-8")),
-                "invisible_payload_bits": len(embedded_payload.encode("utf-8")) * 8,
+                "embedded_payload_bytes": len(embedded_payload.encode("utf-8")),
+                "embedded_payload_bits": len(embedded_payload.encode("utf-8")) * 8,
                 "raw_payload_bytes": len(payload.encode("utf-8")),
             },
             "embedding": post_augmentation,
@@ -754,11 +749,11 @@ class StegoPipeline:
         )
 
         t_aug = time.perf_counter()
-        post_augmentation = self._augment_post(payload, post)
+        post_augmentation = self._augment_post(embedded_payload, post)
         sender_audit = _sender_audit_from_post(post, post_augmentation)
         sender_audit["encoding"] = get_workflow_encoding_settings()
         sender_audit["payload_transform"] = payload_transform
-        sender_audit["payload_carrier"] = "invisible_suffix_utf8"
+        sender_audit["payload_carrier"] = "selection_channel"
         sender_audit["raw_payload_bytes"] = len(payload.encode("utf-8"))
         sender_audit["embedded_payload_bytes"] = len(embedded_payload.encode("utf-8"))
         post_augmentation["senderAudit"] = sender_audit
@@ -921,7 +916,7 @@ class StegoPipeline:
                             "Cross-validation reported success with empty stego text."
                         )
                     visible_text = str(visible_text)
-                    stego_text = embed_invisible_payload(visible_text, embedded_payload)
+                    stego_text = visible_text
                     _stego_log_bind("success").info(
                         "post_id={} attempt={} success_candidate={} decoded_indices={}",
                         post_id,
@@ -999,7 +994,7 @@ class StegoPipeline:
                             }
                         )
                         return {
-                            "stego_text": embed_invisible_payload(anchor_text, embedded_payload),
+                            "stego_text": anchor_text,
                             "post": post,
                             "selected_angle": selected_angle,
                             "angle_index": selected_idx,

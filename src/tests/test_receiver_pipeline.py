@@ -7,7 +7,7 @@ from workflows.pipelines.receiver import (
 )
 from workflows.pipelines.receiver import ReceiverPipeline
 from workflows.pipelines.stego import StegoPipeline
-from workflows.utils.stego_codec import augment_post, embed_invisible_payload
+from workflows.utils.stego_codec import augment_post, extract_invisible_payload
 
 
 def test_locate_sender_stego_comment():
@@ -150,7 +150,7 @@ def test_receiver_run_fails_fast_on_context_drift():
     assert out["context_drift"]["mismatches"]
 
 
-def test_receiver_run_recovers_invisible_suffix_payload_without_compressed_full():
+def test_receiver_run_recovers_selection_channel_payload_from_sender_audit():
     pre_sender = {
         "id": "recv3",
         "title": "title",
@@ -161,12 +161,16 @@ def test_receiver_run_recovers_invisible_suffix_payload_without_compressed_full(
             {"source_quote": "visible carrier text", "tangent": "visible carrier text", "category": "cat"},
         ],
     }
-    secret = "payload-" + ("A1B2C3" * 256)
     aug = augment_post("legacy", pre_sender)
     angle_idx = int(aug["angleEmbedding"]["selectedAngle"]["idx"])
-    stego_body = embed_invisible_payload("visible carrier text", secret)
+    stego_body = "visible carrier text"
 
     full_post = dict(pre_sender)
+    full_post["sender_audit"] = {
+        "selected_angle_index": angle_idx,
+        "payload_transform": "plain",
+        "compression": {"compressed": aug["compression"]["compressed"]},
+    }
     full_post["comments"] = [
         {
             "id": "stego_c",
@@ -201,8 +205,9 @@ def test_receiver_run_recovers_invisible_suffix_payload_without_compressed_full(
     )
 
     assert out["succeeded"] is True
-    assert out["payload"] == secret
-    assert out["recovery_meta"]["payload_carrier"] == "invisible_suffix_utf8"
+    assert out["payload"] == "legacy"
+    assert extract_invisible_payload(stego_body) is None
+    assert out["recovery_meta"]["payload_carrier"] == "selection_channel"
 
 
 def test_receiver_run_unwraps_security_profile_payload(

@@ -185,6 +185,7 @@ def unprotect_payload(
 
 @validate_call
 def embed_invisible_payload(visible_text: str, payload: str) -> str:
+    """Legacy migration-only helper. New sender code must not use invisible carriers."""
     payload_bytes = payload.encode("utf-8")
     length_bits = format(len(payload_bytes), f"0{INVISIBLE_PAYLOAD_LENGTH_BITS}b")
     payload_bits = "".join(format(b, "08b") for b in payload_bytes)
@@ -230,12 +231,14 @@ def _decode_invisible_payload_chars(payload_chars: str) -> str | None:
 
 @validate_call
 def strip_invisible_payload(text: str) -> str:
+    """Legacy migration-only helper for cleaning old artifacts."""
     visible, _ = _split_invisible_payload(text)
     return visible
 
 
 @validate_call
 def extract_invisible_payload(text: str) -> str | None:
+    """Legacy migration-only helper for reading old artifacts."""
     _, payload_chars = _split_invisible_payload(text)
     if payload_chars is None:
         return None

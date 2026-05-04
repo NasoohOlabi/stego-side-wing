@@ -106,7 +106,7 @@ def test_recover_with_compressed_full_accepts_modulo_angle_bits():
     assert recovered[1]["angle_bits"] == "11"
 
 
-def test_invisible_payload_roundtrip_preserves_visible_text():
+def test_legacy_invisible_payload_helpers_are_migration_only():
     visible_text = "Distribution-compatible visible text."
     payload = "hidden-" + ("XYZ123" * 256)
 

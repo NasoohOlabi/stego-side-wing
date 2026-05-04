@@ -1,8 +1,8 @@
 """Decode steganographic text back to angle index.
 
 Parity with n8n workflow ``workflows/tWT6U8IK_9oUBlJMRl0oa.json`` (Decode):
-HTTP semantic_search with n=20, then G Decode agent with model gpt-oss-20b
-(``openai/gpt-oss-20b`` via LM Studio / OpenAI-compatible), retries max 5.
+HTTP semantic_search with n=20, then G Decode agent with model qwen3.5-9b
+(``qwen/qwen3.5-9b`` via LM Studio / OpenAI-compatible), retries max 5.
 """
 
 import json
@@ -21,9 +21,8 @@ from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter, strip_redacted_thinking
 from workflows.utils.workflow_llm_prompts import get_prompts
 
-# Must match ``gpt-oss`` node + stego encoder (``stego.STEGO_LLM_MODEL``).
-DECODE_LLM_MODEL = "openai/gpt-oss-20b"
-# DECODE_LLM_MODEL = "qwen/qwen3.5-9b"
+# Must match sender stego encoder model (``stego.STEGO_LLM_MODEL``).
+DECODE_LLM_MODEL = "qwen/qwen3.5-9b"
 # HTTP Request body ``n`` in Decode workflow.
 DECODE_SEMANTIC_TOP_N = 20
 # G Decode node: retryOnFail / maxTries.

@@ -97,7 +97,7 @@ def get_lm_studio_request_timeout_seconds(default: int = 600) -> int:
 
 # Workflow LLM (non-sensitive defaults; override WORKFLOW_LLM_BACKEND / GOOGLE_AI_STUDIO_MODEL via env).
 DEFAULT_WORKFLOW_LLM_BACKEND = "ai_studio"
-DEFAULT_WORKFLOW_LM_STUDIO_MODEL = "openai/gpt-oss-20b"
+DEFAULT_WORKFLOW_LM_STUDIO_MODEL = "qwen/qwen3.5-9b"
 DEFAULT_GOOGLE_AI_STUDIO_MODEL = "gemma-4-26b-a4b-it"
 DEFAULT_GOOGLE_AI_REQUEST_TIMEOUT_SEC = 180
 WorkflowCapacityProfile = Literal["low", "mid", "high"]

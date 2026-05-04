@@ -7,7 +7,9 @@ from services.stego_metrics_service import run_divergence_metrics
 from workflows.pipelines.gen_angles import GenAnglesPipeline
 from workflows.pipelines.stego import StegoPipeline
 from workflows.utils.output_results_shape import n8n_save_object_body
-from workflows.utils.stego_codec import extract_invisible_payload, strip_invisible_payload
+from workflows.utils.stego_codec import extract_invisible_payload
+
+FORBIDDEN_INVISIBLE_CHARS = {"\u200c", "\u200d", "\u2060", "\u2063"}
 
 
 def _build_post(idx: int) -> dict:
@@ -79,9 +81,10 @@ def test_e2e_extractive_zero_kld_multi_sample_large_payloads(
         result = StegoPipeline().encode(payload=payload, post=angles_post, tag="version_e2e")
 
         assert result["succeeded"] is True
-        assert strip_invisible_payload(result["stego_text"]) == _expected_visible_text(post)
-        assert extract_invisible_payload(result["stego_text"]) == payload
-        assert result["breakdown"]["invisible_payload_bits"] == len(payload.encode("utf-8")) * 8
+        assert result["stego_text"] == _expected_visible_text(post)
+        assert extract_invisible_payload(result["stego_text"]) is None
+        assert not (set(result["stego_text"]) & FORBIDDEN_INVISIBLE_CHARS)
+        assert result["breakdown"]["embedded_payload_bits"] == len(payload.encode("utf-8")) * 8
 
         (dataset_dir / f'{post["id"]}.json').write_text(
             json.dumps({"comments": post["comments"]}, ensure_ascii=False, indent=2),

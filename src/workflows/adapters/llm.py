@@ -1070,7 +1070,7 @@ class LLMAdapter:
             "Authorization": f"Bearer {self.lm_studio_api_token}",
             "Content-Type": "application/json",
         }
-        resolved_model = model or "openai/gpt-oss-20b"
+        resolved_model = model or "qwen/qwen3.5-9b"
 
         def _request() -> str:
             messages = []

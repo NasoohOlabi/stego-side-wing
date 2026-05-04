@@ -46,12 +46,15 @@ These endpoints support **reproducibility**, **main vs isolated-cache** comparis
 - **On disk:** `[config/workflow_llm_prompts.json](../config/workflow_llm_prompts.json)` at the repository root. Pipelines read templates through `workflows.utils.workflow_llm_prompts` (in-process cache; **GET** reloads from disk before returning).
 - **API:** `GET /prompts/workflow-llm` (read), `PUT /prompts/workflow-llm` (replace whole document), `POST /prompts/workflow-llm/reset` (restore code defaults). Same paths appear under `prompts.workflow_llm` in `GET /state/paths`.
 - **Editing:** Templates are Python `str.format` strings. Keep every `{placeholder}` that the code supplies (see State → Workflow LLM prompts for the field list). A bad template causes runtime errors when a workflow step runs, not necessarily at PUT time beyond schema validation.
+- **Prompt-change rule:** Workflow/system LLM prompt text is guarded. Confirm with the project owner twice before changing prompt text in `config/workflow_llm_prompts.json`, `src/workflows/utils/workflow_llm_prompts.py`, or related prompt files.
 
 ### Text and payload fields
 
 Common **string-oriented** request fields across v1 (see each endpoint for full schemas):
 
 - **Embedding / decoding:** optional `payload` on stego and full workflows (string or JSON value **coerced to string**); `stego_text` plus `angles` on decode.
+- **Stego text safety:** generated `stego_text` / `stegoText` must be ordinary visible text. Payloads must not be carried with zero-width, invisible, control-format, homoglyph, or otherwise non-rendering Unicode characters.
+- **Generated stego text:** do not inject explicit ratings, quality scores, or quality opinions unless the source thread naturally asks for one.
 - **Post text overrides:** `post_title`, `post_text`, `post_url` on `gen-terms` and protocol tools where listed.
 - **Tools:** `text` on `POST /tools/semantic/search`; `needle` and `haystack` (string array) on `POST /tools/semantic/needle`; `texts` (string array) on `POST /tools/angles/analyze`.
 

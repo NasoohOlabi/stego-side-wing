@@ -8,11 +8,14 @@ Use this checklist when touching areas in the repo cleanup plan. Order matters: 
 - Run `uv run pytest -q src/tests/test_api_v1_workflow_prompts.py` and a sample of `src/tests/test_api_v1_*.py`.
 - If time allows, run the full API test glob.
 - Smoke import `app.routes.api_v1_routes` and confirm `runner` and `workflow_llm_prompts_path` exist because tests rely on monkeypatch targets.
+- Workflow/system LLM prompt text changes require double confirmation from the project owner before editing `config/workflow_llm_prompts.json`, `src/workflows/utils/workflow_llm_prompts.py`, or related prompt files.
 
 ## Phase 2: Runner And Pipelines
 
 - Run `uv run pytest -q src/tests/test_workflow_runner.py src/tests/test_runner_live_sim.py`.
 - For sender/receiver changes, run `uv run pytest -q src/tests/test_stego_codec.py src/tests/test_receiver_pipeline.py src/tests/test_pipeline_stego.py`.
+- Sender output must be ordinary visible text. Do not use zero-width, invisible, control-format, homoglyph, or other non-rendering Unicode characters as payload carriers.
+- Generated stego text must not include explicit ratings, quality scores, or quality opinions unless the source thread naturally asks for one.
 
 ## Phase 3: Tooling And Ergonomics
 

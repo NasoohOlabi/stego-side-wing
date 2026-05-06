@@ -61,3 +61,44 @@ Validation plan:
 
 - Unit tests: same targeted suite as Iteration 1.
 - Fresh supervised run: `uv run python scripts/run_actual_workload_e2e.py --variant balanced --samples-per-profile 20 --max-retries 6 --run-dir metrics/stego_feedback_loop/iter2_selected_angle_only --overwrite`.
+
+Result:
+
+- Run: `metrics/stego_feedback_loop/iter2_selected_angle_only`.
+- Fresh posts: `20`, no post reuse.
+- Success: `12/20` (`60%`).
+- Failures: `8/20`, all `Decoding validation failed`.
+- Quality on successes: matched-post JSD `0.5545`, perplexity `78.51`.
+- Runtime improved: average successful elapsed time dropped from about `37.9s` to `20.5s`.
+- Decision: keep selected-angle-only. Remaining failures include weak angles generated from scraper failure content, so next path filters those from the shared sender/receiver angle set.
+
+## Iteration 3: Filter Weak Scraper-Failure Angles
+
+Hypothesis: angles based on null extraction text (`No content available`, `Unknown`, `basic HTML head tag`) are semantically ambiguous and cause strict decode to collapse onto nearby generic angles.
+
+Planned change:
+
+- Add deterministic `is_recoverable_angle` filtering in `workflows.utils.stego_codec`.
+- Apply the same filter to sender angle selection, receiver flattening, and payload recovery angle-bit width.
+- Keep selected-angle-only generation and Qwen.
+
+Validation plan:
+
+- Targeted codec/pipeline/receiver tests.
+- Fresh supervised run: `uv run python scripts/run_actual_workload_e2e.py --variant balanced --samples-per-profile 20 --max-retries 6 --run-dir metrics/stego_feedback_loop/iter3_filter_weak_angles --overwrite`.
+
+Result:
+
+- Run: `metrics/stego_feedback_loop/iter3_filter_weak_angles`.
+- Fresh posts: `20`, no post reuse.
+- Success: `10/20` (`50%`).
+- Failures: `10/20`, all `Decoding validation failed`.
+- Quality on successes: matched-post JSD `0.5670`, perplexity `95.23`.
+- Decision: reject. Filtering weak angles changes angle indexing/candidate distribution in a way that reduced recoverability on this sample. Best current path remains Iteration 2.
+
+## Current Best
+
+- Branch: `codex/stego-selected-angle-only`.
+- Implementation commits to keep: `da4b93d`, `4349c32`, `b3fb8c7`.
+- Success on supervised fresh 20-post run: `12/20` (`60%`), up from prior Qwen `92/200` (`46%`).
+- Next candidate path should improve selected angle separability or decoder ranking, not prune the shared angle set blindly.

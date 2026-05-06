@@ -66,7 +66,7 @@ def test_workflow_lm_studio_model_default(clear_llm_backend_env: None) -> None:
 def test_balanced_profile_sacrifices_capacity_for_recoverability(
     clear_workflow_capacity_env: None,
 ) -> None:
-    assert get_workflow_stego_sample_angle_count() == 2
+    assert get_workflow_stego_sample_angle_count() == 1
     assert get_workflow_stego_default_max_retries() == 6
 
 

@@ -150,7 +150,7 @@ WORKFLOW_ENCODING_PROFILES: dict[WorkflowEncodingProfile, dict[str, object]] = {
         "stego_generation_mode": "model",
         "payload_transform": "plain",
         "stego_prompt_style": "natural",
-        "stego_sample_angle_count": 2,
+        "stego_sample_angle_count": 1,
         "stego_default_max_retries": 6,
         "decode_semantic_top_n": 20,
         "decode_llm_max_tries": 5,

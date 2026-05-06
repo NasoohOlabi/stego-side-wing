@@ -35,6 +35,28 @@ def test_applied_model_lane_restores_env(monkeypatch) -> None:
     assert "ANGLES_MODEL" not in os.environ
 
 
+def test_default_lm_studio_models_start_with_qwen() -> None:
+    module = _load_runner_module()
+    assert module.DEFAULT_LM_STUDIO_MODELS[:2] == (
+        "qwen/qwen3.5-9b",
+        "openai/gpt-oss-20b",
+    )
+
+
+def test_preflight_does_not_auto_add_google_models(monkeypatch) -> None:
+    module = _load_runner_module()
+    monkeypatch.setattr(module, "list_lm_studio_model_ids", lambda: ["qwen/qwen3.5-9b"])
+    monkeypatch.setattr(module, "list_google_model_ids", lambda: ["gemma-test"])
+
+    result = module.preflight_model_lanes(
+        lm_studio_models=["qwen/qwen3.5-9b"],
+        google_models=[],
+    )
+
+    assert [lane.model for lane in result.available_lanes] == ["qwen/qwen3.5-9b"]
+    assert result.skipped_lanes == []
+
+
 def test_load_judge_rating_summary(tmp_path: Path) -> None:
     module = _load_runner_module()
     ratings_path = tmp_path / "ratings.jsonl"
@@ -102,7 +124,28 @@ def test_run_model_naturalness_ablation_skips_and_blinds(
         (lane_dataset_dir / "post-1.json").write_text(json.dumps(post), encoding="utf-8")
         output_file = output_dir / "post-1_version_balanced_0000.json"
         output_file.write_text(
-            json.dumps({"stego_text": "visible text for judging"}),
+            json.dumps(
+                [
+                    {
+                        "stegoText": "visible text for judging",
+                        "embedding": {
+                            "senderAudit": {
+                                "llm_timings": [
+                                    {
+                                        "llm_wall_ms": 111,
+                                        "llm_adapter_reported_ms": 17,
+                                    },
+                                    {
+                                        "llm_wall_ms": 222,
+                                        "llm_adapter_reported_ms": 19,
+                                    },
+                                ]
+                            }
+                        },
+                        "post": {},
+                    }
+                ]
+            ),
             encoding="utf-8",
         )
         jsd = 0.1 if model == "gemma-test" else 0.2
@@ -117,6 +160,7 @@ def test_run_model_naturalness_ablation_skips_and_blinds(
                     "post_id": "post-1",
                     "sample_index": 0,
                     "output_file": str(output_file),
+                    "elapsed_ms": 123,
                     "retry_count": 0,
                 }
             ],
@@ -149,12 +193,17 @@ def test_run_model_naturalness_ablation_skips_and_blinds(
         overwrite=False,
         max_retries=0,
         skip_receiver_decode=True,
+        google_models=["gemma-test"],
     )
 
     assert seen_models == ["openai/gpt-oss-20b", "gemma-test"]
     skipped = result["preflight"]["skipped_lanes"]
     assert skipped[0]["model"] == "qwen/qwen3.5-9b"
     assert result["leaderboard"]["rows"][0]["model"] == "gemma-test"
+    assert result["leaderboard"]["rows"][0]["average_request_elapsed_ms"] == 18.0
+    assert result["leaderboard"]["rows"][0]["request_count"] == 2
+    assert result["leaderboard"]["rows"][0]["average_sample_elapsed_ms"] == 123.0
+    assert result["lane_summaries"][0]["summary"]["timing"]["request_elapsed_ms"] == [17.0, 19.0]
 
     judge_lines = (tmp_path / "ablation" / "judge_samples.jsonl").read_text(
         encoding="utf-8"
@@ -167,3 +216,31 @@ def test_run_model_naturalness_ablation_skips_and_blinds(
     assert "qwen/qwen3.5-9b" not in judge_lines[0]
     assert (tmp_path / "ablation" / "leaderboard.json").is_file()
     assert (tmp_path / "ablation" / "summary.json").is_file()
+
+
+def test_sort_leaderboard_prefers_failure_rate_without_judge_scores() -> None:
+    module = _load_runner_module()
+
+    ranked = module._sort_leaderboard(
+        [
+            {
+                "model": "openai/gpt-oss-20b",
+                "failure_rate": 0.88,
+                "matched_post_jsd": 0.57,
+                "matched_post_kl": 6.7,
+                "perplexity": 91.1,
+                "samples_succeeded": 3,
+            },
+            {
+                "model": "qwen/qwen3.5-9b",
+                "failure_rate": 0.64,
+                "matched_post_jsd": 0.58,
+                "matched_post_kl": 7.1,
+                "perplexity": 99.7,
+                "samples_succeeded": 9,
+            },
+        ]
+    )
+
+    assert ranked[0]["model"] == "qwen/qwen3.5-9b"
+    assert ranked[1]["model"] == "openai/gpt-oss-20b"

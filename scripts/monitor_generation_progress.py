@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from infrastructure.process_tracking import append_current_pid_to_log
+
 RUNS_ROOT = REPO_ROOT / "metrics" / "e2e_runs"
 LOGS_ROOT = REPO_ROOT / "metrics" / "automation_logs"
 EVENTS_LOG = LOGS_ROOT / "generation_monitor_events.jsonl"
@@ -107,4 +114,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     main()

@@ -1,6 +1,7 @@
 """Steganographic encoding pipeline with n8n parity logic."""
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,80 @@ STEGO_WORKFLOW_ID = "27rZrYtywu3k9e7Q"
 STEGO_DEFAULT_OFFSET = 1
 STEGO_LLM_MODEL = DECODE_LLM_MODEL
 _STEGO_LOG = logger.bind(component="StegoPipeline")
+_STOPWORDS = {
+    "a",
+    "about",
+    "all",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "because",
+    "but",
+    "by",
+    "for",
+    "from",
+    "get",
+    "gets",
+    "got",
+    "had",
+    "has",
+    "have",
+    "he",
+    "her",
+    "him",
+    "his",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "just",
+    "like",
+    "me",
+    "more",
+    "my",
+    "no",
+    "not",
+    "of",
+    "on",
+    "or",
+    "our",
+    "out",
+    "she",
+    "so",
+    "that",
+    "the",
+    "their",
+    "them",
+    "there",
+    "they",
+    "this",
+    "to",
+    "too",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "with",
+    "would",
+    "you",
+    "your",
+}
+_GENERIC_EDITORIAL_PATTERNS = (
+    "the bigger issue",
+    "the lesson here",
+    "at the end of the day",
+    "what keeps sticking with me",
+    "zoom out",
+    "this is really about",
+    "wake up call",
+)
 
 
 def _elapsed_ms_since(t0: float) -> int:
@@ -159,37 +234,6 @@ def _anchor_comment_body(post_augmentation: dict[str, Any] | None) -> str:
     return ""
 
 
-def _anchor_reply_cue(tangent: str, quote: str, category: str) -> str:
-    haystack = f"{tangent} {quote} {category}".lower()
-    if any(term in haystack for term in ("immigration", "deport", "ice", "human rights")):
-        return "immigration politics trampling basic rights"
-    if any(term in haystack for term in ("judicial", "justice", "political pressure")):
-        return "political pressure bending the justice system"
-    if any(term in haystack for term in ("labor", "union", "worker", "childcare")):
-        return "working people getting left with no real protection"
-    if any(term in haystack for term in ("coffee", "shop", "poll")):
-        return "treating a serious choice like a casual coffee-shop poll"
-    if any(term in haystack for term in ("dataset", "model", "data", "scraping")):
-        return "bad information turning into bad decisions"
-    return tangent or quote or category or "the bigger issue getting ignored"
-
-
-def _anchor_candidate_text(
-    angle: dict[str, Any],
-    post_augmentation: dict[str, Any] | None = None,
-) -> str:
-    tangent = str(angle.get("tangent") or "").strip()
-    quote = str(angle.get("source_quote") or "").strip()
-    category = str(angle.get("category") or "this issue").strip()
-    last_comment = _anchor_comment_body(post_augmentation)
-    lead = "No, but I get why you ask." if last_comment.endswith("?") else "Yeah, I get why that bothers you."
-    cue = _anchor_reply_cue(tangent, quote, category)
-    return (
-        f"{lead} It feels like {cue}, and it is hard not to be angry about it. "
-        "That part is what keeps sticking with me."
-    )
-
-
 def _text_preview(text: Any, max_len: int = 180) -> str:
     if not isinstance(text, str):
         return ""
@@ -198,9 +242,96 @@ def _text_preview(text: Any, max_len: int = 180) -> str:
 
 
 def _prompt_style_for_attempt(configured_style: str, retry_count: int) -> str:
+    if configured_style == "natural_sharpened":
+        return "natural"
     if configured_style == "natural_then_anchor_retry":
         return "guided_natural" if retry_count == 0 else "anchored"
     return configured_style
+
+
+def _tokenize_content_words(text: str) -> list[str]:
+    return [
+        token
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9'-]+", text.lower())
+        if len(token) >= 4 and token not in _STOPWORDS
+    ]
+
+
+def _context_support_texts(
+    post_augmentation: dict[str, Any] | None,
+    sample: dict[str, Any] | None,
+    selected_angle: dict[str, Any],
+) -> list[str]:
+    texts: list[str] = []
+    if isinstance(sample, dict):
+        for key in ("best_match", "source_quote", "tangent", "category"):
+            value = sample.get(key)
+            if isinstance(value, str) and value.strip():
+                texts.append(value)
+    for key in ("source_quote", "tangent", "category"):
+        value = selected_angle.get(key)
+        if isinstance(value, str) and value.strip():
+            texts.append(value)
+    if isinstance(post_augmentation, dict):
+        comment_embedding = post_augmentation.get("commentEmbedding", {})
+        context = comment_embedding.get("context", {})
+        for key in ("title", "selftext"):
+            value = context.get(key)
+            if isinstance(value, str) and value.strip():
+                texts.append(value)
+        picked_chain = comment_embedding.get("pickedCommentChain", [])
+        if isinstance(picked_chain, list):
+            for comment in picked_chain:
+                if not isinstance(comment, dict):
+                    continue
+                body = comment.get("body")
+                if isinstance(body, str) and body.strip():
+                    texts.append(body)
+    return texts
+
+
+def _contextuality_gate(
+    text: str,
+    *,
+    post_augmentation: dict[str, Any] | None,
+    sample: dict[str, Any] | None,
+    selected_angle: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = " ".join(text.split()).lower()
+    support_vocab = set(
+        _tokenize_content_words(" ".join(_context_support_texts(post_augmentation, sample, selected_angle)))
+    )
+    candidate_tokens = _tokenize_content_words(text)
+    overlap = [token for token in candidate_tokens if token in support_vocab]
+    unsupported = [token for token in candidate_tokens if token not in support_vocab]
+    generic_patterns = [pattern for pattern in _GENERIC_EDITORIAL_PATTERNS if pattern in normalized]
+    has_supported_phrase = False
+    for value in (
+        selected_angle.get("source_quote"),
+        selected_angle.get("tangent"),
+        sample.get("best_match") if isinstance(sample, dict) else None,
+    ):
+        if isinstance(value, str):
+            phrase_tokens = _tokenize_content_words(value)
+            if phrase_tokens and any(token in set(overlap) for token in phrase_tokens):
+                has_supported_phrase = True
+                break
+    reasons: list[str] = []
+    if generic_patterns:
+        reasons.append("generic_editorial_tone")
+    if not overlap:
+        reasons.append("no_context_overlap")
+    if len(unsupported) >= 5 and len(overlap) < 2:
+        reasons.append("unsupported_topic_drift")
+    if not has_supported_phrase and len(overlap) < 2:
+        reasons.append("weak_selected_angle_grounding")
+    return {
+        "passes": not reasons,
+        "overlap_tokens": overlap[:12],
+        "unsupported_tokens": unsupported[:12],
+        "generic_patterns": generic_patterns,
+        "reasons": reasons,
+    }
 
 
 def _extractive_candidate_texts(post: dict[str, Any]) -> list[str]:
@@ -517,6 +648,7 @@ class StegoPipeline:
         prompt_style: str,
         sample_index: int = 0,
         encode_run_id: str = "",
+        llm_timings: list[dict[str, Any]] | None = None,
     ) -> list[str]:
         def _extract_json_block(raw: str) -> str:
             stripped = raw.strip()
@@ -552,6 +684,14 @@ class StegoPipeline:
         llm_wall_ms = _elapsed_ms_since(t_llm)
         meta = self.llm.last_call_metadata or {}
         llm_adapter_ms = meta.get("elapsed_ms")
+        timing_record = {
+            "sample_index": sample_index,
+            "prompt_style": prompt_style,
+            "provider": provider,
+            "model": model,
+            "llm_wall_ms": llm_wall_ms,
+            "llm_adapter_reported_ms": llm_adapter_ms,
+        }
         text = response.strip()
         _stego_log_bind("llm", llm_stage="raw").info("{}", text)
 
@@ -583,6 +723,8 @@ class StegoPipeline:
                     llm_wall_ms,
                     llm_adapter_ms,
                 )
+                if llm_timings is not None:
+                    llm_timings.append(dict(timing_record, ok=True))
                 return strings
 
         tb = _stego_log_bind("timing", timing_phase="encode_llm_sample").bind(
@@ -598,6 +740,8 @@ class StegoPipeline:
             llm_wall_ms,
             llm_adapter_ms,
         )
+        if llm_timings is not None:
+            llm_timings.append(dict(timing_record, ok=False))
         _stego_log_bind("llm", llm_stage="parse").error(
             "Strict JSON contract failed tangent={} preview={}",
             _text_preview(sample.get("tangent", ""), max_len=120),
@@ -609,6 +753,259 @@ class StegoPipeline:
             "object with texts/comments/items/output), optionally in a "
             "markdown code fence — no prose before/after."
         )
+
+    def _decode_candidate(
+        self,
+        *,
+        text: str,
+        few_shots: list[dict[str, Any]],
+        tangents_db: list[dict[str, Any]],
+        strict_mode: bool,
+    ) -> tuple[int | None, int]:
+        t_dec = time.perf_counter()
+        decoded_idx = self.decode_pipeline.decode(
+            stego_text=text,
+            angles=tangents_db,
+            few_shots=few_shots,
+            strict_mode=strict_mode,
+        )
+        return decoded_idx, _elapsed_ms_since(t_dec)
+
+    def _candidate_distance_bucket(
+        self,
+        decoded_idx: int | None,
+        selected_idx: Any,
+    ) -> str:
+        if not isinstance(decoded_idx, int) or not isinstance(selected_idx, int):
+            return "unknown"
+        distance = abs(decoded_idx - selected_idx)
+        if distance == 0:
+            return "exact"
+        if distance <= 2:
+            return "adjacent"
+        return "far"
+
+    def _evaluate_candidate_groups(
+        self,
+        *,
+        encoded_results: list[dict[str, Any]],
+        tangents_db: list[dict[str, Any]],
+        selected_angle: dict[str, Any],
+        post_augmentation: dict[str, Any],
+        encode_run_id: str = "",
+    ) -> dict[str, Any]:
+        t_eval = time.perf_counter()
+        selected_idx = selected_angle.get("idx")
+        evaluations: list[dict[str, Any]] = []
+        for group_idx, group in enumerate(encoded_results):
+            texts = group.get("texts", [])
+            if not isinstance(texts, list):
+                continue
+            few_shots = [item for idx, item in enumerate(encoded_results) if idx != group_idx]
+            for candidate_idx, text in enumerate(texts):
+                if not _is_non_empty_string(text):
+                    continue
+                strict_decoded_idx, strict_ms = self._decode_candidate(
+                    text=text,
+                    few_shots=few_shots,
+                    tangents_db=tangents_db,
+                    strict_mode=True,
+                )
+                relaxed_decoded_idx = strict_decoded_idx
+                relaxed_ms = strict_ms
+                if strict_decoded_idx is None:
+                    relaxed_decoded_idx, relaxed_ms = self._decode_candidate(
+                        text=text,
+                        few_shots=few_shots,
+                        tangents_db=tangents_db,
+                        strict_mode=False,
+                    )
+                decoded_obj = None
+                if (
+                    isinstance(relaxed_decoded_idx, int)
+                    and 0 <= relaxed_decoded_idx < len(tangents_db)
+                ):
+                    decoded_obj = tangents_db[relaxed_decoded_idx]
+                context_gate = _contextuality_gate(
+                    text,
+                    post_augmentation=post_augmentation,
+                    sample=group,
+                    selected_angle=selected_angle,
+                )
+                exact_strict_match = strict_decoded_idx == selected_idx
+                exact_relaxed_match = relaxed_decoded_idx == selected_idx
+                distance_bucket = self._candidate_distance_bucket(relaxed_decoded_idx, selected_idx)
+                rejection_reasons = list(context_gate["reasons"])
+                if not exact_strict_match:
+                    if distance_bucket == "adjacent":
+                        rejection_reasons.append("adjacent_angle_mismatch")
+                    elif exact_relaxed_match:
+                        rejection_reasons.append("weak_decoder_mode")
+                    else:
+                        rejection_reasons.append("decode_mismatch")
+                evaluations.append(
+                    {
+                        "group_index": group_idx,
+                        "candidate_index": candidate_idx,
+                        "text": text,
+                        "text_preview": _text_preview(text),
+                        "prompt_style": group.get("prompt_style"),
+                        "sample_category": group.get("category"),
+                        "sample_tangent": group.get("tangent"),
+                        "strict_decoded_index": strict_decoded_idx,
+                        "decoded_index": relaxed_decoded_idx,
+                        "decoded_angle": _angle_summary(decoded_obj),
+                        "distance_bucket": distance_bucket,
+                        "strict_decode_ms": strict_ms,
+                        "relaxed_decode_ms": relaxed_ms,
+                        "context_gate": context_gate,
+                        "matches_selected_angle": exact_relaxed_match,
+                        "accepted": exact_strict_match and context_gate["passes"],
+                        "rejection_reasons": rejection_reasons,
+                    }
+                )
+        evaluations.sort(
+            key=lambda item: (
+                0 if item["accepted"] else 1,
+                0 if item["context_gate"]["passes"] else 1,
+                0
+                if item["distance_bucket"] == "exact"
+                else (1 if item["distance_bucket"] == "adjacent" else 2),
+                len(item["context_gate"]["unsupported_tokens"]),
+                item["group_index"],
+                item["candidate_index"],
+            )
+        )
+        accepted = next((item for item in evaluations if item["accepted"]), None)
+        promising_candidates = [
+            item
+            for item in evaluations
+            if item["distance_bucket"] in {"exact", "adjacent"}
+            or item["matches_selected_angle"]
+        ][:3]
+        promising = promising_candidates[0] if promising_candidates else None
+        eval_ms = _elapsed_ms_since(t_eval)
+        _stego_log_bind("timing", timing_phase="cross_validate").bind(
+            stego_encode_run_id=encode_run_id,
+            elapsed_ms=eval_ms,
+            candidate_count=len(evaluations),
+            succeeded=accepted is not None,
+        ).info(
+            "elapsed_ms={} candidate_count={} succeeded={}",
+            eval_ms,
+            len(evaluations),
+            accepted is not None,
+        )
+        return {
+            "succeeded": accepted is not None,
+            "accepted_candidate": accepted,
+            "promising_candidate": promising,
+            "promising_candidates": promising_candidates,
+            "validationDetails": {
+                "selected_angle": _angle_summary(selected_angle),
+                "candidates": [
+                    {
+                        "group_index": item["group_index"],
+                        "candidate_index": item["candidate_index"],
+                        "decoded_index": item["decoded_index"],
+                        "strict_decoded_index": item["strict_decoded_index"],
+                        "decoded_angle": item["decoded_angle"],
+                        "distance_bucket": item["distance_bucket"],
+                        "matches_selected_angle": item["matches_selected_angle"],
+                        "accepted": item["accepted"],
+                        "rejection_reasons": item["rejection_reasons"],
+                        "text_preview": item["text_preview"],
+                        "context_gate": item["context_gate"],
+                    }
+                    for item in evaluations
+                ],
+            },
+        }
+
+    def _revise_candidate_text_contextually(
+        self,
+        *,
+        candidate_text: str,
+        sample: dict[str, Any],
+        comment_embedding: dict[str, Any],
+        encode_run_id: str = "",
+        sample_index: int = 0,
+        llm_timings: list[dict[str, Any]] | None = None,
+    ) -> str:
+        context = comment_embedding.get("context", {})
+        picked_chain = comment_embedding.get("pickedCommentChain", [])
+        chain_lines: list[str] = []
+        if isinstance(picked_chain, list):
+            for comment in picked_chain[-3:]:
+                if not isinstance(comment, dict):
+                    continue
+                name = comment.get("name") if isinstance(comment.get("name"), str) else "Unknown"
+                raw_body = comment.get("body")
+                body = raw_body if isinstance(raw_body, str) else ""
+                body = " ".join(body.split())
+                if body:
+                    chain_lines.append(f"{name}: {body}")
+        user_prompt = (
+            "Revise the draft reply with minimal edits so it stays a plausible Reddit reply to the thread.\n"
+            "Rules:\n"
+            "1. Keep the same stance, topic, and overall tone.\n"
+            "2. Do not add new facts, slogans, or broad policy framing.\n"
+            "3. Keep it grounded in the post and comment chain.\n"
+            "4. Make the target tangent slightly clearer using only ideas already present in the context.\n"
+            "5. Return JSON with exactly one key: {\"text\": \"...\"}.\n\n"
+            f"Post title: {context.get('title', '')}\n"
+            f"Post body: {context.get('selftext', '')}\n"
+            f"Comment chain:\n" + "\n".join(chain_lines) + "\n\n"
+            f"Target tangent: {sample.get('tangent', '')}\n"
+            f"Target source quote: {sample.get('source_quote', '')}\n"
+            f"Best supporting match: {sample.get('best_match', '')}\n"
+            f"Draft reply: {candidate_text}"
+        )
+        system_message = (
+            "You are revising one Reddit reply for contextual faithfulness and decodability. "
+            "Use only visible ordinary text. Preserve plausibility and avoid generic editorial language."
+        )
+        provider, model = resolve_workflow_llm_provider_and_model(STEGO_LLM_MODEL)
+        t_llm = time.perf_counter()
+        response = self.llm.call_llm(
+            prompt=user_prompt,
+            system_message=system_message,
+            model=model,
+            provider=provider,
+            temperature=get_workflow_stego_llm_temperature(),
+        )
+        llm_wall_ms = _elapsed_ms_since(t_llm)
+        meta = self.llm.last_call_metadata or {}
+        llm_adapter_ms = meta.get("elapsed_ms")
+        if llm_timings is not None:
+            llm_timings.append(
+                {
+                    "sample_index": sample_index,
+                    "prompt_style": "natural_sharpened",
+                    "provider": provider,
+                    "model": model,
+                    "llm_wall_ms": llm_wall_ms,
+                    "llm_adapter_reported_ms": llm_adapter_ms,
+                    "ok": True,
+                }
+            )
+        parsed = json.loads(response.strip())
+        revised = parsed.get("text") if isinstance(parsed, dict) else None
+        if not _is_non_empty_string(revised):
+            raise RuntimeError("Contextual sharpen pass returned empty text")
+        _stego_log_bind("timing", timing_phase="encode_llm_sample").bind(
+            stego_encode_run_id=encode_run_id,
+            sample_index=sample_index,
+            llm_wall_ms=llm_wall_ms,
+            llm_adapter_reported_ms=llm_adapter_ms,
+        ).info(
+            "category={} ok={} llm_wall_ms={} llm_adapter_reported_ms={}",
+            sample.get("category"),
+            True,
+            llm_wall_ms,
+            llm_adapter_ms,
+        )
+        return str(revised).strip()
 
     def _cross_validate(
         self,
@@ -756,6 +1153,8 @@ class StegoPipeline:
         sender_audit["payload_carrier"] = "selection_channel"
         sender_audit["raw_payload_bytes"] = len(payload.encode("utf-8"))
         sender_audit["embedded_payload_bytes"] = len(embedded_payload.encode("utf-8"))
+        llm_timings: list[dict[str, Any]] = []
+        sender_audit["llm_timings"] = llm_timings
         post_augmentation["senderAudit"] = sender_audit
         augment_ms = _elapsed_ms_since(t_aug)
         _stego_log_bind("timing", timing_phase="augment_post").bind(
@@ -836,7 +1235,7 @@ class StegoPipeline:
 
         retry_count = 0
         last_breakdown: dict[str, Any] = {}
-        configured_prompt_style = get_workflow_stego_prompt_style()
+        configured_prompt_style = str(get_workflow_stego_prompt_style())
 
         while retry_count <= resolved_max_retries:
             try:
@@ -859,6 +1258,7 @@ class StegoPipeline:
                         prompt_style=prompt_style,
                         sample_index=sidx,
                         encode_run_id=encode_run_id,
+                        llm_timings=llm_timings,
                     )
                     encoded_results.append(
                         {
@@ -872,23 +1272,22 @@ class StegoPipeline:
                 generate_ms = _elapsed_ms_since(t_gen)
 
                 primary_texts = encoded_results[0].get("texts", []) if encoded_results else []
-                few_shots = encoded_results[1:]
                 if not primary_texts:
                     raise RuntimeError("Encoder did not return candidate texts")
 
                 _stego_log_bind("generate").info(
-                    "post_id={} attempt={} primary_candidates={} few_shot_groups={}",
+                    "post_id={} attempt={} primary_candidates={} generated_groups={}",
                     post_id,
                     retry_count + 1,
                     len(primary_texts),
-                    len(few_shots),
+                    len(encoded_results),
                 )
                 t_val = time.perf_counter()
-                validation = self._cross_validate(
-                    candidate_texts=primary_texts,
-                    few_shots=few_shots,
+                validation = self._evaluate_candidate_groups(
+                    encoded_results=encoded_results,
                     tangents_db=tangents_db,
                     selected_angle=selected_angle,
+                    post_augmentation=post_augmentation,
                     encode_run_id=encode_run_id,
                 )
                 validate_ms = _elapsed_ms_since(t_val)
@@ -910,7 +1309,8 @@ class StegoPipeline:
                 )
 
                 if validation.get("succeeded"):
-                    visible_text = validation.get("stegoText")
+                    accepted_candidate = validation.get("accepted_candidate") or {}
+                    visible_text = accepted_candidate.get("text")
                     if not _is_non_empty_string(visible_text):
                         raise RuntimeError(
                             "Cross-validation reported success with empty stego text."
@@ -921,8 +1321,14 @@ class StegoPipeline:
                         "post_id={} attempt={} success_candidate={} decoded_indices={}",
                         post_id,
                         retry_count + 1,
-                        validation.get("successIdx"),
-                        validation.get("decodedIndices", []),
+                        {
+                            "group_index": accepted_candidate.get("group_index"),
+                            "candidate_index": accepted_candidate.get("candidate_index"),
+                        },
+                        [
+                            item.get("decoded_index")
+                            for item in validation.get("validationDetails", {}).get("candidates", [])
+                        ],
                     )
                     _log_encode_timing_complete(
                         encode_run_id=encode_run_id,
@@ -934,6 +1340,13 @@ class StegoPipeline:
                         retry_count=retry_count,
                         timing_outcome="success",
                     )
+                    sender_audit["candidate_validation"] = {
+                        "acceptance_source": "draft",
+                        "group_index": accepted_candidate.get("group_index"),
+                        "candidate_index": accepted_candidate.get("candidate_index"),
+                        "decoded_index": accepted_candidate.get("decoded_index"),
+                        "strict_decoded_index": accepted_candidate.get("strict_decoded_index"),
+                    }
                     return {
                         "stego_text": stego_text,
                         "post": post,
@@ -945,76 +1358,103 @@ class StegoPipeline:
                         "sender_audit": sender_audit,
                         "embedding": post_augmentation,
                         "encoded_samples": encoded_results,
-                        "decoded_indices": validation.get("decodedIndices", []),
+                        "decoded_indices": [
+                            item.get("decoded_index")
+                            for item in validation.get("validationDetails", {}).get("candidates", [])
+                        ],
                         "validation_details": validation.get("validationDetails"),
                     }
 
-                last_breakdown = validation.get("breakDown", {})
                 validation_details = validation.get("validationDetails", {})
                 _stego_log_bind("validation").warning(
                     "post_id={} attempt={} failed selected_idx={} decoded_indices={}",
                     post_id,
                     retry_count + 1,
                     selected_idx,
-                    validation.get("decodedIndices", []),
+                    [
+                        item.get("decoded_index")
+                        for item in validation_details.get("candidates", [])
+                    ],
                 )
-                if retry_count >= resolved_max_retries:
-                    anchor_text = _anchor_candidate_text(selected_angle, post_augmentation)
-                    anchor_validation = self._cross_validate(
-                        candidate_texts=[anchor_text],
-                        few_shots=few_shots,
-                        tangents_db=tangents_db,
-                        selected_angle=selected_angle,
-                        encode_run_id=encode_run_id,
-                    )
-                    if anchor_validation.get("succeeded"):
-                        _stego_log_bind("validation").warning(
-                            "post_id={} attempt={} recovered_with_anchor_fallback",
-                            post_id,
-                            retry_count + 1,
-                        )
-                        _log_encode_timing_complete(
+                should_sharpen = (
+                    configured_prompt_style == "natural_sharpened"
+                    or retry_count >= resolved_max_retries
+                )
+                if should_sharpen:
+                    promising_candidates = validation.get("promising_candidates") or []
+                    for promising_candidate in promising_candidates:
+                        group_idx = int(promising_candidate.get("group_index", 0))
+                        source_group = encoded_results[group_idx]
+                        sharpened_text = self._revise_candidate_text_contextually(
+                            candidate_text=str(promising_candidate.get("text", "")),
+                            sample=source_group,
+                            comment_embedding=post_augmentation["commentEmbedding"],
                             encode_run_id=encode_run_id,
-                            post_id=post_id,
-                            augment_ms=augment_ms,
-                            build_samples_ms=build_samples_ms,
-                            encode_total_ms=_elapsed_ms_since(t_encode),
-                            succeeded=True,
-                            retry_count=retry_count,
-                            timing_outcome="anchor_fallback",
+                            sample_index=group_idx,
+                            llm_timings=llm_timings,
                         )
-                        encoded_results.append(
-                            {
-                                "category": selected_angle.get("category"),
-                                "source_quote": selected_angle.get("source_quote"),
-                                "tangent": selected_angle.get("tangent"),
-                                "prompt_style": "anchor_fallback",
-                                "texts": [anchor_text],
-                                "generation_mode": "anchor_fallback",
-                            }
-                        )
-                        return {
-                            "stego_text": anchor_text,
-                            "post": post,
-                            "selected_angle": selected_angle,
-                            "angle_index": selected_idx,
-                            "succeeded": True,
-                            "retry_count": retry_count,
-                            "tag": tag,
-                            "sender_audit": sender_audit,
-                            "embedding": post_augmentation,
-                            "encoded_samples": encoded_results,
-                            "decoded_indices": anchor_validation.get("decodedIndices", []),
-                            "validation_details": anchor_validation.get(
-                                "validationDetails"
-                            ),
+                        sharpened_group = {
+                            "category": source_group.get("category"),
+                            "source_quote": source_group.get("source_quote"),
+                            "tangent": source_group.get("tangent"),
+                            "prompt_style": "natural_sharpened",
+                            "texts": [sharpened_text],
+                            "generation_mode": "context_sharpen",
                         }
+                        sharpen_validation = self._evaluate_candidate_groups(
+                            encoded_results=[sharpened_group],
+                            tangents_db=tangents_db,
+                            selected_angle=selected_angle,
+                            post_augmentation=post_augmentation,
+                            encode_run_id=encode_run_id,
+                        )
+                        if sharpen_validation.get("succeeded"):
+                            accepted_candidate = sharpen_validation.get("accepted_candidate") or {}
+                            encoded_results.append(sharpened_group)
+                            _log_encode_timing_complete(
+                                encode_run_id=encode_run_id,
+                                post_id=post_id,
+                                augment_ms=augment_ms,
+                                build_samples_ms=build_samples_ms,
+                                encode_total_ms=_elapsed_ms_since(t_encode),
+                                succeeded=True,
+                                retry_count=retry_count,
+                                timing_outcome="context_sharpen",
+                            )
+                            sender_audit["candidate_validation"] = {
+                                "acceptance_source": "context_sharpen",
+                                "group_index": accepted_candidate.get("group_index"),
+                                "candidate_index": accepted_candidate.get("candidate_index"),
+                                "decoded_index": accepted_candidate.get("decoded_index"),
+                                "strict_decoded_index": accepted_candidate.get("strict_decoded_index"),
+                            }
+                            return {
+                                "stego_text": str(accepted_candidate.get("text", "")),
+                                "post": post,
+                                "selected_angle": selected_angle,
+                                "angle_index": selected_idx,
+                                "succeeded": True,
+                                "retry_count": retry_count,
+                                "tag": tag,
+                                "sender_audit": sender_audit,
+                                "embedding": post_augmentation,
+                                "encoded_samples": encoded_results,
+                                "decoded_indices": [
+                                    item.get("decoded_index")
+                                    for item in sharpen_validation.get("validationDetails", {}).get("candidates", [])
+                                ],
+                                "validation_details": sharpen_validation.get("validationDetails"),
+                            }
+                if retry_count >= resolved_max_retries:
                     error_details = {
                         "reason": (
-                            "None of the generated primary candidate texts decoded to the selected angle."
+                            "No generated or context-sharpened candidate stayed context-faithful and decoded to the selected angle in strict mode."
                         ),
                         "selected_angle": _angle_summary(selected_angle),
-                        "decoded_indices": validation.get("decodedIndices", []),
+                        "decoded_indices": [
+                            item.get("decoded_index")
+                            for item in validation_details.get("candidates", [])
+                        ],
                         "candidate_results": validation_details.get("candidates", []),
                     }
                     _stego_log_bind("failed").error(

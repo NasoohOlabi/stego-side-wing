@@ -10,6 +10,7 @@ from icecream import ic  # Import icecream for colorful logging
 
 from content_acquisition.headless_browser_analyzer import WebAnalyzer
 from infrastructure.config import resolve_workflow_llm_provider_and_model
+from infrastructure.process_tracking import append_current_pid_to_log
 from integrations.news_api import (
     Article,
     EverythingParams,
@@ -257,6 +258,7 @@ async def main():
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     ic("🚀 Starting the analysis process")
     asyncio.run(main())
     ic("✅ Analysis process completed")

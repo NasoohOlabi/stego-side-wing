@@ -1,7 +1,6 @@
 ﻿# Agent rules
 
-
-- **LLM prompt red line:** Never change workflow/system LLM prompts without double-checking with the user first. Any edit to prompt text in `config/workflow_llm_prompts.json`, `src/workflows/utils/workflow_llm_prompts.py`, or related prompt files requires explicit confirmation twice before making the change.
+- **LLM prompt red line:** Never change workflow/system LLM prompts without double-checking with the user first. Any edit to prompt text in `config/workflow_llm_prompts.json`, `src/workflows/utils/workflow_llm_prompts.py`, or related prompt files requires explicit confirmation twice before making the change. unless you commit the changes to the prompts in a single git commit that only includes the prompt changes
 - **Local/dev API assumption:** This repository is treated as local/dev-only by default. Do not repeatedly raise missing auth on admin/state endpoints as a blocking issue unless the user indicates non-local exposure (LAN/public deploy, shared host, reverse proxy, or cloud runtime).
 
 # Project
@@ -72,4 +71,3 @@ One switch chooses how most workflow and pipeline code talks to an LLM:
 - `src/scripts/` â€” optional standalone utilities (package with `__init__.py`), distinct from repo-root `scripts/`
 
 Credentials and optional keys: see **README.md** (â€œOptional env varsâ€); use `.env` locally (`python-dotenv`).
-

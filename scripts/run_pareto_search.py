@@ -19,6 +19,7 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
+from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 from loguru import logger  # noqa: E402
 from run_actual_workload_e2e import DEFAULT_VARIANTS, run_actual_workload_e2e  # noqa: E402
 from run_encoding_config_e2e import run_encoding_config_e2e  # noqa: E402
@@ -311,4 +312,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     main()

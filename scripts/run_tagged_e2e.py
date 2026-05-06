@@ -13,6 +13,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
+from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 from loguru import logger  # noqa: E402
 from services.stego_metrics_service import run_divergence_metrics  # noqa: E402
 from workflows.adapters.backend_api import BackendAPIAdapter  # noqa: E402
@@ -423,4 +424,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     main()

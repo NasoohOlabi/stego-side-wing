@@ -35,13 +35,14 @@ from infrastructure.config import (  # noqa: E402
     get_lm_studio_url,
 )
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
+from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 from services.stego_experiment_service import resolve_experiment_variants  # noqa: E402
 from services.stego_metrics_service import extract_stego_text_unified  # noqa: E402
 from workflows.utils.protocol_utils import text_preview  # noqa: E402
 from workflows.utils.stego_codec import strip_invisible_payload  # noqa: E402
 
 RUNS_ROOT = _REPO_ROOT / "metrics" / "model_ablation_runs"
-DEFAULT_LM_STUDIO_MODELS = ("openai/gpt-oss-20b", "qwen/qwen3.5-9b")
+DEFAULT_LM_STUDIO_MODELS = ("qwen/qwen3.5-9b", "openai/gpt-oss-20b")
 MODEL_ENV_KEYS = (
     "WORKFLOW_LLM_BACKEND",
     "WORKFLOW_LM_STUDIO_MODEL",
@@ -196,9 +197,7 @@ def preflight_model_lanes(
     skip_preflight: bool = False,
 ) -> PreflightResult:
     """Resolve requested model lanes and skip unavailable providers/models."""
-    requested_google = list(google_models) or (
-        [] if skip_preflight else discover_google_gemma_models(max_models=max_gemma_models)
-    )
+    requested_google = list(google_models)
     requested = [(("lm_studio"), model) for model in lm_studio_models]
     requested.extend(("google", model) for model in requested_google)
     candidate_lanes = _assign_lane_ids(requested)
@@ -275,6 +274,70 @@ def _metric_number(row: dict[str, Any], key: str) -> float | None:
 
 def _mean(values: Sequence[float]) -> float | None:
     return sum(values) / len(values) if values else None
+
+
+def _extract_request_timings_from_output(output_file: Path) -> list[float]:
+    try:
+        payload = _read_json(output_file)
+    except Exception:
+        return []
+
+    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+        embedding = payload[0].get("embedding")
+    elif isinstance(payload, dict):
+        embedding = payload.get("embedding")
+    else:
+        embedding = None
+
+    if not isinstance(embedding, dict):
+        return []
+    sender_audit = embedding.get("senderAudit")
+    if not isinstance(sender_audit, dict):
+        return []
+    llm_timings = sender_audit.get("llm_timings")
+    if not isinstance(llm_timings, list):
+        return []
+
+    timings: list[float] = []
+    for item in llm_timings:
+        if not isinstance(item, dict):
+            continue
+        value = item.get("llm_adapter_reported_ms")
+        if not isinstance(value, (int, float)):
+            value = item.get("llm_wall_ms")
+        if isinstance(value, (int, float)):
+            timings.append(float(value))
+    return timings
+
+
+def _timing_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    entries = summary.get("entries")
+    entry_list = entries if isinstance(entries, list) else []
+    sample_elapsed_ms = [
+        float(entry["elapsed_ms"])
+        for entry in entry_list
+        if isinstance(entry, dict) and isinstance(entry.get("elapsed_ms"), (int, float))
+    ]
+    request_elapsed_ms: list[float] = []
+    for entry in entry_list:
+        if not isinstance(entry, dict):
+            continue
+        output_file_raw = entry.get("output_file")
+        if not isinstance(output_file_raw, str):
+            continue
+        request_elapsed_ms.extend(_extract_request_timings_from_output(Path(output_file_raw)))
+    return {
+        "request_elapsed_ms": request_elapsed_ms,
+        "request_count": len(request_elapsed_ms),
+        "average_request_elapsed_ms": _mean(request_elapsed_ms),
+        "min_request_elapsed_ms": min(request_elapsed_ms) if request_elapsed_ms else None,
+        "max_request_elapsed_ms": max(request_elapsed_ms) if request_elapsed_ms else None,
+        "sample_elapsed_ms": sample_elapsed_ms,
+        "sample_count": len(sample_elapsed_ms),
+        "average_sample_elapsed_ms": _mean(sample_elapsed_ms),
+        "min_sample_elapsed_ms": min(sample_elapsed_ms) if sample_elapsed_ms else None,
+        "max_sample_elapsed_ms": max(sample_elapsed_ms) if sample_elapsed_ms else None,
+    }
 
 
 def _rating_value(payload: dict[str, Any], *keys: str) -> float | None:
@@ -414,6 +477,7 @@ def _lane_summary_row(
     ]
     requested = int(summary.get("requested_samples") or len(entry_list) or 0)
     failed = int(summary.get("samples_failed") or 0)
+    timing = _timing_summary(summary)
     row = {
         "lane_id": lane.lane_id,
         "provider": lane.provider,
@@ -427,6 +491,14 @@ def _lane_summary_row(
         "matched_post_jsd": quality_dict.get("matched_post_jsd"),
         "perplexity": quality_dict.get("perplexity"),
         "run_dir": summary.get("run_dir"),
+        "request_count": timing["request_count"],
+        "average_request_elapsed_ms": timing["average_request_elapsed_ms"],
+        "min_request_elapsed_ms": timing["min_request_elapsed_ms"],
+        "max_request_elapsed_ms": timing["max_request_elapsed_ms"],
+        "sample_count": timing["sample_count"],
+        "average_sample_elapsed_ms": timing["average_sample_elapsed_ms"],
+        "min_sample_elapsed_ms": timing["min_sample_elapsed_ms"],
+        "max_sample_elapsed_ms": timing["max_sample_elapsed_ms"],
     }
     row.update(judge_summary)
     return row
@@ -435,13 +507,23 @@ def _lane_summary_row(
 def _sort_leaderboard(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     def key(row: dict[str, Any]) -> tuple[float, float, float, float, float, float]:
         judge = _metric_number(row, "judge_naturalness_mean")
+        failure_rate = _metric_number(row, "failure_rate") or float("inf")
+        if judge is None:
+            return (
+                1.0,
+                failure_rate,
+                _metric_number(row, "matched_post_jsd") or float("inf"),
+                _metric_number(row, "matched_post_kl") or float("inf"),
+                _metric_number(row, "perplexity") or float("inf"),
+                -float(row.get("samples_succeeded") or 0),
+            )
         return (
-            0.0 if judge is not None else 1.0,
+            0.0,
             -(judge or 0.0),
             _metric_number(row, "matched_post_jsd") or float("inf"),
             _metric_number(row, "matched_post_kl") or float("inf"),
             _metric_number(row, "perplexity") or float("inf"),
-            _metric_number(row, "failure_rate") or float("inf"),
+            failure_rate,
         )
 
     ranked = sorted(rows, key=key)
@@ -513,6 +595,7 @@ def run_model_naturalness_ablation(
                         transient_sample_retry_base_delay_seconds
                     ),
                 )
+            lane_summary["timing"] = _timing_summary(lane_summary)
             lane_summaries.append({"lane": lane.model_dump(), "summary": lane_summary})
             judge_rows.extend(_judge_rows_for_lane(lane, lane_summary))
         except Exception as exc:
@@ -614,4 +697,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     main()

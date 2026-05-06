@@ -1,7 +1,15 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SRC = _REPO_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from infrastructure.process_tracking import append_current_pid_to_log
 
 
 EMPTY_VALUES = (None, "", [], {})
@@ -147,4 +155,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     main()

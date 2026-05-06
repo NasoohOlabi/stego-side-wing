@@ -1,6 +1,15 @@
 import json
+from pathlib import Path
+import sys
 
 from genson import SchemaBuilder
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SRC = _REPO_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from infrastructure.process_tracking import append_current_pid_to_log
 
 
 def generalize_search_results(schema_dict):
@@ -28,6 +37,7 @@ def generalize_search_results(schema_dict):
 
 
 # --- Execution ---
+append_current_pid_to_log()
 input_path = "output-results/1look5n_v3.json"
 output_path = "schema.json"
 

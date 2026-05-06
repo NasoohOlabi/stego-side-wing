@@ -2,6 +2,8 @@ import json
 import os
 from typing import Any, Dict, List
 
+from infrastructure.process_tracking import append_current_pid_to_log
+
 # Define input and output paths
 POSTS_FILE_PATH = "datasets/2024/r_news_posts.jsonl"
 COMMENTS_FILE_PATH = "datasets/2024/r_news_comments.jsonl"
@@ -142,4 +144,5 @@ def main():
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     main()

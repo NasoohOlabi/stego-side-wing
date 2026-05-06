@@ -6,6 +6,8 @@ import dotenv
 import requests
 from loguru import logger
 
+from infrastructure.process_tracking import append_current_pid_to_log
+
 dotenv.load_dotenv()
 
 _LOG = logger.bind(component="ScrapingDogApi")
@@ -54,4 +56,5 @@ def searchGoogle(query: str, maxResults: int = 10) -> list[dict[str, Any]]:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     searchGoogle("Meta Ray‑Ban Display AR glasses gesture recognition failure at Meta Connect 2025")

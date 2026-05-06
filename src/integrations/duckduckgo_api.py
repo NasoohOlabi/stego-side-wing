@@ -6,6 +6,8 @@ from typing import Any
 import aiohttp
 from loguru import logger
 
+from infrastructure.process_tracking import append_current_pid_to_log
+
 _LOG = logger.bind(component="DuckDuckGoApi")
 
 
@@ -126,6 +128,7 @@ def search_sync(query: str, max_results: int = 10) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     results = search_sync("Python aiohttp Brotli compression")
     for r in results["organic_results"][:3]:
         _LOG.info(

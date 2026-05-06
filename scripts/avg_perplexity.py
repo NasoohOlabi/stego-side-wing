@@ -8,6 +8,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from infrastructure.config import METRICS_DIR  # noqa: E402
+from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 from services.stego_metrics_service import (  # noqa: E402
     metrics_cli_progress,
     run_perplexity_metrics,
@@ -83,4 +84,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     main()

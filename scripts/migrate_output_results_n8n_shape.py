@@ -16,6 +16,7 @@ _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 from workflows.utils.output_results_shape import migrate_output_results_file  # noqa: E402
 
 
@@ -78,4 +79,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     raise SystemExit(main())

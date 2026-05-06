@@ -3,11 +3,18 @@
 import json
 import os
 import subprocess
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from infrastructure.process_tracking import append_current_pid_to_log
+
 LOGS_DIR = REPO_ROOT / "metrics" / "automation_logs"
 RUNS_DIR = REPO_ROOT / "metrics" / "e2e_runs"
 EVENTS_LOG = LOGS_DIR / "pareto_monitor_events.jsonl"
@@ -203,4 +210,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     main()

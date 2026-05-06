@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import requests  # noqa: E402
 
 from infrastructure.config import get_env, get_lm_studio_url  # noqa: E402
+from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 
 # Keep in sync with src/content_acquisition/angles/angle_runner.py defaults
 DEFAULT_MODEL = "openai/gpt-oss-20b"
@@ -99,4 +100,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     raise SystemExit(main())

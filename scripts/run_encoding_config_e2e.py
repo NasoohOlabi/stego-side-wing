@@ -27,6 +27,7 @@ from infrastructure.config import (  # noqa: E402
     get_workflow_encoding_settings,
 )
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
+from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 from loguru import logger  # noqa: E402
 from services.stego_benchmark_service import (  # noqa: E402
     build_experiment_summary_metrics,
@@ -380,4 +381,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     main()

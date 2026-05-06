@@ -14,6 +14,7 @@ from loguru import logger
 
 from app.app_factory import create_app
 from infrastructure.json_logging import log_process_start
+from infrastructure.process_tracking import append_current_pid_to_log
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -80,4 +81,5 @@ if __name__ == "__main__":
     # Windows: UTF-8 for stdout/stderr so crawl4ai and other libs can print symbols safely.
     os.environ.setdefault("PYTHONUTF8", "1")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    append_current_pid_to_log()
     main()

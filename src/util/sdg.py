@@ -5,6 +5,8 @@ from typing import Any, Dict, List
 import dotenv
 import requests
 
+from infrastructure.process_tracking import append_current_pid_to_log
+
 dotenv.load_dotenv()
 
 # type this function to list of the following type
@@ -61,5 +63,6 @@ def searchGoogle(query: str, maxResults: int = 10) -> List[Dict[str, Any]]:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     searchGoogle(
         "Meta Ray‑Ban Display AR glasses gesture recognition failure at Meta Connect 2025")

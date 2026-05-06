@@ -1,7 +1,17 @@
 import json
 import os
+from pathlib import Path
+import sys
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SRC = _REPO_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from infrastructure.process_tracking import append_current_pid_to_log
 
 files_to_delete = []
+append_current_pid_to_log()
 for file in os.listdir("datasets/news_angles"):
     # if the file is not a json file, skip it
     if not file.endswith(".json"):

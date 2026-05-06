@@ -87,10 +87,16 @@ def test_encode_returns_success_with_mocked_stages():
     pipeline._generate_stego_texts = lambda sample, comment_embedding, **kwargs: [
         "candidate text"
     ]
-    pipeline._cross_validate = lambda **kwargs: {
+    pipeline._evaluate_candidate_groups = lambda **kwargs: {
         "succeeded": True,
-        "stegoText": "candidate text",
-        "decodedIndices": [2],
+        "accepted_candidate": {
+            "text": "candidate text",
+            "group_index": 0,
+            "candidate_index": 0,
+            "decoded_index": 2,
+            "strict_decoded_index": 2,
+        },
+        "validationDetails": {"candidates": [{"decoded_index": 2}]},
     }
 
     post = {"id": "p1", "angles": [{"source_quote": "q", "tangent": "t", "category": "c"}]}
@@ -104,7 +110,7 @@ def test_encode_returns_success_with_mocked_stages():
     assert result["angle_index"] == 2
 
 
-def test_encode_uses_anchor_fallback_after_validation_exhausted():
+def test_encode_uses_context_sharpen_after_validation_exhausted():
     pipeline = StegoPipeline.__new__(StegoPipeline)
     angle = {"idx": 2, "category": "c", "tangent": "target tangent", "source_quote": "q"}
     pipeline._augment_post = lambda payload, post: {
@@ -117,31 +123,125 @@ def test_encode_uses_anchor_fallback_after_validation_exhausted():
     }
     pipeline._build_samples = lambda aug, post: ([angle], [angle])
     pipeline._generate_stego_texts = lambda **kwargs: ["drifted candidate"]
-
-    def fake_cross_validate(**kwargs):
-        text = kwargs["candidate_texts"][0]
-        if "target tangent" in text:
-            return {
-                "succeeded": True,
-                "stegoText": text,
-                "decodedIndices": [2],
-                "validationDetails": {},
-            }
-        return {"succeeded": False, "decodedIndices": [9], "validationDetails": {}}
-
-    pipeline._cross_validate = fake_cross_validate
+    validations = [
+        {
+            "succeeded": False,
+            "promising_candidates": [
+                {
+                    "text": "drifted candidate",
+                    "group_index": 0,
+                    "candidate_index": 0,
+                    "decoded_index": 4,
+                    "strict_decoded_index": None,
+                    "context_gate": {"passes": True},
+                    "distance_bucket": "adjacent",
+                    "matches_selected_angle": False,
+                }
+            ],
+            "promising_candidate": {
+                "text": "drifted candidate",
+                "group_index": 0,
+                "candidate_index": 0,
+                "decoded_index": 4,
+                "strict_decoded_index": None,
+                "context_gate": {"passes": True},
+                "distance_bucket": "adjacent",
+            },
+            "validationDetails": {"candidates": [{"decoded_index": 4}]},
+        },
+        {
+            "succeeded": True,
+            "accepted_candidate": {
+                "text": "revised target tangent reply",
+                "group_index": 0,
+                "candidate_index": 0,
+                "decoded_index": 2,
+                "strict_decoded_index": 2,
+            },
+            "validationDetails": {"candidates": [{"decoded_index": 2}]},
+        },
+    ]
+    pipeline._evaluate_candidate_groups = lambda **kwargs: validations.pop(0)
+    pipeline._revise_candidate_text_contextually = lambda **kwargs: "revised target tangent reply"
 
     post = {"id": "p1", "angles": [angle]}
     result = pipeline.encode(payload="secret", post=post, tag="tag", max_retries=0)
 
     assert result["succeeded"] is True
-    assert "target tangent" in result["stego_text"]
-    assert not result["stego_text"].startswith("The part I keep coming back to")
-    assert "rate this" not in result["stego_text"].lower()
-    assert "personally, i'd rate" not in result["stego_text"].lower()
-    assert "/10" not in result["stego_text"]
+    assert result["stego_text"] == "revised target tangent reply"
     assert_no_invisible_carrier(result["stego_text"])
-    assert result["encoded_samples"][-1]["generation_mode"] == "anchor_fallback"
+    assert result["encoded_samples"][-1]["generation_mode"] == "context_sharpen"
+    assert result["sender_audit"]["candidate_validation"]["acceptance_source"] == "context_sharpen"
+
+
+def test_encode_context_sharpen_tries_multiple_promising_candidates():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    angle = {"idx": 2, "category": "c", "tangent": "target tangent", "source_quote": "q"}
+    pipeline._augment_post = lambda payload, post: {
+        "commentEmbedding": {"context": {"title": "t", "author": "a"}},
+        "angleEmbedding": {
+            "selectedAngle": angle,
+            "totalAnglesSelectedFirst": [],
+            "TangentsDB": [angle],
+        },
+    }
+    pipeline._build_samples = lambda aug, post: ([angle], [angle])
+    pipeline._generate_stego_texts = lambda **kwargs: ["drifted candidate"]
+    validations = [
+        {
+            "succeeded": False,
+            "promising_candidates": [
+                {
+                    "text": "first draft",
+                    "group_index": 0,
+                    "candidate_index": 0,
+                    "decoded_index": 4,
+                    "strict_decoded_index": None,
+                    "context_gate": {"passes": False},
+                    "distance_bucket": "adjacent",
+                    "matches_selected_angle": False,
+                },
+                {
+                    "text": "second draft",
+                    "group_index": 0,
+                    "candidate_index": 1,
+                    "decoded_index": 2,
+                    "strict_decoded_index": None,
+                    "context_gate": {"passes": False},
+                    "distance_bucket": "exact",
+                    "matches_selected_angle": True,
+                },
+            ],
+            "validationDetails": {"candidates": [{"decoded_index": 4}, {"decoded_index": 2}]},
+        },
+        {"succeeded": False, "accepted_candidate": None, "validationDetails": {"candidates": []}},
+        {
+            "succeeded": True,
+            "accepted_candidate": {
+                "text": "fixed second draft",
+                "group_index": 0,
+                "candidate_index": 0,
+                "decoded_index": 2,
+                "strict_decoded_index": 2,
+            },
+            "validationDetails": {"candidates": [{"decoded_index": 2}]},
+        },
+    ]
+    pipeline._evaluate_candidate_groups = lambda **kwargs: validations.pop(0)
+    sharpened_inputs: list[str] = []
+
+    def fake_revise_candidate_text_contextually(**kwargs):
+        sharpened_inputs.append(kwargs["candidate_text"])
+        return "fixed second draft" if kwargs["candidate_text"] == "second draft" else "still wrong"
+
+    pipeline._revise_candidate_text_contextually = fake_revise_candidate_text_contextually
+
+    post = {"id": "p1", "angles": [angle]}
+    result = pipeline.encode(payload="secret", post=post, tag="tag", max_retries=0)
+
+    assert result["succeeded"] is True
+    assert sharpened_inputs == ["first draft", "second draft"]
+    assert result["stego_text"] == "fixed second draft"
 
 
 def test_encode_returns_error_when_no_samples():
@@ -270,6 +370,84 @@ def test_cross_validate_rejects_empty_matching_candidate_text():
     )
 
     assert result["succeeded"] is False
+
+
+def test_contextuality_gate_rejects_generic_editorial_drift():
+    post_augmentation = {
+        "commentEmbedding": {
+            "context": {
+                "title": "Title",
+                "selftext": "A local government story.",
+            },
+            "pickedCommentChain": [
+                {"name": "u1", "body": "This looks politically motivated and cruel."}
+            ],
+        }
+    }
+    sample = {
+        "source_quote": "This looks politically motivated and cruel.",
+        "tangent": "Examine the political motivations behind the policy.",
+        "category": "Politics",
+        "best_match": "This looks politically motivated and cruel.",
+    }
+    result = stego._contextuality_gate(
+        "At the end of the day, the bigger issue is a wake up call for all of society.",
+        post_augmentation=post_augmentation,
+        sample=sample,
+        selected_angle=sample,
+    )
+
+    assert result["passes"] is False
+    assert "generic_editorial_tone" in result["reasons"]
+
+
+def test_evaluate_candidate_groups_prefers_context_safe_exact_match():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    selected_angle = {"idx": 1, "category": "Politics", "tangent": "policy abuse", "source_quote": "policy abuse"}
+    tangents_db = [
+        {"idx": 1, "category": "Other", "tangent": "other", "source_quote": "other"},
+        selected_angle,
+    ]
+    post_augmentation = {
+        "commentEmbedding": {
+            "context": {"title": "Title", "selftext": "policy abuse"},
+            "pickedCommentChain": [{"name": "u1", "body": "This feels like policy abuse."}],
+        }
+    }
+    decode_calls = iter(
+        [
+            (None, 1),
+            (1, 1),
+            (1, 1),
+        ]
+    )
+    pipeline._decode_candidate = lambda **kwargs: next(decode_calls)
+    encoded_results = [
+        {
+            "category": "Other",
+            "source_quote": "other",
+            "tangent": "other",
+            "prompt_style": "natural",
+            "texts": ["At the end of the day, the bigger issue is society."],
+        },
+        {
+            "category": "Politics",
+            "source_quote": "policy abuse",
+            "tangent": "policy abuse",
+            "prompt_style": "natural",
+            "texts": ["This really does feel like policy abuse dressed up as procedure."],
+        },
+    ]
+
+    result = pipeline._evaluate_candidate_groups(
+        encoded_results=encoded_results,
+        tangents_db=tangents_db,
+        selected_angle=selected_angle,
+        post_augmentation=post_augmentation,
+    )
+
+    assert result["succeeded"] is True
+    assert result["accepted_candidate"]["group_index"] == 1
 
 
 def test_process_post_skips_save_when_encode_failed():

@@ -6,6 +6,8 @@ import dotenv
 import requests
 from loguru import logger
 
+from infrastructure.process_tracking import append_current_pid_to_log
+
 _LOG = logger.bind(component="NewsApi")
 
 # --- 1. Response Type Definitions (TypedDicts) ---
@@ -142,6 +144,7 @@ def fetch_everything(params: EverythingParams) -> NewsApiResponse:
 # --- 4. Example Usage (for demonstration purposes) ---
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     search_params: EverythingParams = {
         "q": "Python AND Data Science",
         "sortBy": "publishedAt",

@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 from icecream import ic
 
+from infrastructure.process_tracking import append_current_pid_to_log
+
 
 async def searchDuckDuckGo(
     query: str, max_results: int = 10, timeout: int = 10
@@ -141,6 +143,7 @@ def search_sync(query: str, max_results: int = 10) -> Dict[str, Any]:
 
 # Example usage
 if __name__ == "__main__":
+    append_current_pid_to_log()
     # Test search
     results = search_sync("Python aiohttp Brotli compression")
     for r in results["organic_results"][:3]:

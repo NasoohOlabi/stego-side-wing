@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SRC = _REPO_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from infrastructure.process_tracking import append_current_pid_to_log
 
 LEGACY_INVISIBLE_CHARS = frozenset({"\u200c", "\u200d", "\u2060", "\u2063"})
 STEGO_TEXT_KEYS = frozenset({"stegoText", "stego_text"})
@@ -102,4 +110,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    append_current_pid_to_log()
     raise SystemExit(main())

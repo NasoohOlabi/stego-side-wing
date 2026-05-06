@@ -38,3 +38,26 @@ Decision rule:
 
 - Keep if fresh-run success rate beats `46%` Qwen baseline materially.
 - If gains are weak, next branch should test selected-angle-only generation or angle separability ranking before generation.
+
+Result:
+
+- Run: `metrics/stego_feedback_loop/iter1_qwen_low_capacity`.
+- Fresh posts: `20`, no post reuse.
+- Success: `11/20` (`55%`).
+- Failures: `9/20`, all `Decoding validation failed`.
+- Quality on successes: matched-post JSD `0.5622`, perplexity `85.26`.
+- Decision: improvement is real but insufficient. Continue with selected-angle-only generation to reduce decoder confusion and LLM call volume.
+
+## Iteration 2: Selected-Angle-Only Generation
+
+Hypothesis: generation should spend all attempts on the hidden selected angle. Prompting alternate angle groups may add weak few-shot examples and increase semantic drift.
+
+Planned change:
+
+- Balanced profile `WORKFLOW_STEGO_SAMPLE_ANGLE_COUNT`: `2` to `1`.
+- Keep Qwen and max retries `6`.
+
+Validation plan:
+
+- Unit tests: same targeted suite as Iteration 1.
+- Fresh supervised run: `uv run python scripts/run_actual_workload_e2e.py --variant balanced --samples-per-profile 20 --max-retries 6 --run-dir metrics/stego_feedback_loop/iter2_selected_angle_only --overwrite`.

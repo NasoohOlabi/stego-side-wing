@@ -33,6 +33,9 @@ from workflows.utils.stego_codec import (
     augment_post as codec_augment_post,
 )
 from workflows.utils.stego_codec import (
+    augment_post_with_selection_bits as codec_augment_post_with_selection_bits,
+)
+from workflows.utils.stego_codec import (
     build_dictionary as codec_build_dictionary,
 )
 from workflows.utils.stego_codec import (
@@ -332,6 +335,62 @@ def _contextuality_gate(
         "generic_patterns": generic_patterns,
         "reasons": reasons,
     }
+
+
+def _clean_angle_anchor_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = " ".join(value.split())
+    if not text:
+        return ""
+    json_values = re.findall(
+        r'"(?:title|summary|source_quote|tangent)"\s*:\s*"([^"]+)"',
+        text,
+    )
+    if json_values:
+        titles = re.findall(r'"title"\s*:\s*"([^"]+)"', text)
+        text = titles[0] if titles else max(json_values, key=len)
+    text = re.sub(r"[\[\]{}]", " ", text)
+    text = re.sub(r'"\s*,?\s*"(?:summary|title|error|key_points)"\s*:\s*', " ", text)
+    text = " ".join(text.strip(" ,.:;\"'").split())
+    if len(text) > 180:
+        text = text[:180].rsplit(" ", 1)[0].strip()
+    return text
+
+
+def _selected_angle_anchor_phrase(selected_angle: dict[str, Any]) -> str:
+    source_quote = _clean_angle_anchor_text(selected_angle.get("source_quote"))
+    if len(_tokenize_content_words(source_quote)) >= 2:
+        return source_quote
+    tangent = _clean_angle_anchor_text(selected_angle.get("tangent"))
+    if len(_tokenize_content_words(tangent)) >= 2:
+        return tangent
+    return ""
+
+
+def _with_selected_angle_anchor_variants(
+    texts: list[str],
+    selected_angle: dict[str, Any],
+) -> list[str]:
+    phrase = _selected_angle_anchor_phrase(selected_angle)
+    if not phrase:
+        return texts
+    phrase_tokens = set(_tokenize_content_words(phrase))
+    if not phrase_tokens:
+        return texts
+    for text in texts:
+        if len(phrase_tokens & set(_tokenize_content_words(text))) >= min(3, len(phrase_tokens)):
+            return texts
+    if len(phrase.split()) <= 8:
+        anchored = f"{phrase} That detail feels important in this situation."
+    else:
+        anchored = f"{phrase}. That seems directly relevant to what happened here."
+    anchored = " ".join(anchored.split())
+    if len(anchored) > 260:
+        anchored = anchored[:260].rsplit(" ", 1)[0].strip()
+    if anchored and anchored not in texts:
+        return [*texts, anchored]
+    return texts
 
 
 def _extractive_candidate_texts(post: dict[str, Any]) -> list[str]:
@@ -1260,6 +1319,8 @@ class StegoPipeline:
                         encode_run_id=encode_run_id,
                         llm_timings=llm_timings,
                     )
+                    if _eq_angle(sample, selected_angle):
+                        texts = _with_selected_angle_anchor_variants(texts, selected_angle)
                     encoded_results.append(
                         {
                             "category": sample.get("category"),
@@ -1529,6 +1590,239 @@ class StegoPipeline:
                 retry_count += 1
 
         raise RuntimeError("Stego encode retry loop exited unexpectedly.")
+
+    def encode_binary_selection_bits(
+        self,
+        bits: str,
+        post: dict[str, Any],
+        tag: str | None = None,
+        max_retries: int | None = None,
+    ) -> dict[str, Any]:
+        """Diagnostic encode path that scans prepared selection-channel bits directly."""
+        angles = post.get("angles", [])
+        if not isinstance(angles, list) or not angles:
+            raise ValueError("Post must have angles")
+        if set(bits) - {"0", "1"}:
+            raise ValueError("Selection bits must contain only '0' and '1'")
+
+        resolved_max_retries = (
+            get_workflow_stego_default_max_retries() if max_retries is None else max_retries
+        )
+        post_id = post.get("id")
+        encode_run_id = uuid4().hex
+        t_encode = time.perf_counter()
+        _stego_log_bind("start").bind(stego_encode_run_id=encode_run_id).info(
+            "post_id={} binary_bits_len={} max_retries={} diagnostic_binary_selection_bits=true",
+            post_id,
+            len(bits),
+            resolved_max_retries,
+        )
+
+        t_aug = time.perf_counter()
+        post_augmentation = codec_augment_post_with_selection_bits(bits, post)
+        sender_audit = _sender_audit_from_post(post, post_augmentation)
+        sender_audit["encoding"] = get_workflow_encoding_settings()
+        sender_audit["payload_transform"] = "diagnostic_binary_selection_bits"
+        sender_audit["payload_carrier"] = "selection_channel"
+        sender_audit["raw_payload_bytes"] = 0
+        sender_audit["embedded_payload_bytes"] = 0
+        sender_audit["binary_selection_bits"] = bits
+        sender_audit["compression_skipped"] = True
+        sender_audit["payload_transform_skipped"] = True
+        llm_timings: list[dict[str, Any]] = []
+        sender_audit["llm_timings"] = llm_timings
+        post_augmentation["senderAudit"] = sender_audit
+        augment_ms = _elapsed_ms_since(t_aug)
+
+        selected_angle = post_augmentation["angleEmbedding"].get("selectedAngle", {})
+        selected_idx = selected_angle.get("idx")
+        t_samp = time.perf_counter()
+        samples, tangents_db = self._build_samples(post_augmentation, post)
+        build_samples_ms = _elapsed_ms_since(t_samp)
+        if not samples:
+            _log_encode_timing_complete(
+                encode_run_id=encode_run_id,
+                post_id=post_id,
+                augment_ms=augment_ms,
+                build_samples_ms=build_samples_ms,
+                encode_total_ms=_elapsed_ms_since(t_encode),
+                succeeded=False,
+                retry_count=0,
+                timing_outcome="no_samples",
+            )
+            return {
+                "stego_text": "",
+                "post": post,
+                "selected_angle": selected_angle,
+                "angle_index": selected_idx,
+                "succeeded": False,
+                "retry_count": 0,
+                "tag": tag,
+                "sender_audit": sender_audit,
+                "error": "No samples generated from angle embedding",
+                "embedding": post_augmentation,
+                "binary_selection_bits": bits,
+                "comment_bits": post_augmentation.get("commentBits", ""),
+                "angle_bits": post_augmentation.get("angleBits", ""),
+                "compression_skipped": True,
+                "payload_transform_skipped": True,
+            }
+
+        retry_count = 0
+        configured_prompt_style = str(get_workflow_stego_prompt_style())
+        while retry_count <= resolved_max_retries:
+            try:
+                prompt_style = _prompt_style_for_attempt(configured_prompt_style, retry_count)
+                encoded_results: list[dict[str, Any]] = []
+                for sidx, sample in enumerate(samples):
+                    texts = self._generate_stego_texts(
+                        sample=sample,
+                        comment_embedding=post_augmentation["commentEmbedding"],
+                        prompt_style=prompt_style,
+                        sample_index=sidx,
+                        encode_run_id=encode_run_id,
+                        llm_timings=llm_timings,
+                    )
+                    if _eq_angle(sample, selected_angle):
+                        texts = _with_selected_angle_anchor_variants(texts, selected_angle)
+                    encoded_results.append(
+                        {
+                            "category": sample.get("category"),
+                            "source_quote": sample.get("source_quote"),
+                            "tangent": sample.get("tangent"),
+                            "prompt_style": prompt_style,
+                            "texts": texts,
+                        }
+                    )
+                primary_texts = encoded_results[0].get("texts", []) if encoded_results else []
+                if not primary_texts:
+                    raise RuntimeError("Encoder did not return candidate texts")
+
+                validation = self._evaluate_candidate_groups(
+                    encoded_results=encoded_results,
+                    tangents_db=tangents_db,
+                    selected_angle=selected_angle,
+                    post_augmentation=post_augmentation,
+                    encode_run_id=encode_run_id,
+                )
+                if validation.get("succeeded"):
+                    accepted_candidate = validation.get("accepted_candidate") or {}
+                    stego_text = str(accepted_candidate.get("text", ""))
+                    sender_audit["candidate_validation"] = {
+                        "acceptance_source": "draft",
+                        "group_index": accepted_candidate.get("group_index"),
+                        "candidate_index": accepted_candidate.get("candidate_index"),
+                        "decoded_index": accepted_candidate.get("decoded_index"),
+                        "strict_decoded_index": accepted_candidate.get("strict_decoded_index"),
+                    }
+                    _log_encode_timing_complete(
+                        encode_run_id=encode_run_id,
+                        post_id=post_id,
+                        augment_ms=augment_ms,
+                        build_samples_ms=build_samples_ms,
+                        encode_total_ms=_elapsed_ms_since(t_encode),
+                        succeeded=True,
+                        retry_count=retry_count,
+                        timing_outcome="diagnostic_success",
+                    )
+                    return {
+                        "stego_text": stego_text,
+                        "post": post,
+                        "selected_angle": selected_angle,
+                        "angle_index": selected_idx,
+                        "succeeded": True,
+                        "retry_count": retry_count,
+                        "tag": tag,
+                        "sender_audit": sender_audit,
+                        "embedding": post_augmentation,
+                        "encoded_samples": encoded_results,
+                        "decoded_indices": [
+                            item.get("decoded_index")
+                            for item in validation.get("validationDetails", {}).get("candidates", [])
+                        ],
+                        "validation_details": validation.get("validationDetails"),
+                        "binary_selection_bits": bits,
+                        "comment_bits": post_augmentation.get("commentBits", ""),
+                        "angle_bits": post_augmentation.get("angleBits", ""),
+                        "compression_skipped": True,
+                        "payload_transform_skipped": True,
+                    }
+
+                validation_details = validation.get("validationDetails", {})
+                if retry_count >= resolved_max_retries:
+                    _log_encode_timing_complete(
+                        encode_run_id=encode_run_id,
+                        post_id=post_id,
+                        augment_ms=augment_ms,
+                        build_samples_ms=build_samples_ms,
+                        encode_total_ms=_elapsed_ms_since(t_encode),
+                        succeeded=False,
+                        retry_count=retry_count,
+                        timing_outcome="diagnostic_validation_exhausted",
+                    )
+                    return {
+                        "stego_text": primary_texts[0] if primary_texts else "",
+                        "post": post,
+                        "selected_angle": selected_angle,
+                        "angle_index": selected_idx,
+                        "succeeded": False,
+                        "retry_count": retry_count,
+                        "tag": tag,
+                        "sender_audit": sender_audit,
+                        "error": "Decoding validation failed",
+                        "error_details": {
+                            "reason": "Diagnostic candidate did not decode to selected angle.",
+                            "selected_angle": _angle_summary(selected_angle),
+                            "candidate_results": validation_details.get("candidates", []),
+                        },
+                        "validation_details": validation_details,
+                        "embedding": post_augmentation,
+                        "encoded_samples": encoded_results,
+                        "binary_selection_bits": bits,
+                        "comment_bits": post_augmentation.get("commentBits", ""),
+                        "angle_bits": post_augmentation.get("angleBits", ""),
+                        "compression_skipped": True,
+                        "payload_transform_skipped": True,
+                    }
+                retry_count += 1
+            except Exception as exc:
+                if retry_count >= resolved_max_retries:
+                    _log_encode_timing_complete(
+                        encode_run_id=encode_run_id,
+                        post_id=post_id,
+                        augment_ms=augment_ms,
+                        build_samples_ms=build_samples_ms,
+                        encode_total_ms=_elapsed_ms_since(t_encode),
+                        succeeded=False,
+                        retry_count=retry_count,
+                        timing_outcome="diagnostic_exception",
+                    )
+                    return {
+                        "stego_text": "",
+                        "post": post,
+                        "selected_angle": selected_angle,
+                        "angle_index": selected_idx,
+                        "succeeded": False,
+                        "retry_count": retry_count,
+                        "tag": tag,
+                        "sender_audit": sender_audit,
+                        "error": str(exc),
+                        "error_details": {
+                            "reason": "Unexpected exception during diagnostic stego encoding.",
+                            "exception_type": type(exc).__name__,
+                            "exception_message": str(exc),
+                            "selected_angle": _angle_summary(selected_angle),
+                        },
+                        "embedding": post_augmentation,
+                        "binary_selection_bits": bits,
+                        "comment_bits": post_augmentation.get("commentBits", ""),
+                        "angle_bits": post_augmentation.get("angleBits", ""),
+                        "compression_skipped": True,
+                        "payload_transform_skipped": True,
+                    }
+                retry_count += 1
+
+        raise RuntimeError("Diagnostic stego encode retry loop exited unexpectedly.")
 
     def process_post(
         self,

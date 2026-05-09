@@ -33,6 +33,103 @@ _DECODE_LOG_BASE: dict[str, str] = {
     "log_domain": "stego",
     "log_op": "decode",
 }
+
+_LEXICAL_STOPWORDS = {
+    "a",
+    "about",
+    "all",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "but",
+    "by",
+    "can",
+    "do",
+    "does",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "he",
+    "her",
+    "his",
+    "if",
+    "in",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "or",
+    "she",
+    "that",
+    "the",
+    "their",
+    "them",
+    "this",
+    "to",
+    "was",
+    "we",
+    "were",
+    "with",
+    "you",
+}
+
+
+def _content_tokens(text: Any) -> set[str]:
+    words = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]{2,}", str(text).lower())
+    return {word for word in words if word not in _LEXICAL_STOPWORDS}
+
+
+def _angle_text(angle: dict[str, Any]) -> str:
+    return " ".join(
+        str(angle.get(key, "")) for key in ("category", "source_quote", "tangent")
+    )
+
+
+def _lexical_overlap_score(stego_text: str, angle: dict[str, Any]) -> float:
+    query_tokens = _content_tokens(stego_text)
+    angle_tokens = _content_tokens(_angle_text(angle))
+    if not query_tokens or not angle_tokens:
+        return 0.0
+    overlap = query_tokens & angle_tokens
+    precision = len(overlap) / len(query_tokens)
+    recall = len(overlap) / len(angle_tokens)
+    return (precision * 0.65) + (recall * 0.35)
+
+
+def _semantic_score(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rerank_decode_candidates(
+    *,
+    stego_text: str,
+    candidates: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for position, candidate in enumerate(candidates):
+        angle = candidate.get("angle")
+        lexical = _lexical_overlap_score(stego_text, angle if isinstance(angle, dict) else {})
+        semantic = _semantic_score(candidate.get("score"))
+        combined = semantic + (0.25 * lexical)
+        enriched = dict(candidate)
+        enriched["lexical_score"] = round(lexical, 4)
+        enriched["combined_score"] = round(combined, 4)
+        scored.append((combined, -position, enriched))
+    scored.sort(reverse=True, key=lambda item: (item[0], item[1]))
+    return [item[2] for item in scored[:limit]]
+
+
 def _angle_signature(angle: dict[str, Any]) -> tuple[str, str, str]:
     return (
         str(angle.get("category", "")),
@@ -179,10 +276,11 @@ class DecodePipeline:
             )
 
             semantic_top_n = get_workflow_decode_semantic_top_n()
+            semantic_pool_n = min(len(angles), max(semantic_top_n, 120))
             search_result = self.backend.semantic_search(
                 text=stego_text,
                 objects=angles,
-                n=semantic_top_n,
+                n=semantic_pool_n,
             )
 
             results = search_result.get("results", [])
@@ -214,6 +312,7 @@ class DecodePipeline:
                         "rank": rank,
                         "index": mapped_idx,
                         "score": result.get("score"),
+                        "angle": angles[mapped_idx],
                         "tangent": str(obj.get("tangent", ""))[:140],
                     }
                 )
@@ -225,6 +324,12 @@ class DecodePipeline:
                     semantic_event="no_candidate_map",
                 )
                 return None
+
+            top_candidates = _rerank_decode_candidates(
+                stego_text=stego_text,
+                candidates=top_candidates,
+                limit=semantic_top_n,
+            )
 
             # Build few-shot prompt section.
             few_shot_text = ""
@@ -250,12 +355,15 @@ class DecodePipeline:
                 log_area="semantic",
                 semantic_event="candidate_diagnostics",
                 results_returned=len(results),
-                results_scanned=min(len(results), semantic_top_n),
+                results_scanned=min(len(results), semantic_pool_n),
+                semantic_pool_n=semantic_pool_n,
                 top_candidates_count=len(top_candidates),
                 unmapped_semantic_count=unmapped_semantic,
                 labeled_for_prompt_count=len(labeled),
                 allowed_indices=allowed_sorted,
                 top1_index=top_candidates[0]["index"],
+                top1_combined_score=top_candidates[0].get("combined_score"),
+                top1_lexical_score=top_candidates[0].get("lexical_score"),
             )
 
             dec = get_prompts().stego_decode

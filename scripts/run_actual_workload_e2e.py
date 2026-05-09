@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import time
 from collections.abc import Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,15 @@ from services.stego_experiment_service import (  # noqa: E402
     applied_experiment_variant,
     resolve_experiment_variants,
 )
+from services.stego_feedback_service import (  # noqa: E402
+    AdaptiveSampleState,
+    StegoFeedbackRun,
+    classify_failure,
+    plan_adaptive_action,
+    summarize_input_post,
+    summarize_receiver_decode,
+    summarize_stego_result,
+)
 from services.stego_metrics_service import (  # noqa: E402
     run_divergence_metrics,
     run_perplexity_metrics,
@@ -51,6 +62,7 @@ from workflows.utils.output_results_shape import n8n_save_object_body  # noqa: E
 from workflows.utils.protocol_utils import stable_hash  # noqa: E402
 
 RUNS_ROOT = _REPO_ROOT / "metrics" / "e2e_runs"
+FEEDBACK_RUNS_ROOT = _REPO_ROOT / "metrics" / "feedback_runs"
 DEFAULT_VARIANTS = (
     "balanced",
     "capacity",
@@ -79,6 +91,7 @@ RETRYABLE_STEGO_OUTPUT_ERROR_MARKERS = (
 )
 DEFAULT_MAX_TRANSIENT_SAMPLE_RETRIES = 3
 DEFAULT_TRANSIENT_SAMPLE_RETRY_BASE_DELAY_SECONDS = 30.0
+DEFAULT_MAX_ADAPTIVE_SAMPLE_RETRIES = 2
 INFRA_ERROR_MARKERS = (
     "404",
     "500",
@@ -93,6 +106,21 @@ INFRA_ERROR_MARKERS = (
     "api_key",
     "service unavailable",
 )
+
+
+@contextmanager
+def _temporary_env(overrides: dict[str, str]):
+    old_values = {key: os.environ.get(key) for key in overrides}
+    try:
+        for key, value in overrides.items():
+            os.environ[key] = value
+        yield
+    finally:
+        for key, value in old_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -198,6 +226,7 @@ def _run_receiver_decode(
     post: dict[str, Any],
     stego_result: dict[str, Any],
     payload: str,
+    max_padding_bits: int = 256,
 ) -> dict[str, Any]:
     embedding = stego_result.get("embedding")
     compressed = None
@@ -211,6 +240,7 @@ def _run_receiver_decode(
         pre_sender_post=post,
         nested_angles=nested_angles_from_post(post),
         compressed_full=compressed,
+        max_padding_bits=max_padding_bits,
         strict_mode=False,
         expected_angle_index=_safe_int(stego_result.get("angle_index")),
         payload_transform=(
@@ -241,17 +271,32 @@ def _run_sample(
     skip_receiver_decode: bool,
     max_transient_sample_retries: int,
     transient_sample_retry_base_delay_seconds: float,
+    feedback_run: StegoFeedbackRun | None = None,
+    adaptive_feedback: bool = False,
+    max_adaptive_sample_retries: int = DEFAULT_MAX_ADAPTIVE_SAMPLE_RETRIES,
 ) -> dict[str, Any]:
     sample_label = f"{post_id}_version_{variant.name}_{sample_idx:04d}"
     payload = _payload_for(run_id, variant.name, post_id, sample_idx)
     payload_hash = stable_hash(payload)
     attempt_index = 0
+    adaptive_attempts = 0
+    adaptive_state = AdaptiveSampleState()
 
     while True:
         t0 = time.perf_counter()
+        envelope: dict[str, Any] = {
+            "profile": variant.base_profile,
+            "variant": variant.name,
+            "post_id": post_id,
+            "sample_index": sample_idx,
+            "payload_hash": payload_hash,
+            "sample_attempt": attempt_index + 1,
+            "adaptive_attempt": adaptive_attempts,
+        }
         try:
             post = _read_json(angles_dir / f"{post_id}.json")
             baseline_post = _read_json(dataset_dir / f"{post_id}.json")
+            envelope.update(summarize_input_post(post, baseline_post))
             if not _has_usable_angles(post):
                 raise ValueError(f"Post {post_id} has no usable angles")
             _write_json(input_dir / f"{sample_label}.json", post)
@@ -266,12 +311,14 @@ def _run_sample(
                 payload_hash=payload_hash,
                 sample_attempt=attempt_index + 1,
             )
-            stego_result = stego.encode(
-                payload=payload,
-                post=post,
-                tag=f"version_{variant.name}",
-                max_retries=max_retries,
-            )
+            with _temporary_env(adaptive_state.env_overrides):
+                stego_result = stego.encode(
+                    payload=payload,
+                    post=post,
+                    tag=f"version_{variant.name}",
+                    max_retries=max_retries + adaptive_state.stego_max_retries_bonus,
+                )
+            envelope["stego_encode"] = summarize_stego_result(stego_result)
             if not stego_result.get("succeeded") or not stego_result.get("stego_text"):
                 raise RuntimeError(str(stego_result.get("error") or "stego encode failed"))
             receiver_info = {}
@@ -281,7 +328,9 @@ def _run_sample(
                     post=post,
                     stego_result=stego_result,
                     payload=payload,
+                    max_padding_bits=adaptive_state.max_padding_bits,
                 )
+            envelope["receiver_decode"] = summarize_receiver_decode(receiver_info)
             output_path = output_dir / f"{sample_label}.json"
             _write_json(output_path, n8n_save_object_body(stego_result))
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -300,6 +349,9 @@ def _run_sample(
                 "receiver_decode": receiver_info,
                 "sample_attempt": attempt_index + 1,
                 "transient_retry_count": attempt_index,
+                "adaptive_retry_count": adaptive_attempts,
+                "adaptive_actions": list(adaptive_state.actions),
+                "feedback_envelope": envelope,
                 "sample_metrics": build_sample_experiment_metrics(
                     stego_result,
                     stego_text=stego_text,
@@ -319,9 +371,57 @@ def _run_sample(
                 sample_attempt=attempt_index + 1,
                 transient_retry_count=attempt_index,
             )
+            if feedback_run is not None:
+                feedback_run.record_event(
+                    {
+                        **envelope,
+                        "outcome": "succeeded",
+                        "elapsed_ms": elapsed_ms,
+                        "failure_code": None,
+                    }
+                )
             return entry
         except Exception as exc:
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            failure_code = classify_failure(f"{type(exc).__name__}: {exc}", envelope=envelope)
+            if feedback_run is not None:
+                feedback_run.record_event(
+                    {
+                        **envelope,
+                        "outcome": "failed",
+                        "elapsed_ms": elapsed_ms,
+                        "failure_code": failure_code,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+            if adaptive_feedback and adaptive_attempts < max_adaptive_sample_retries:
+                action = plan_adaptive_action(failure_code, adaptive_state)
+                if action is not None:
+                    adaptive_attempts += 1
+                    action_payload = {
+                        "profile": variant.base_profile,
+                        "variant": variant.name,
+                        "post_id": post_id,
+                        "sample_index": sample_idx,
+                        "failure_code": failure_code,
+                        "adaptive_attempt": adaptive_attempts,
+                        **action,
+                    }
+                    adaptive_state.actions.append(action_payload)
+                    if feedback_run is not None:
+                        feedback_run.record_action(action_payload)
+                    logger.bind(component="ActualWorkloadE2E").warning(
+                        "sample_adaptive_retrying_after_failure",
+                        profile=variant.base_profile,
+                        variant=variant.name,
+                        post_id=post_id,
+                        sample_index=sample_idx,
+                        elapsed_ms=elapsed_ms,
+                        failure_code=failure_code,
+                        adaptive_attempt=adaptive_attempts,
+                        action=action.get("action"),
+                    )
+                    continue
             should_retry = _is_retryable_sample_error(exc) or _is_retryable_stego_output_error(exc)
             if attempt_index < max_transient_sample_retries and should_retry:
                 wait_seconds = _transient_sample_retry_delay_seconds(
@@ -370,6 +470,9 @@ def _run_profile(
     fail_fast: bool,
     max_transient_sample_retries: int,
     transient_sample_retry_base_delay_seconds: float,
+    feedback_run: StegoFeedbackRun | None = None,
+    adaptive_feedback: bool = False,
+    max_adaptive_sample_retries: int = DEFAULT_MAX_ADAPTIVE_SAMPLE_RETRIES,
 ) -> dict[str, Any]:
     effective_force_model_generation = (
         variant.real_force_model_generation
@@ -429,10 +532,14 @@ def _run_profile(
                         transient_sample_retry_base_delay_seconds=(
                             transient_sample_retry_base_delay_seconds
                         ),
+                        feedback_run=feedback_run,
+                        adaptive_feedback=adaptive_feedback,
+                        max_adaptive_sample_retries=max_adaptive_sample_retries,
                     )
                 )
             except Exception as exc:
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                failure_code = classify_failure(f"{type(exc).__name__}: {exc}")
                 failure = {
                     "profile": variant.base_profile,
                     "variant": variant.name,
@@ -440,6 +547,7 @@ def _run_profile(
                     "sample_index": sample_idx,
                     "elapsed_ms": elapsed_ms,
                     "error": f"{type(exc).__name__}: {exc}",
+                    "failure_code": failure_code,
                 }
                 failures.append(failure)
                 _write_json(failures_dir / f"{sample_label}.json", failure)
@@ -509,14 +617,7 @@ def _run_profile(
 
 
 def _classify_failure(error_text: str) -> str:
-    normalized = error_text.lower()
-    if any(marker in normalized for marker in INFRA_ERROR_MARKERS):
-        return "infrastructure_failure"
-    if "decoded a different payload" in normalized or "decode" in normalized:
-        return "decode_failure"
-    if "no usable angles" in normalized or "not found" in normalized:
-        return "data_failure"
-    return "generation_failure"
+    return classify_failure(error_text)
 
 
 def _build_progress_payload(
@@ -552,7 +653,9 @@ def _build_progress_payload(
         for failure in failures_list:
             if not isinstance(failure, dict):
                 continue
-            failure_class = _classify_failure(str(failure.get("error") or ""))
+            failure_class = str(failure.get("failure_code") or _classify_failure(str(failure.get("error") or "")))
+            classified.setdefault(failure_class, 0)
+            total_failures.setdefault(failure_class, 0)
             classified[failure_class] += 1
             total_failures[failure_class] += 1
         metrics = lane_summary.get("summary_metrics")
@@ -631,6 +734,9 @@ def run_actual_workload_e2e(
     transient_sample_retry_base_delay_seconds: float = (
         DEFAULT_TRANSIENT_SAMPLE_RETRY_BASE_DELAY_SECONDS
     ),
+    feedback_run_dir: Path | None = None,
+    adaptive_feedback: bool = False,
+    max_adaptive_sample_retries: int = DEFAULT_MAX_ADAPTIVE_SAMPLE_RETRIES,
 ) -> dict[str, Any]:
     if samples_per_profile <= 0:
         raise ValueError("samples_per_profile must be positive")
@@ -653,6 +759,14 @@ def run_actual_workload_e2e(
             )
         shutil.rmtree(resolved_run_dir)
     resolved_run_dir.mkdir(parents=True, exist_ok=True)
+    resolved_feedback_dir = feedback_run_dir
+    if resolved_feedback_dir is None and adaptive_feedback:
+        resolved_feedback_dir = FEEDBACK_RUNS_ROOT / f"feedback_{run_id}"
+    feedback_run = (
+        StegoFeedbackRun(resolved_feedback_dir.resolve())
+        if resolved_feedback_dir is not None
+        else None
+    )
 
     profile_summaries: list[dict[str, Any]] = []
     logger.bind(component="ActualWorkloadE2E").info(
@@ -665,6 +779,8 @@ def run_actual_workload_e2e(
         max_retries=max_retries,
         max_transient_sample_retries=max_transient_sample_retries,
         transient_sample_retry_base_delay_seconds=transient_sample_retry_base_delay_seconds,
+        feedback_run_dir=str(feedback_run.run_dir) if feedback_run else None,
+        adaptive_feedback=adaptive_feedback,
     )
     for variant in resolved_variants:
         profile_summaries.append(
@@ -683,6 +799,9 @@ def run_actual_workload_e2e(
                 transient_sample_retry_base_delay_seconds=(
                     transient_sample_retry_base_delay_seconds
                 ),
+                feedback_run=feedback_run,
+                adaptive_feedback=adaptive_feedback,
+                max_adaptive_sample_retries=max_adaptive_sample_retries,
             )
         )
 
@@ -711,6 +830,9 @@ def run_actual_workload_e2e(
         "max_retries": max_retries,
         "max_transient_sample_retries": max_transient_sample_retries,
         "transient_sample_retry_base_delay_seconds": transient_sample_retry_base_delay_seconds,
+        "feedback_run_dir": str(feedback_run.run_dir) if feedback_run else None,
+        "adaptive_feedback": adaptive_feedback,
+        "max_adaptive_sample_retries": max_adaptive_sample_retries,
         "profile_summaries": profile_summaries,
     }
     _write_json(resolved_run_dir / "summary.json", summary)
@@ -726,6 +848,8 @@ def run_actual_workload_e2e(
     )
     _write_json(resolved_run_dir / "progress.json", progress)
     _write_json(RUNS_ROOT / "latest_actual_workload_e2e.json", summary)
+    if feedback_run is not None:
+        feedback_run.finalize(summary)
     logger.bind(component="ActualWorkloadE2E").info(
         "actual_workload_run_complete",
         run_dir=str(resolved_run_dir),
@@ -783,6 +907,21 @@ def main() -> None:
         default=DEFAULT_TRANSIENT_SAMPLE_RETRY_BASE_DELAY_SECONDS,
     )
     parser.add_argument(
+        "--feedback-run-dir",
+        default=None,
+        help="Write adaptive feedback artifacts under this directory.",
+    )
+    parser.add_argument(
+        "--adaptive-feedback",
+        action="store_true",
+        help="Enable per-sample adaptive retries and feedback artifacts.",
+    )
+    parser.add_argument(
+        "--max-adaptive-sample-retries",
+        type=int,
+        default=DEFAULT_MAX_ADAPTIVE_SAMPLE_RETRIES,
+    )
+    parser.add_argument(
         "--progress-log",
         default=None,
         help="Optional JSONL log containing only ActualWorkloadE2E progress events.",
@@ -818,6 +957,9 @@ def main() -> None:
         transient_sample_retry_base_delay_seconds=(
             args.transient_sample_retry_base_delay_seconds
         ),
+        feedback_run_dir=Path(args.feedback_run_dir) if args.feedback_run_dir else None,
+        adaptive_feedback=bool(args.adaptive_feedback),
+        max_adaptive_sample_retries=args.max_adaptive_sample_retries,
     )
 
 

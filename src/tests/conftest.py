@@ -53,6 +53,8 @@ def clear_workflow_capacity_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "WORKFLOW_DECODE_LLM_MAX_TRIES",
         "WORKFLOW_STEGO_LLM_TEMPERATURE",
         "WORKFLOW_DECODE_STRICT_DEFAULT",
+        "WORKFLOW_NATURALNESS_GATE_ENABLED",
+        "WORKFLOW_NATURALNESS_GATE_MODE",
     )
     for key in strip_keys:
         monkeypatch.delenv(key, raising=False)

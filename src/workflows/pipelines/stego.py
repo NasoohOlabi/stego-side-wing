@@ -25,6 +25,10 @@ from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
 from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
 from workflows.utils import stego_codec
+from workflows.utils.naturalness_gate import (
+    comment_plausibility_gate,
+    naturalness_gate_enabled,
+)
 from workflows.utils.output_results_shape import (
     assert_valid_n8n_stego_artifact,
     n8n_save_object_body,
@@ -328,11 +332,18 @@ def _contextuality_gate(
         reasons.append("unsupported_topic_drift")
     if not has_supported_phrase and len(overlap) < 2:
         reasons.append("weak_selected_angle_grounding")
+    plausibility = {"enabled": False, "passes": True, "reasons": []}
+    if naturalness_gate_enabled():
+        plausibility = {"enabled": True, **comment_plausibility_gate(text)}
+        plausibility_reasons = plausibility.get("reasons", [])
+        if isinstance(plausibility_reasons, list):
+            reasons.extend(str(reason) for reason in plausibility_reasons)
     return {
         "passes": not reasons,
         "overlap_tokens": overlap[:12],
         "unsupported_tokens": unsupported[:12],
         "generic_patterns": generic_patterns,
+        "plausibility": plausibility,
         "reasons": reasons,
     }
 
@@ -382,9 +393,9 @@ def _with_selected_angle_anchor_variants(
         if len(phrase_tokens & set(_tokenize_content_words(text))) >= min(3, len(phrase_tokens)):
             return texts
     if len(phrase.split()) <= 8:
-        anchored = f"{phrase} That detail feels important in this situation."
+        anchored = f"I can see why people keep coming back to {phrase}."
     else:
-        anchored = f"{phrase}. That seems directly relevant to what happened here."
+        anchored = f"{phrase}. I can see why people keep coming back to that point."
     anchored = " ".join(anchored.split())
     if len(anchored) > 260:
         anchored = anchored[:260].rsplit(" ", 1)[0].strip()

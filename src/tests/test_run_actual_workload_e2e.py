@@ -187,3 +187,93 @@ def test_run_actual_workload_e2e_adaptive_feedback_writes_artifacts(monkeypatch)
     assert (feedback_dir / "adaptive_actions.jsonl").is_file()
     assert (feedback_dir / "failure_clusters.json").is_file()
     assert (feedback_dir / "leaderboard.json").is_file()
+
+
+def test_run_actual_workload_e2e_keeps_dedicated_experiment_artifacts(
+    monkeypatch,
+) -> None:
+    module = _load_runner_module()
+    temp_root = (
+        Path(__file__).resolve().parents[2]
+        / "metrics"
+        / "experiments"
+        / "naturalness_gate_v1"
+        / "test-runs"
+        / f"actual-workload-e2e-{uuid4().hex}"
+    )
+    run_dir = temp_root / "runs" / "test_run"
+    angles_dir = temp_root / "fixtures" / "angles"
+    dataset_dir = temp_root / "fixtures" / "dataset"
+    angles_dir.mkdir(parents=True)
+    dataset_dir.mkdir(parents=True)
+
+    post_json = (
+        '{"id":"post-1","title":"Starbucks closes hundreds of stores",'
+        '"selftext":"Store closures are part of a retail restructuring plan.",'
+        '"comments":[{"body":"This sounds like a turnaround problem."}],'
+        '"angles":[{"category":"Business","source_quote":"Starbucks is closing hundreds of stores during restructuring.",'
+        '"tangent":"Discuss store closures and retail restructuring."}]}'
+    )
+    (angles_dir / "post-1.json").write_text(post_json, encoding="utf-8")
+    (dataset_dir / "post-1.json").write_text(post_json, encoding="utf-8")
+
+    class FakeStegoPipeline:
+        def encode(self, *, payload: str, post: dict, tag: str, max_retries: int) -> dict:
+            del payload, post, tag, max_retries
+            return {
+                "succeeded": True,
+                "stego_text": "Store closures usually mean the turnaround is still under pressure.",
+                "angle_index": 0,
+                "retry_count": 0,
+            }
+
+    class FakeReceiverPipeline:
+        pass
+
+    monkeypatch.setattr(module, "StegoPipeline", FakeStegoPipeline)
+    monkeypatch.setattr(module, "ReceiverPipeline", FakeReceiverPipeline)
+    monkeypatch.setattr(
+        module,
+        "run_divergence_metrics",
+        lambda output_dir, baseline_dir, metrics_dir, progress_hook: {
+            "report_path": str(metrics_dir / "divergence.json"),
+            "report": {"dataset_summary": {"usable_stego_samples": 1}},
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "run_perplexity_metrics",
+        lambda output_dir, metrics_dir, progress_hook: {
+            "report_path": str(metrics_dir / "perplexity.json"),
+            "report": {"perplexity_summary": {"average_perplexity": 1.0}},
+        },
+    )
+    monkeypatch.setattr(
+        module, "get_workflow_encoding_settings", lambda: {"encoding_profile": "balanced"}
+    )
+    monkeypatch.setattr(module, "get_workflow_encoding_secret", lambda: "")
+
+    result = module.run_actual_workload_e2e(
+        profiles=["balanced"],
+        variants=["balanced_naturalness_gate"],
+        samples_per_profile=1,
+        post_ids=["post-1"],
+        angles_dir=angles_dir,
+        dataset_dir=dataset_dir,
+        run_dir=run_dir,
+        overwrite=False,
+        max_retries=1,
+        force_model_generation=True,
+        skip_receiver_decode=True,
+        allow_post_reuse=False,
+        fail_fast=True,
+        max_transient_sample_retries=0,
+        transient_sample_retry_base_delay_seconds=0.0,
+    )
+
+    lane_dir = run_dir / "balanced_naturalness_gate"
+    assert result["run_dir"] == str(run_dir.resolve())
+    assert (lane_dir / "output-results").is_dir()
+    assert (lane_dir / "metrics").is_dir()
+    assert (run_dir / "summary.json").is_file()
+    assert not (Path(__file__).resolve().parents[2] / "output-results" / "test_run").exists()

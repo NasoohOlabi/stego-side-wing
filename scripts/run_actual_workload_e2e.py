@@ -58,11 +58,16 @@ from workflows.pipelines.receiver import (  # noqa: E402
     nested_angles_from_post,
 )
 from workflows.pipelines.stego import StegoPipeline  # noqa: E402
+from workflows.utils.naturalness_gate import (  # noqa: E402
+    filter_angles_for_post,
+    naturalness_gate_enabled,
+)
 from workflows.utils.output_results_shape import n8n_save_object_body  # noqa: E402
 from workflows.utils.protocol_utils import stable_hash  # noqa: E402
 
 RUNS_ROOT = _REPO_ROOT / "metrics" / "e2e_runs"
 FEEDBACK_RUNS_ROOT = _REPO_ROOT / "metrics" / "feedback_runs"
+NATURALNESS_EXPERIMENT_ROOT = _REPO_ROOT / "metrics" / "experiments" / "naturalness_gate_v1"
 DEFAULT_VARIANTS = (
     "balanced",
     "capacity",
@@ -147,6 +152,70 @@ def _metric_progress(label: str, current: int, total: int) -> None:
 def _has_usable_angles(post: dict[str, Any]) -> bool:
     angles = post.get("angles")
     return isinstance(angles, list) and bool(angles)
+
+
+def _flatten_post_angles(post: dict[str, Any]) -> list[dict[str, Any]]:
+    angles = post.get("angles")
+    if not isinstance(angles, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in angles:
+        if isinstance(item, dict):
+            out.append(item)
+        elif isinstance(item, list):
+            out.extend(angle for angle in item if isinstance(angle, dict))
+    return out
+
+
+def _apply_e2e_angle_relevance_gate(
+    post: dict[str, Any],
+    baseline_post: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not naturalness_gate_enabled():
+        return post, {"enabled": False}
+    angles = _flatten_post_angles(post)
+    filtered, report = filter_angles_for_post(angles, baseline_post | post)
+    filtered_post = dict(post)
+    filtered_post["angles"] = filtered
+    filtered_post["options_count"] = len(filtered)
+    return filtered_post, report
+
+
+def _aggregate_angle_gate_reports(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    reports: list[dict[str, Any]] = []
+    for item in items:
+        envelope = item.get("feedback_envelope")
+        if not isinstance(envelope, dict):
+            envelope = item.get("envelope")
+        if not isinstance(envelope, dict):
+            continue
+        report = envelope.get("angle_relevance_gate")
+        if isinstance(report, dict) and report.get("enabled"):
+            reports.append(report)
+    reason_counts: dict[str, int] = {}
+    for report in reports:
+        raw_counts = report.get("reason_counts", {})
+        if not isinstance(raw_counts, dict):
+            continue
+        for key, value in raw_counts.items():
+            if isinstance(value, int):
+                reason_counts[str(key)] = reason_counts.get(str(key), 0) + value
+    def _sum_int(key: str) -> int:
+        total = 0
+        for report in reports:
+            value = report.get(key, 0)
+            if isinstance(value, int):
+                total += value
+        return total
+
+    return {
+        "enabled": naturalness_gate_enabled(),
+        "samples_with_report": len(reports),
+        "input_count": _sum_int("input_count"),
+        "kept_count": _sum_int("kept_count"),
+        "rejected_count": _sum_int("rejected_count"),
+        "reason_counts": reason_counts,
+    }
 
 
 def _cycle_to_length(items: Sequence[str], length: int) -> list[str]:
@@ -297,6 +366,8 @@ def _run_sample(
             post = _read_json(angles_dir / f"{post_id}.json")
             baseline_post = _read_json(dataset_dir / f"{post_id}.json")
             envelope.update(summarize_input_post(post, baseline_post))
+            post, angle_gate_report = _apply_e2e_angle_relevance_gate(post, baseline_post)
+            envelope["angle_relevance_gate"] = angle_gate_report
             if not _has_usable_angles(post):
                 raise ValueError(f"Post {post_id} has no usable angles")
             _write_json(input_dir / f"{sample_label}.json", post)
@@ -453,6 +524,7 @@ def _run_sample(
                     time.sleep(wait_seconds)
                 attempt_index += 1
                 continue
+            setattr(exc, "feedback_envelope", envelope)
             raise
 
 
@@ -549,6 +621,9 @@ def _run_profile(
                     "error": f"{type(exc).__name__}: {exc}",
                     "failure_code": failure_code,
                 }
+                failure_envelope = getattr(exc, "feedback_envelope", None)
+                if isinstance(failure_envelope, dict):
+                    failure["envelope"] = failure_envelope
                 failures.append(failure)
                 _write_json(failures_dir / f"{sample_label}.json", failure)
                 logger.bind(component="ActualWorkloadE2E").exception(
@@ -594,6 +669,7 @@ def _run_profile(
             ),
             "entries": entries,
             "failures": failures,
+            "angle_relevance_gate": _aggregate_angle_gate_reports([*entries, *failures]),
             "metrics_report_path": divergence["report_path"] if divergence else None,
             "metrics_report": divergence["report"] if divergence else None,
             "perplexity_report_path": perplexity["report_path"] if perplexity else None,

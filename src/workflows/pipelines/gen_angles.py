@@ -29,6 +29,10 @@ from workflows.utils.angles_llm_config import (
     angles_model_name,
 )
 from workflows.utils.debug_probe import write_debug_probe
+from workflows.utils.naturalness_gate import (
+    filter_angles_for_post,
+    naturalness_gate_enabled,
+)
 from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.text_utils import (
     build_post_text_dictionary_bundle,
@@ -104,6 +108,28 @@ def _dedupe_angles(angles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(key)
         out.append(angle)
     return out
+
+
+def _apply_angle_relevance_gate(
+    *,
+    post: dict[str, Any],
+    angles: list[dict[str, Any]],
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not naturalness_gate_enabled():
+        report["angle_relevance_gate"] = {"enabled": False}
+        return angles
+    filtered, gate_report = filter_angles_for_post(angles, post)
+    report["angle_relevance_gate"] = gate_report
+    _gen_angles_bind_log().info(
+        "angle_relevance_gate_applied",
+        post_id=post.get("id"),
+        input_count=gate_report["input_count"],
+        kept_count=gate_report["kept_count"],
+        rejected_count=gate_report["rejected_count"],
+        reason_counts=gate_report["reason_counts"],
+    )
+    return filtered
 
 
 class GenAnglesPipeline:
@@ -227,6 +253,7 @@ class GenAnglesPipeline:
             max_angles = get_workflow_angles_max_output()
             if len(angles) > max_angles:
                 angles = angles[:max_angles]
+            angles = _apply_angle_relevance_gate(post=post, angles=angles, report=report)
             processed_post = dict(post, angles=angles, options_count=len(angles))
             report.update(
                 {
@@ -288,6 +315,7 @@ class GenAnglesPipeline:
             max_angles = get_workflow_angles_max_output()
             if len(angles) > max_angles:
                 angles = angles[:max_angles]
+            angles = _apply_angle_relevance_gate(post=post, angles=angles, report=report)
             processed_post = dict(post)
             processed_post["angles"] = angles
             processed_post["options_count"] = len(angles)
@@ -383,6 +411,7 @@ class GenAnglesPipeline:
             max_angles = get_workflow_angles_max_output()
             if len(angles) > max_angles:
                 angles = angles[:max_angles]
+            angles = _apply_angle_relevance_gate(post=post, angles=angles, report=report)
             processed_post = dict(post)
             processed_post["angles"] = angles
             processed_post["options_count"] = len(angles)

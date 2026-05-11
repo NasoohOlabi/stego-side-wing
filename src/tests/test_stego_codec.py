@@ -3,6 +3,7 @@
 from workflows.utils.stego_codec import (
     angle_selection_bit_width,
     augment_post,
+    augment_post_with_selection_bits,
     build_dictionary,
     comment_selection_bit_width,
     compress_payload,
@@ -75,6 +76,35 @@ def test_recover_with_compressed_full_matches_bruteforce():
     )
     assert full is not None and brute is not None
     assert full[0] == payload == brute[0]
+
+
+def test_augment_post_with_selection_bits_selects_comment_and_angle_without_compression():
+    post = {
+        "id": "p-bits",
+        "title": "t",
+        "selftext": "",
+        "comments": [
+            {"id": "c1", "author": "a", "body": "one", "replies": []},
+            {"id": "c2", "author": "b", "body": "two", "replies": []},
+        ],
+        "angles": [
+            {"source_quote": "q0", "tangent": "t0", "category": "c0"},
+            {"source_quote": "q1", "tangent": "t1", "category": "c1"},
+            {"source_quote": "q2", "tangent": "t2", "category": "c2"},
+        ],
+    }
+
+    aug = augment_post_with_selection_bits("1001", post)
+    normal = augment_post("101", post)
+
+    assert aug["compression"]["method"] == "diagnostic_binary_selection_bits"
+    assert aug["compression"]["compressionSkipped"] is True
+    assert aug["diagnostic"]["payload_transform_skipped"] is True
+    assert aug["commentBits"] == "10"
+    assert aug["angleBits"] == "01"
+    assert aug["commentEmbedding"]["pickedCommentChain"][-1]["id"] == "c2"
+    assert aug["angleEmbedding"]["selectedAngle"]["idx"] == 1
+    assert normal["compression"]["method"] != "diagnostic_binary_selection_bits"
 
 
 def test_recover_with_compressed_full_accepts_modulo_angle_bits():

@@ -547,6 +547,50 @@ def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def augment_post_with_selection_bits(bits: str, post: dict[str, Any]) -> dict[str, Any]:
+    """Diagnostic-only augmentation from already prepared selection-channel bits."""
+    if set(bits) - {"0", "1"}:
+        raise ValueError("Selection bits must contain only '0' and '1'")
+
+    nested_angles = [
+        x if isinstance(x, list) else [x] for x in post.get("angles", []) if x is not None
+    ]
+    comment_emb = embed_in_comment_selection(bits, post)
+    angle_emb = embed_in_angle_selection(comment_emb["remainingBits"], nested_angles)
+    selection_signature = comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"]
+    warnings: list[str] = []
+    if comment_emb["result"].get("insufficientBits"):
+        warnings.append("Padding used in Comment Selection.")
+    if angle_emb.get("insufficientBits"):
+        warnings.append("Padding used in Angle Selection.")
+
+    return {
+        "compression": {
+            "method": "diagnostic_binary_selection_bits",
+            "payload": bits,
+            "compressed": bits,
+            "compressedLength": len(bits),
+            "originalLength": len(bits),
+            "ratio": 1.0,
+            "references": [],
+            "compressionSkipped": True,
+        },
+        "commentEmbedding": comment_emb["result"],
+        "angleEmbedding": angle_emb,
+        "totalBitsEmbedded": comment_emb["result"]["bitsCount"] + angle_emb["bitsCount"],
+        "fullEncodedBits": selection_signature,
+        "commentBits": comment_emb["result"]["bitsUsed"],
+        "angleBits": angle_emb["bitsUsed"],
+        "selectionSignature": selection_signature,
+        "warnings": warnings,
+        "diagnostic": {
+            "binary_selection_bits": bits,
+            "compression_skipped": True,
+            "payload_transform_skipped": True,
+        },
+    }
+
+
 def comment_selection_bit_width(post: dict[str, Any]) -> int:
     n = len(flatten_comments(post.get("comments", [])))
     return get_bit_width(n)

@@ -110,6 +110,87 @@ def test_encode_returns_success_with_mocked_stages():
     assert result["angle_index"] == 2
 
 
+def test_encode_binary_selection_bits_returns_success_with_mocked_stages():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    angle = {"idx": 1, "category": "c", "tangent": "t", "source_quote": "q"}
+    pipeline._build_samples = lambda aug, post: ([angle], [angle])
+    pipeline._generate_stego_texts = lambda **kwargs: ["candidate text"]
+    pipeline._evaluate_candidate_groups = lambda **kwargs: {
+        "succeeded": True,
+        "accepted_candidate": {
+            "text": "candidate text",
+            "group_index": 0,
+            "candidate_index": 0,
+            "decoded_index": 1,
+            "strict_decoded_index": 1,
+        },
+        "validationDetails": {"candidates": [{"decoded_index": 1}]},
+    }
+    post = {
+        "id": "p-bits",
+        "comments": [],
+        "angles": [
+            {"source_quote": "q0", "tangent": "t0", "category": "c0"},
+            {"source_quote": "q", "tangent": "t", "category": "c"},
+        ],
+    }
+
+    result = pipeline.encode_binary_selection_bits(bits="01", post=post, tag="scan", max_retries=0)
+
+    assert result["succeeded"] is True
+    assert result["stego_text"] == "candidate text"
+    assert result["angle_index"] == 1
+    assert result["binary_selection_bits"] == "01"
+    assert result["compression_skipped"] is True
+    assert result["payload_transform_skipped"] is True
+    assert result["sender_audit"]["payload_transform"] == "diagnostic_binary_selection_bits"
+
+
+def test_encode_binary_selection_bits_reports_json_failure():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    angle = {"idx": 0, "category": "c", "tangent": "t", "source_quote": "q"}
+    pipeline._build_samples = lambda aug, post: ([angle], [angle])
+
+    def fail_generation(**kwargs):
+        raise RuntimeError("Stego LLM output must be valid JSON")
+
+    pipeline._generate_stego_texts = fail_generation
+    post = {"id": "p-bits", "comments": [], "angles": [angle]}
+
+    result = pipeline.encode_binary_selection_bits(bits="0", post=post, max_retries=0)
+
+    assert result["succeeded"] is False
+    assert "valid JSON" in result["error"]
+    assert result["compression_skipped"] is True
+
+
+def test_encode_binary_selection_bits_reports_decode_mismatch():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    selected = {"idx": 0, "category": "c", "tangent": "t", "source_quote": "q"}
+    decoded = {"idx": 1, "category": "other", "tangent": "other", "source_quote": "other"}
+    pipeline._build_samples = lambda aug, post: ([selected], [selected, decoded])
+    pipeline._generate_stego_texts = lambda **kwargs: ["drifted text"]
+    pipeline._evaluate_candidate_groups = lambda **kwargs: {
+        "succeeded": False,
+        "validationDetails": {
+            "candidates": [
+                {
+                    "decoded_index": 1,
+                    "decoded_angle": decoded,
+                    "rejection_reasons": ["decode_mismatch"],
+                }
+            ]
+        },
+    }
+    post = {"id": "p-bits", "comments": [], "angles": [selected, decoded]}
+
+    result = pipeline.encode_binary_selection_bits(bits="00", post=post, max_retries=0)
+
+    assert result["succeeded"] is False
+    assert result["error"] == "Decoding validation failed"
+    assert result["validation_details"]["candidates"][0]["decoded_index"] == 1
+
+
 def test_encode_uses_context_sharpen_after_validation_exhausted():
     pipeline = StegoPipeline.__new__(StegoPipeline)
     angle = {"idx": 2, "category": "c", "tangent": "target tangent", "source_quote": "q"}
@@ -401,6 +482,22 @@ def test_contextuality_gate_rejects_generic_editorial_drift():
     assert "generic_editorial_tone" in result["reasons"]
 
 
+def test_selected_angle_anchor_variant_adds_distinctive_phrase():
+    selected_angle = {
+        "category": "Reference Material",
+        "source_quote": '{"title": "Immigrant Defenders Law Center", "summary": "Provides free legal aid to underserved communities."}',
+        "tangent": "Discuss legal defense resources.",
+    }
+
+    result = stego._with_selected_angle_anchor_variants(
+        ["This is terrifying and someone needs to help her family."],
+        selected_angle,
+    )
+
+    assert len(result) == 2
+    assert "Immigrant Defenders Law Center" in result[1]
+
+
 def test_evaluate_candidate_groups_prefers_context_safe_exact_match():
     pipeline = StegoPipeline.__new__(StegoPipeline)
     selected_angle = {"idx": 1, "category": "Politics", "tangent": "policy abuse", "source_quote": "policy abuse"}
@@ -448,6 +545,39 @@ def test_evaluate_candidate_groups_prefers_context_safe_exact_match():
 
     assert result["succeeded"] is True
     assert result["accepted_candidate"]["group_index"] == 1
+
+
+def test_decode_rerank_promotes_lexically_grounded_candidate():
+    candidates = [
+        {
+            "index": 10,
+            "score": 0.7,
+            "angle": {
+                "category": "Community Discussion",
+                "source_quote": "I fear for their safety at this point.",
+                "tangent": "I fear for their safety at this point.",
+            },
+        },
+        {
+            "index": 3,
+            "score": 0.62,
+            "angle": {
+                "category": "Reference Material",
+                "source_quote": "Immigrant Defense Project Helpline report ICE raid ruse",
+                "tangent": "To report an ICE raid where ICE has used a ruse, call the Immigrant Defense Project Helpline.",
+            },
+        },
+    ]
+
+    from workflows.pipelines.decode import _rerank_decode_candidates
+
+    result = _rerank_decode_candidates(
+        stego_text="I hope someone calls the Immigrant Defense Project Helpline to report this fake ICE raid.",
+        candidates=candidates,
+        limit=2,
+    )
+
+    assert result[0]["index"] == 3
 
 
 def test_process_post_skips_save_when_encode_failed():

@@ -25,6 +25,8 @@ PROFILE_OVERRIDE_KEYS = (
     "WORKFLOW_DECODE_LLM_MAX_TRIES",
     "WORKFLOW_STEGO_LLM_TEMPERATURE",
     "WORKFLOW_DECODE_STRICT_DEFAULT",
+    "WORKFLOW_NATURALNESS_GATE_ENABLED",
+    "WORKFLOW_NATURALNESS_GATE_MODE",
 )
 
 
@@ -52,6 +54,16 @@ def experiment_variants_path() -> Path:
 
 def _default_profile_variant(name: str) -> ExperimentVariant | None:
     normalized = name.strip().lower()
+    if normalized == "balanced_naturalness_gate":
+        return ExperimentVariant(
+            name=normalized,
+            base_profile="balanced",
+            description="Balanced profile with the middle-ground naturalness gate enabled.",
+            env_overrides={
+                "WORKFLOW_NATURALNESS_GATE_ENABLED": "1",
+                "WORKFLOW_NATURALNESS_GATE_MODE": "middle",
+            },
+        )
     if normalized not in {"balanced", "robustness", "capacity", "security"}:
         return None
     profile = normalized  # pyright narrowing needs an explicit branch below.

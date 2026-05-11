@@ -96,7 +96,7 @@ def get_lm_studio_request_timeout_seconds(default: int = 600) -> int:
 
 
 # Workflow LLM (non-sensitive defaults; override WORKFLOW_LLM_BACKEND / GOOGLE_AI_STUDIO_MODEL via env).
-DEFAULT_WORKFLOW_LLM_BACKEND = "ai_studio"
+DEFAULT_WORKFLOW_LLM_BACKEND = "lm_studio"
 DEFAULT_WORKFLOW_LM_STUDIO_MODEL = "qwen/qwen3.5-9b"
 DEFAULT_GOOGLE_AI_STUDIO_MODEL = "gemma-4-26b-a4b-it"
 DEFAULT_GOOGLE_AI_REQUEST_TIMEOUT_SEC = 180
@@ -150,8 +150,8 @@ WORKFLOW_ENCODING_PROFILES: dict[WorkflowEncodingProfile, dict[str, object]] = {
         "stego_generation_mode": "model",
         "payload_transform": "plain",
         "stego_prompt_style": "natural",
-        "stego_sample_angle_count": 4,
-        "stego_default_max_retries": 4,
+        "stego_sample_angle_count": 1,
+        "stego_default_max_retries": 6,
         "decode_semantic_top_n": 20,
         "decode_llm_max_tries": 5,
         "stego_llm_temperature": 0.7,

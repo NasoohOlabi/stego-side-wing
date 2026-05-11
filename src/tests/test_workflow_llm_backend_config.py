@@ -4,24 +4,25 @@ import pytest
 
 from infrastructure.config import (
     DEFAULT_GOOGLE_AI_STUDIO_MODEL,
-    DEFAULT_WORKFLOW_LLM_BACKEND,
     DEFAULT_WORKFLOW_LM_STUDIO_MODEL,
     get_google_ai_studio_model,
     get_google_generative_language_api_key,
     get_google_generative_language_api_keys,
     get_workflow_llm_backend,
     get_workflow_lm_studio_model,
+    get_workflow_stego_default_max_retries,
+    get_workflow_stego_sample_angle_count,
     resolve_workflow_llm_provider_and_model,
 )
 
 
 def test_get_workflow_llm_backend_default(clear_llm_backend_env: None) -> None:
-    assert get_workflow_llm_backend() == "google"
+    assert get_workflow_llm_backend() == "lm_studio"
 
 
 @pytest.mark.parametrize(
     "value",
-    ("google", "GEMINI", DEFAULT_WORKFLOW_LLM_BACKEND),
+    ("google", "GEMINI", "ai_studio"),
 )
 def test_get_workflow_llm_backend_google_aliases(
     monkeypatch: pytest.MonkeyPatch, value: str
@@ -62,6 +63,13 @@ def test_workflow_lm_studio_model_default(clear_llm_backend_env: None) -> None:
     assert get_workflow_lm_studio_model() == DEFAULT_WORKFLOW_LM_STUDIO_MODEL
 
 
+def test_balanced_profile_sacrifices_capacity_for_recoverability(
+    clear_workflow_capacity_env: None,
+) -> None:
+    assert get_workflow_stego_sample_angle_count() == 1
+    assert get_workflow_stego_default_max_retries() == 6
+
+
 def test_workflow_lm_studio_model_override(
     monkeypatch: pytest.MonkeyPatch, clear_llm_backend_env: None
 ) -> None:
@@ -91,12 +99,12 @@ def test_angles_model_name_uses_workflow_lm_studio_model(
     assert angles_model_name() == "qwen/qwen3.5-9b"
 
 
-def test_resolve_defaults_to_ai_studio_when_backend_unset(
+def test_resolve_defaults_to_qwen_lm_studio_when_backend_unset(
     clear_llm_backend_env: None,
 ) -> None:
-    assert resolve_workflow_llm_provider_and_model("openai/gpt-oss-20b") == (
-        "gemini",
-        DEFAULT_GOOGLE_AI_STUDIO_MODEL,
+    assert resolve_workflow_llm_provider_and_model(DEFAULT_WORKFLOW_LM_STUDIO_MODEL) == (
+        "lm_studio",
+        DEFAULT_WORKFLOW_LM_STUDIO_MODEL,
     )
 
 

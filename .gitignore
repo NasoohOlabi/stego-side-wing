@@ -33,3 +33,9 @@ debug-*.log
 tmp_*
 metrics
 .tmp
+
+# dev runs and download logs
+pid.log
+qwen_zlg_download.err.log
+qwen_zlg_download.log
+

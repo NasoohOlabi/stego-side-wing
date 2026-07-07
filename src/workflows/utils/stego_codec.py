@@ -6,10 +6,10 @@ comment/angle embedding, and payload recovery after stripping embed prefixes.
 
 from __future__ import annotations
 
-import math
 import base64
 import hashlib
 import hmac
+import math
 import secrets
 import zlib
 from typing import Any
@@ -247,12 +247,15 @@ def extract_invisible_payload(text: str) -> str | None:
 
 @validate_call
 def get_bit_width(max_value: int) -> int:
-    return 1 if max_value <= 1 else math.ceil(math.log2(max_value + 1))
+    if max_value <= 0:
+        return 0
+    return 1 if max_value == 1 else math.ceil(math.log2(max_value + 1))
 
 
 @validate_call
 def encode_int(value: int, max_value: int) -> str:
-    return format(value, f"0{get_bit_width(max_value)}b")
+    width = get_bit_width(max_value)
+    return "" if width == 0 else format(value, f"0{width}b")
 
 
 @validate_call
@@ -462,10 +465,23 @@ def embed_in_comment_selection(bits: str, post: dict[str, Any]) -> dict[str, Any
     }
 
 
-def flatten_nested_angles(post: dict[str, Any]) -> list[dict[str, Any]]:
-    nested = [x if isinstance(x, list) else [x] for x in post.get("angles", []) if x is not None]
+def _nested_angle_groups(raw_angles: Any) -> list[list[dict[str, Any]]]:
+    if not isinstance(raw_angles, list):
+        return []
+    groups: list[list[dict[str, Any]]] = []
+    for raw_group in raw_angles:
+        if raw_group is None:
+            continue
+        group = raw_group if isinstance(raw_group, list) else [raw_group]
+        angles = [angle for angle in group if isinstance(angle, dict)]
+        if angles:
+            groups.append(angles)
+    return groups
+
+
+def flatten_angle_groups(nested_angles: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
     angles: list[dict[str, Any]] = []
-    for angle_group in nested:
+    for angle_group in nested_angles:
         for angle in angle_group:
             with_idx = dict(angle)
             with_idx["idx"] = len(angles)
@@ -473,15 +489,14 @@ def flatten_nested_angles(post: dict[str, Any]) -> list[dict[str, Any]]:
     return angles
 
 
+def flatten_nested_angles(post: dict[str, Any]) -> list[dict[str, Any]]:
+    return flatten_angle_groups(_nested_angle_groups(post.get("angles", [])))
+
+
 def embed_in_angle_selection(
     bits: str, nested_angles: list[list[dict[str, Any]]]
 ) -> dict[str, Any]:
-    angles: list[dict[str, Any]] = []
-    for angle_group in nested_angles:
-        for angle in angle_group:
-            with_idx = dict(angle)
-            with_idx["idx"] = len(angles)
-            angles.append(with_idx)
+    angles = flatten_angle_groups(nested_angles)
 
     if not angles:
         return {
@@ -516,9 +531,7 @@ def embed_in_angle_selection(
 
 
 def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
-    nested_angles = [
-        x if isinstance(x, list) else [x] for x in post.get("angles", []) if x is not None
-    ]
+    nested_angles = _nested_angle_groups(post.get("angles", []))
     dictionary = build_dictionary(post)
     compression = compress_payload(payload, dictionary)
     warnings: list[str] = []
@@ -533,12 +546,19 @@ def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
     if angle_emb.get("insufficientBits"):
         warnings.append("Padding used in Angle Selection.")
     selection_signature = comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"]
+    remaining_channel_bits = len(angle_emb.get("remainingBits", ""))
+    if remaining_channel_bits > 0:
+        warnings.append(
+            "Selection channel did not carry the full compressed payload; "
+            "remaining bits require multi-post framing or audit-assisted recovery."
+        )
 
     return {
         "compression": compression,
         "commentEmbedding": comment_emb["result"],
         "angleEmbedding": angle_emb,
         "totalBitsEmbedded": comment_emb["result"]["bitsCount"] + angle_emb["bitsCount"],
+        "remainingBitsUnembedded": remaining_channel_bits,
         "fullEncodedBits": selection_signature,
         "commentBits": comment_emb["result"]["bitsUsed"],
         "angleBits": angle_emb["bitsUsed"],
@@ -552,9 +572,7 @@ def augment_post_with_selection_bits(bits: str, post: dict[str, Any]) -> dict[st
     if set(bits) - {"0", "1"}:
         raise ValueError("Selection bits must contain only '0' and '1'")
 
-    nested_angles = [
-        x if isinstance(x, list) else [x] for x in post.get("angles", []) if x is not None
-    ]
+    nested_angles = _nested_angle_groups(post.get("angles", []))
     comment_emb = embed_in_comment_selection(bits, post)
     angle_emb = embed_in_angle_selection(comment_emb["remainingBits"], nested_angles)
     selection_signature = comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"]
@@ -610,8 +628,10 @@ def angle_bits_for_index(idx: int, n_angles: int) -> str:
 
 
 def angle_bits_decode_to_index(bits: str, idx: int, n_angles: int) -> bool:
-    if n_angles <= 0 or not bits:
+    if n_angles <= 0:
         return False
+    if not bits:
+        return angle_selection_bit_width(n_angles) == 0 and idx % n_angles == 0
     return int(bits, 2) % n_angles == idx % n_angles
 
 
@@ -621,9 +641,7 @@ def angle_bit_aliases_for_index(idx: int, n_angles: int) -> list[str]:
         return [""]
     target = idx % n_angles
     return [
-        format(value, f"0{width}b")
-        for value in range(1 << width)
-        if value % n_angles == target
+        format(value, f"0{width}b") for value in range(1 << width) if value % n_angles == target
     ]
 
 
@@ -668,6 +686,8 @@ def decompress_after_embed_prefix(
 def _read_fixed_int(bits: str, pos: int, max_value: int) -> tuple[int, int] | None:
     """Read integer using same width as ``encode_int(..., max_value)``."""
     w = get_bit_width(max_value)
+    if w == 0:
+        return 0, pos
     if pos + w > len(bits):
         return None
     chunk = bits[pos : pos + w]
@@ -680,6 +700,8 @@ def _read_utf8_n_chars(bits: str, pos: int, n_chars: int) -> tuple[str, int] | N
         return "", pos
     buf = bytearray()
     p = pos
+    # UTF-8 uses at most 4 bytes per code point. Keep a small slack window so
+    # malformed or padded bitstreams terminate instead of scanning unbounded input.
     max_bytes = min(len(bits) - pos, n_chars * 4 * 8) // 8 + 16
     while len(buf) <= max_bytes:
         try:
@@ -754,12 +776,13 @@ def recover_payload_with_compressed_full(
     nested_angles: list[list[dict[str, Any]]],
     decoded_angle_index: int,
 ) -> tuple[str, dict[str, Any]] | None:
-    """Recover payload when the full compressed bitstring from encode is known."""
+    """Recover payload when the full compressed bitstring from encode is known.
+
+    This is audit-assisted recovery, not proof that one visible comment carried
+    the whole payload. Pure stego recovery only observes the selection bits.
+    """
     lc = comment_selection_bit_width(pre_sender_post)
-    angles: list[dict[str, Any]] = []
-    for angle_group in nested_angles:
-        for angle in angle_group:
-            angles.append(dict(angle))
+    angles = flatten_angle_groups(nested_angles)
 
     la = angle_selection_bit_width(len(angles))
     if len(angles) == 0:
@@ -836,10 +859,7 @@ def recover_payload_bruteforce_comment_bits(
     ``decompress_after_embed_prefix`` to round-trip the candidate.
     """
     lc = comment_selection_bit_width(pre_sender_post)
-    angles: list[dict[str, Any]] = []
-    for angle_group in nested_angles:
-        for angle in angle_group:
-            angles.append(dict(angle))
+    angles = flatten_angle_groups(nested_angles)
 
     la = angle_selection_bit_width(len(angles))
     if not angles:
@@ -862,6 +882,9 @@ def recover_payload_bruteforce_comment_bits(
             "method": compress_payload(payload, dictionary).get("method"),
         }
 
+    # This path is intentionally bounded for small selection channels. It is
+    # not suitable for large payload search; multi-post framing should carry
+    # the remaining bits explicitly instead.
     n_comment_guesses = 1 << lc if lc > 0 else 1
     angle_bits_candidates = angle_bit_aliases_for_index(decoded_angle_index, len(angles))
     best: tuple[str, dict[str, Any], int] | None = None

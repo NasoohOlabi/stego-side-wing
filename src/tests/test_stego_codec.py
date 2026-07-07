@@ -9,7 +9,9 @@ from workflows.utils.stego_codec import (
     compress_payload,
     decompress_after_embed_prefix,
     embed_invisible_payload,
+    encode_int,
     extract_invisible_payload,
+    get_bit_width,
     protect_payload,
     recover_payload_bruteforce_comment_bits,
     recover_payload_with_compressed_full,
@@ -22,6 +24,12 @@ def test_compress_standard_empty_dictionary():
     r = compress_payload("abc", dictionary=[])
     assert r["method"] == "standard"
     assert r["compressed"].startswith("0")
+
+
+def test_zero_width_selection_capacity_uses_no_bits():
+    assert get_bit_width(0) == 0
+    assert encode_int(0, 0) == ""
+    assert angle_selection_bit_width(1) == 0
 
 
 def test_decompress_roundtrip_standard_no_comments():
@@ -113,7 +121,7 @@ def test_recover_with_compressed_full_accepts_modulo_angle_bits():
         "title": "",
         "selftext": "",
         "url": "https://example.com",
-        "comments": [],
+        "comments": [{"id": "c1", "author": "a", "body": "body", "replies": []}],
         "angles": [
             {"source_quote": "q1", "tangent": "t1", "category": "c1"},
             {"source_quote": "q2", "tangent": "t2", "category": "c2"},

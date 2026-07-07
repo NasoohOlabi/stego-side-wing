@@ -484,6 +484,9 @@ class ReceiverPipeline:
             rebuilt_post=rebuilt,
             pre_sender_post=pre_sender,
             nested_angles=nested_rebuilt,
+            # Audit-provided compressed bits are an assisted recovery path. In
+            # ephemeral mode the context is expected to be volatile; pure channel
+            # recovery must rely only on the selected comment/angle observations.
             compressed_full=compressed_full or _compressed_full_from_audit(sender_audit),
             max_padding_bits=max_padding_bits,
             strict_mode=resolved_strict_decode,

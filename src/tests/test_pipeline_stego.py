@@ -27,7 +27,7 @@ def test_n8n_save_object_body_legacy_shape():
 def test_stego_helpers_cover_edge_cases():
     assert stego._is_non_empty_string("x") is True
     assert stego._is_non_empty_string("") is False
-    assert stego._get_bit_width(0) == 1
+    assert stego._get_bit_width(0) == 0
     assert stego._get_bit_width(8) >= 1
     taken, remaining, insufficient = stego._take_bits("101", 5)
     assert taken == "10100"
@@ -135,12 +135,12 @@ def test_encode_binary_selection_bits_returns_success_with_mocked_stages():
         ],
     }
 
-    result = pipeline.encode_binary_selection_bits(bits="01", post=post, tag="scan", max_retries=0)
+    result = pipeline.encode_binary_selection_bits(bits="1", post=post, tag="scan", max_retries=0)
 
     assert result["succeeded"] is True
     assert result["stego_text"] == "candidate text"
     assert result["angle_index"] == 1
-    assert result["binary_selection_bits"] == "01"
+    assert result["binary_selection_bits"] == "1"
     assert result["compression_skipped"] is True
     assert result["payload_transform_skipped"] is True
     assert result["sender_audit"]["payload_transform"] == "diagnostic_binary_selection_bits"

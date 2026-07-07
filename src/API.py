@@ -25,9 +25,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the stego-side-wing API")
     parser.add_argument("--dev", action="store_true", help="Run in development mode")
     parser.add_argument("--host", default=os.environ.get("API_HOST", "127.0.0.1"))
-    parser.add_argument(
-        "--port", type=int, default=int(os.environ.get("API_PORT", "5001"))
-    )
+    parser.add_argument("--port", type=int, default=int(os.environ.get("API_PORT", "5001")))
     parser.add_argument(
         "--log-level",
         default=os.environ.get("API_LOG_LEVEL") or None,

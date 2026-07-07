@@ -1,11 +1,11 @@
 """Receiver pipeline unit tests (mocked rebuild / decode)."""
 
 from workflows.pipelines.receiver import (
+    ReceiverPipeline,
     build_pre_sender_post,
     locate_sender_stego_comment,
     nested_angles_from_post,
 )
-from workflows.pipelines.receiver import ReceiverPipeline
 from workflows.pipelines.stego import StegoPipeline
 from workflows.utils.stego_codec import augment_post, extract_invisible_payload
 
@@ -117,9 +117,7 @@ def test_receiver_run_fails_fast_on_context_drift():
         ],
     }
     full_post = dict(pre_sender)
-    full_post["comments"] = [
-        {"id": "stego_c", "author": "sender1", "body": "stego", "replies": []}
-    ]
+    full_post["comments"] = [{"id": "stego_c", "author": "sender1", "body": "stego", "replies": []}]
     full_post["sender_audit"] = {
         "dictionary_hash": "not-the-rebuilt-hash",
         "angles_hash": "not-the-rebuilt-hash",
@@ -158,7 +156,11 @@ def test_receiver_run_recovers_selection_channel_payload_from_sender_audit():
         "url": "https://example.com/article",
         "comments": [],
         "angles": [
-            {"source_quote": "visible carrier text", "tangent": "visible carrier text", "category": "cat"},
+            {
+                "source_quote": "visible carrier text",
+                "tangent": "visible carrier text",
+                "category": "cat",
+            },
         ],
     }
     aug = augment_post("legacy", pre_sender)
@@ -210,9 +212,7 @@ def test_receiver_run_recovers_selection_channel_payload_from_sender_audit():
     assert out["recovery_meta"]["payload_carrier"] == "selection_channel"
 
 
-def test_receiver_run_unwraps_security_profile_payload(
-    monkeypatch, clear_workflow_capacity_env
-):
+def test_receiver_run_unwraps_security_profile_payload(monkeypatch, clear_workflow_capacity_env):
     monkeypatch.setenv("WORKFLOW_ENCODING_PROFILE", "security")
     monkeypatch.setenv("WORKFLOW_ENCODING_SECRET", "receiver-secret")
     pre_sender = {

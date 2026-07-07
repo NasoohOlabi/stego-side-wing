@@ -18,10 +18,7 @@ def test_classify_failure_normalizes_common_decode_errors() -> None:
         classify_failure("RuntimeError: Receiver decoded a different payload than expected")
         == "receiver_payload_mismatch"
     )
-    assert (
-        classify_failure("RuntimeError: Decoding validation failed")
-        == "receiver_angle_mismatch"
-    )
+    assert classify_failure("RuntimeError: Decoding validation failed") == "receiver_angle_mismatch"
 
 
 def test_classify_failure_uses_stage_envelope_for_data_failures() -> None:
@@ -94,4 +91,3 @@ def test_feedback_run_writes_clusters_and_leaderboard(tmp_path: Path) -> None:
     assert (tmp_path / "events.jsonl").is_file()
     assert (tmp_path / "failure_clusters.json").is_file()
     assert (tmp_path / "leaderboard.json").is_file()
-

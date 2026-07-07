@@ -30,11 +30,17 @@ def _dest_name_for_source(file_name: str, tag: str | None) -> str:
 
 
 def _candidate_names(entries: list[os.DirEntry[str]], tag: str | None) -> list[str]:
-    json_names = [entry.name for entry in entries if entry.is_file() and entry.name.endswith(".json")]
+    json_names = [
+        entry.name for entry in entries if entry.is_file() and entry.name.endswith(".json")
+    ]
     if not tag:
         return json_names
     tagged = [name for name in json_names if _is_tagged_source_name(name, tag)]
-    return tagged if tagged else [name for name in json_names if not name.endswith(_tag_suffix(tag) + ".json")]
+    return (
+        tagged
+        if tagged
+        else [name for name in json_names if not name.endswith(_tag_suffix(tag) + ".json")]
+    )
 
 
 def is_file_in_folder(folder_path: str, file_name: str) -> bool:

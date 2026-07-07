@@ -166,11 +166,23 @@ def _context_drift_mismatches(
     sender_audit: dict[str, Any], rebuilt_post: dict[str, Any], rebuilt_summary: dict[str, Any]
 ) -> list[dict[str, Any]]:
     checks = (
-        ("dictionary_hash", sender_audit.get("dictionary_hash"), rebuilt_summary.get("dictionary_hash")),
-        ("dictionary_count", sender_audit.get("dictionary_count"), rebuilt_summary.get("dictionary_count")),
+        (
+            "dictionary_hash",
+            sender_audit.get("dictionary_hash"),
+            rebuilt_summary.get("dictionary_hash"),
+        ),
+        (
+            "dictionary_count",
+            sender_audit.get("dictionary_count"),
+            rebuilt_summary.get("dictionary_count"),
+        ),
         ("angles_hash", sender_audit.get("angles_hash"), rebuilt_summary.get("angles_hash")),
         ("angles_count", sender_audit.get("angles_count"), rebuilt_summary.get("angles_count")),
-        ("selected_urls_hash", sender_audit.get("selected_urls_hash"), _rebuilt_selected_urls_hash(rebuilt_post)),
+        (
+            "selected_urls_hash",
+            sender_audit.get("selected_urls_hash"),
+            _rebuilt_selected_urls_hash(rebuilt_post),
+        ),
     )
     return [
         {"field": field, "expected": expected, "actual": actual}
@@ -374,6 +386,8 @@ class ReceiverPipeline:
             if got is None:
                 raise RuntimeError("Compressed bitstring does not match decoded angle index")
             protected_payload, recovery_meta = got
+            recovery_meta["recovery_source"] = "audit_assisted_compressed_full"
+            recovery_meta["used_compressed_full"] = True
         else:
             got = recover_payload_bruteforce_comment_bits(
                 dictionary,
@@ -388,6 +402,8 @@ class ReceiverPipeline:
                     "increase max_padding_bits)"
                 )
             protected_payload, recovery_meta = got
+            recovery_meta["recovery_source"] = "pure_selection_channel"
+            recovery_meta["used_compressed_full"] = False
 
         payload = _decode_configured_payload(protected_payload, resolved_transform)
         recovery_meta["payload_carrier"] = "selection_channel"

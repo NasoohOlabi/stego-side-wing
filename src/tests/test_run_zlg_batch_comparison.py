@@ -29,12 +29,13 @@ def test_extract_sample_reads_payload_and_context(tmp_path: Path) -> None:
         }
     ]
     out.write_text(json.dumps(payload), encoding="utf-8")
-    cover_texts, secret = mod._extract_sample(
+    cover_texts, secret, embedded_bits = mod._extract_sample(
         {"output_file": str(out)}, max_selftext_chars=2000, max_chain_chars=1000
     )
     assert any("t" in sentence for sentence in cover_texts)
     assert any("b" in sentence for sentence in cover_texts)
     assert secret == "hello"
+    assert embedded_bits == 0
 
 
 def test_load_processed_uses_source_key(tmp_path: Path) -> None:

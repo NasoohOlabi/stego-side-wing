@@ -130,10 +130,7 @@ def _flatten_comments(comments: Any) -> list[dict[str, Any]]:
 
 
 def _angle_text(angle: dict[str, Any]) -> str:
-    parts = [
-        str(angle.get(key) or "")
-        for key in ("source_quote", "tangent", "category")
-    ]
+    parts = [str(angle.get(key) or "") for key in ("source_quote", "tangent", "category")]
     return " ".join(parts)
 
 
@@ -215,9 +212,7 @@ def filter_angles_for_post(
                 "category": angle.get("category"),
             }
         )
-    reason_counts = Counter(
-        reason for item in rejected for reason in item.get("reasons", [])
-    )
+    reason_counts = Counter(reason for item in rejected for reason in item.get("reasons", []))
     report = {
         "enabled": True,
         "input_count": len(angles),

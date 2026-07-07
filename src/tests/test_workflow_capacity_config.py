@@ -2,12 +2,10 @@
 
 import pytest
 
-from workflows.utils.capacity_observability import build_workflow_capacity_observation_fields
-
 from infrastructure.config import (
     WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED,
-    get_workflow_angles_max_output,
     get_workflow_angles_max_input_blocks,
+    get_workflow_angles_max_output,
     get_workflow_capacity_profile,
     get_workflow_capacity_settings,
     get_workflow_dictionary_max_comments,
@@ -18,6 +16,7 @@ from infrastructure.config import (
     get_workflow_research_max_selected_urls,
     get_workflow_research_max_terms,
 )
+from workflows.utils.capacity_observability import build_workflow_capacity_observation_fields
 
 
 def test_workflow_capacity_defaults_to_uncapped_mid_profile(

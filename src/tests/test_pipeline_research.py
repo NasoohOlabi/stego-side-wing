@@ -37,7 +37,9 @@ def test_research_post_requires_id():
 def test_research_post_skips_when_already_researched():
     post = {"id": "p1", "search_results": ["exists"]}
     pipeline = _research_pipeline_stub()
-    pipeline.gen_terms = SimpleNamespace(generate=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("should not run")))
+    pipeline.gen_terms = SimpleNamespace(
+        generate=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("should not run"))
+    )
     pipeline.backend = SimpleNamespace()
     pipeline.fetch_content = SimpleNamespace()
 
@@ -63,9 +65,7 @@ def test_research_post_builds_deduped_non_pdf_results():
 
     pipeline.backend = SimpleNamespace(google_search=google_search)
     pipeline.fetch_content = SimpleNamespace(
-        fetch=lambda url, use_cache: FetchUrlResult(
-            url=url, success=True, text=f"text:{url}"
-        )
+        fetch=lambda url, use_cache: FetchUrlResult(url=url, success=True, text=f"text:{url}")
     )
 
     post = {"id": "p1", "title": "t", "selftext": "body", "url": "https://origin"}
@@ -114,23 +114,17 @@ def test_process_posts_saves_local_for_all_and_remote_for_new_only():
 
 def test_process_post_objects_include_breakdown_appends_reports():
     pipeline = _research_pipeline_stub()
-    pipeline.gen_terms = SimpleNamespace(
-        preview_generation=lambda **kwargs: {"terms": ["t1"]}
-    )
+    pipeline.gen_terms = SimpleNamespace(preview_generation=lambda **kwargs: {"terms": ["t1"]})
     pipeline.backend = SimpleNamespace(
         save_post_local=lambda *a, **k: None,
         save_post=lambda *a, **k: None,
         google_search=lambda **kwargs: {"results": [{"link": "https://a.com/x"}]},
     )
     pipeline.fetch_content = SimpleNamespace(
-        fetch=lambda url, use_cache: FetchUrlResult(
-            url=url, success=True, text=f"body:{url}"
-        )
+        fetch=lambda url, use_cache: FetchUrlResult(url=url, success=True, text=f"body:{url}")
     )
     posts = [{"id": "p1", "title": "t", "selftext": "b", "url": "https://u"}]
-    pipeline.process_post_objects(
-        posts=posts, step="filter-researched", include_breakdown=True
-    )
+    pipeline.process_post_objects(posts=posts, step="filter-researched", include_breakdown=True)
     assert len(pipeline.last_research_breakdown_posts) == 1
     entry = pipeline.last_research_breakdown_posts[0]
     assert entry["post_id"] == "p1"
@@ -144,9 +138,7 @@ def test_process_posts_clears_breakdown_when_include_breakdown():
     pipeline.backend = SimpleNamespace(
         posts_list=lambda **kwargs: {"fileNames": []},
     )
-    pipeline.process_posts(
-        step="filter-researched", count=1, offset=0, include_breakdown=True
-    )
+    pipeline.process_posts(step="filter-researched", count=1, offset=0, include_breakdown=True)
     assert pipeline.last_research_breakdown_posts == []
 
 
@@ -177,9 +169,7 @@ def test_preview_post_caps_selected_urls(monkeypatch, clear_workflow_capacity_en
 
     pipeline.backend = SimpleNamespace(google_search=google_search)
     pipeline.fetch_content = SimpleNamespace(
-        fetch=lambda url, use_cache: FetchUrlResult(
-            url=url, success=True, text=f"text:{url}"
-        )
+        fetch=lambda url, use_cache: FetchUrlResult(url=url, success=True, text=f"text:{url}")
     )
 
     preview = pipeline.preview_post(

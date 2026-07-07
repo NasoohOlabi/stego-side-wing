@@ -128,7 +128,10 @@ def test_protocol_angles_preview_endpoint(client, monkeypatch):
         api_v1_routes.runner,
         "preview_gen_angles_post",
         lambda post_id, source_post=None, **kwargs: {
-            "post": {"id": post_id, "angles": [{"source_quote": "q", "tangent": "t", "category": "c"}]},
+            "post": {
+                "id": post_id,
+                "angles": [{"source_quote": "q", "tangent": "t", "category": "c"}],
+            },
             "report": {"options_count": 1},
         },
     )

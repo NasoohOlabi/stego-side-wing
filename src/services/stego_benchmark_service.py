@@ -28,10 +28,7 @@ def _mean(values: list[float]) -> float | None:
 
 
 def _counter_rows(counter: Counter[str], *, limit: int = 5) -> list[dict[str, Any]]:
-    return [
-        {"value": value, "count": count}
-        for value, count in counter.most_common(limit)
-    ]
+    return [{"value": value, "count": count} for value, count in counter.most_common(limit)]
 
 
 def _shannon_entropy(counter: Counter[str]) -> float:
@@ -118,11 +115,15 @@ def build_experiment_summary_metrics(
     divergence_report: dict[str, Any] | None,
     perplexity_report: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    carrier_values = [entry.get("sample_metrics", {}).get("carrier_metrics", {}) for entry in entries]
+    carrier_values = [
+        entry.get("sample_metrics", {}).get("carrier_metrics", {}) for entry in entries
+    ]
     selection_values = [
         entry.get("sample_metrics", {}).get("selection_metrics", {}) for entry in entries
     ]
-    capacity_values = [entry.get("sample_metrics", {}).get("capacity_metrics", {}) for entry in entries]
+    capacity_values = [
+        entry.get("sample_metrics", {}).get("capacity_metrics", {}) for entry in entries
+    ]
 
     method_counter = Counter(
         str(metrics.get("compression_method"))

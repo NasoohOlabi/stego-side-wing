@@ -1,4 +1,5 @@
 """Contract tests for supported HTTP endpoints."""
+
 import pytest
 
 from app.app_factory import create_app

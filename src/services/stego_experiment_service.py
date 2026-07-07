@@ -68,11 +68,17 @@ def _default_profile_variant(name: str) -> ExperimentVariant | None:
         return None
     profile = normalized  # pyright narrowing needs an explicit branch below.
     if profile == "balanced":
-        return ExperimentVariant(name=profile, base_profile="balanced", description="ad hoc profile")
+        return ExperimentVariant(
+            name=profile, base_profile="balanced", description="ad hoc profile"
+        )
     if profile == "robustness":
-        return ExperimentVariant(name=profile, base_profile="robustness", description="ad hoc profile")
+        return ExperimentVariant(
+            name=profile, base_profile="robustness", description="ad hoc profile"
+        )
     if profile == "capacity":
-        return ExperimentVariant(name=profile, base_profile="capacity", description="ad hoc profile")
+        return ExperimentVariant(
+            name=profile, base_profile="capacity", description="ad hoc profile"
+        )
     return ExperimentVariant(name=profile, base_profile="security", description="ad hoc profile")
 
 

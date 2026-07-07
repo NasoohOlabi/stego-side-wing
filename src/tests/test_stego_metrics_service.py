@@ -89,7 +89,9 @@ def test_run_single_post_metrics_one_file(tmp_path: Path, monkeypatch) -> None:
     assert data["secondary_baseline_global_corpus"] is not None
 
 
-def test_run_single_post_metrics_skips_perplexity_without_torch(tmp_path: Path, monkeypatch) -> None:
+def test_run_single_post_metrics_skips_perplexity_without_torch(
+    tmp_path: Path, monkeypatch
+) -> None:
     out = tmp_path / "o"
     ds = tmp_path / "d"
     out.mkdir()

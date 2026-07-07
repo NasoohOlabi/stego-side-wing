@@ -27,6 +27,7 @@ from workflows.utils.research_relevance_debug import (
     write_research_terms_debug,
 )
 
+
 def _term_preview(term: str, max_len: int = 160) -> str:
     t = term.replace("\n", " ").strip()
     return t if len(t) <= max_len else t[: max_len - 3] + "..."

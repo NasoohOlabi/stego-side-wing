@@ -1,17 +1,18 @@
 """Structured JSON logging: tags, trace_id, process_pid."""
+
 from __future__ import annotations
 
 import json
 import logging
 
 from infrastructure.json_logging import (
+    STRUCTURED_LOG_TAG_CATALOG,
     TAG_API,
     TAG_FUNCTION,
     TAG_LIFECYCLE,
     TAG_PROCESS,
     TAG_TRACE,
     JsonFormatter,
-    STRUCTURED_LOG_TAG_CATALOG,
     StructuredContextFilter,
     bind_trace_id,
     log_function_start,

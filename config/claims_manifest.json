@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "confidence": 0.95,
+  "min_successful_samples_per_variant": 200,
+  "claims": [
+    {
+      "id": "receiver_recovery_reliability",
+      "title": "Receiver recovery reliability",
+      "metric": "receiver_success_rate",
+      "threshold": { "kind": "min", "value": 0.95 }
+    },
+    {
+      "id": "no_invisible_payload_carrier",
+      "title": "No invisible payload carrier",
+      "metric": "zero_hidden_payload_rate",
+      "threshold": { "kind": "min", "value": 0.99 }
+    },
+    {
+      "id": "selection_channel_capacity_accounting",
+      "title": "Selection-channel capacity/accounting",
+      "metric": "bps_selection",
+      "threshold": { "kind": "min", "value": 0.0 }
+    },
+    {
+      "id": "naturalness_stealth",
+      "title": "Naturalness/stealth",
+      "metric": "matched_post_jsd",
+      "threshold": { "kind": "max", "value": 0.25 }
+    },
+    {
+      "id": "secure_payload_transform",
+      "title": "Secure payload transform roundtrip/authentication",
+      "metric": "secure_receiver_success_rate",
+      "threshold": { "kind": "min", "value": 0.95 }
+    },
+    {
+      "id": "variant_comparisons_pareto",
+      "title": "Variant comparisons and Pareto ranking",
+      "metric": "paired_variant_deltas",
+      "threshold": { "kind": "available", "value": true }
+    },
+    {
+      "id": "ephemeral_snapshot_vs_volatile_receiver",
+      "title": "Ephemeral/snapshot-vs-volatile receiver behavior",
+      "metric": "receiver_mode_context_drift",
+      "threshold": { "kind": "available", "value": true }
+    }
+  ]
+}

@@ -31,7 +31,5 @@ def test_validation_outcome_rerun_incomplete() -> None:
     steps = {
         "a": {"comparison": "rerun_failed", "matches": None},
     }
-    outcome, _ = validation_outcome_from_report(
-        valid=False, steps_report=steps, stage_order=("a",)
-    )
+    outcome, _ = validation_outcome_from_report(valid=False, steps_report=steps, stage_order=("a",))
     assert outcome == "rerun_incomplete"

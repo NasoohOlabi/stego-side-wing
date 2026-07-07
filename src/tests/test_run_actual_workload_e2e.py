@@ -12,9 +12,7 @@ def _load_runner_module():
     return module
 
 
-def test_run_actual_workload_e2e_retries_transient_sample_failure(
-    monkeypatch
-) -> None:
+def test_run_actual_workload_e2e_retries_transient_sample_failure(monkeypatch) -> None:
     module = _load_runner_module()
     temp_root = Path(__file__).resolve().parents[2] / "metrics" / "test-run-actual-workload-e2e"
     temp_root.mkdir(parents=True, exist_ok=True)

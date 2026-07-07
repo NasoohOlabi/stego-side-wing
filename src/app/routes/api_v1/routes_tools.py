@@ -18,8 +18,8 @@ from app.routes.api_v1.http_parsers import (
     json_body,
     preview_response,
     query_int,
-    query_metrics_output_basename,
     query_metrics_dir_param,
+    query_metrics_output_basename,
     required_body_str,
 )
 from app.routes.api_v1.runner_access import runner

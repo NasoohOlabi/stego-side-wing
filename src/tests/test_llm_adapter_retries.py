@@ -96,10 +96,7 @@ def test_lm_studio_unwraps_control_envelope_payload(
             "choices": [
                 {
                     "message": {
-                        "content": (
-                            "<|channel|>final <|constrain|>json<|message|>"
-                            '["a", "b", "c"]'
-                        )
+                        "content": ('<|channel|>final <|constrain|>json<|message|>["a", "b", "c"]')
                     }
                 }
             ]
@@ -166,9 +163,7 @@ def test_gemini_retries_remote_protocol_error_then_succeeds(
     def fake_genai_generate_text(**_kwargs: object) -> str:
         calls["n"] += 1
         if calls["n"] == 1:
-            raise httpx.RemoteProtocolError(
-                "Server disconnected without sending a response."
-            )
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
         return "ok"
 
     monkeypatch.setattr(
@@ -200,9 +195,7 @@ def test_gemini_rotates_to_second_key_after_transport_failure(
     def fake_genai_generate_text(*, api_key: str, **_kwargs: object) -> str:
         calls.append(api_key)
         if api_key == "key-a":
-            raise httpx.RemoteProtocolError(
-                "Server disconnected without sending a response."
-            )
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
         return "ok"
 
     monkeypatch.setattr(
@@ -238,9 +231,7 @@ def test_gemini_folds_system_message_into_prompt_after_transport_failure(
     ) -> str:
         calls.append((api_key, user_text, system_message))
         if system_message is not None:
-            raise httpx.RemoteProtocolError(
-                "Server disconnected without sending a response."
-            )
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
         return "ok"
 
     monkeypatch.setattr(
@@ -285,13 +276,9 @@ def test_gemini_system_message_fallback_can_rotate_to_second_key(
     ) -> str:
         calls.append((api_key, user_text, system_message))
         if api_key == "key-a":
-            raise httpx.RemoteProtocolError(
-                "Server disconnected without sending a response."
-            )
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
         if system_message is not None:
-            raise httpx.RemoteProtocolError(
-                "Server disconnected without sending a response."
-            )
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
         return "ok"
 
     monkeypatch.setattr(

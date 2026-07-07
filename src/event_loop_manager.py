@@ -5,28 +5,28 @@ Manages a single persistent event loop that runs in a background thread,
 ensuring all async operations (including litellm's LoggingWorker) use the same loop.
 This prevents RuntimeError: Queue is bound to a different event loop.
 """
+
 import asyncio
 import atexit
 import logging
 import threading
-from typing import Any, Coroutine, Optional, TypeVar
+from collections.abc import Coroutine
+from typing import Any
 
 from infrastructure.stdio_utf8 import configure_stdio_utf8
 
 _logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
 
 class EventLoopManager:
     """Manages a persistent event loop in a background thread."""
-    
+
     def __init__(self):
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._thread: Optional[threading.Thread] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._running = False
-    
+
     def start(self):
         """Start the event loop in a background thread."""
         with self._lock:
@@ -57,26 +57,26 @@ class EventLoopManager:
                 "event_loop_started",
                 extra={"event": "event_loop", "action": "start", "bg_thread": "EventLoopThread"},
             )
-    
+
     def stop(self):
         """Stop the event loop and background thread."""
         with self._lock:
             if not self._running or self._loop is None:
                 return
-            
+
             self._running = False
-            
+
             # Schedule loop stop
             self._loop.call_soon_threadsafe(self._loop.stop)
-            
+
             # Wait for thread to finish (with timeout)
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=5.0)
-            
+
             # Clean up
             if self._loop and not self._loop.is_closed():
                 self._loop.close()
-            
+
             self._loop = None
             self._thread = None
 
@@ -85,21 +85,21 @@ class EventLoopManager:
         if not self._running or self._loop is None:
             raise RuntimeError("Event loop manager not started. Call start() first.")
         return self._loop
-    
-    def run_async(self, coro: Coroutine[Any, Any, T]) -> T:
+
+    def run_async[T](self, coro: Coroutine[Any, Any, T]) -> T:
         """
         Run an async coroutine from a sync context.
-        
+
         Args:
             coro: The coroutine to run
-            
+
         Returns:
             The result of the coroutine
         """
         loop = self.get_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result()
-    
+
     def is_running(self) -> bool:
         """Check if the event loop manager is running."""
         return self._running and self._loop is not None
@@ -114,7 +114,7 @@ def get_event_loop() -> asyncio.AbstractEventLoop:
     return _manager.get_loop()
 
 
-def run_async(coro: Coroutine[Any, Any, T]) -> T:
+def run_async[T](coro: Coroutine[Any, Any, T]) -> T:
     """Run an async coroutine from a sync context using the persistent loop."""
     return _manager.run_async(coro)
 
@@ -134,4 +134,3 @@ def stop_event_loop():
 def is_event_loop_running() -> bool:
     """Check if the event loop is running."""
     return _manager.is_running()
-

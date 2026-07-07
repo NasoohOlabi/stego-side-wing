@@ -17,7 +17,7 @@ class _Article(BaseModel):
 
 
 @pytest.fixture(autouse=True)
-def reset_crawler_singleton() -> Generator[None, None, None]:
+def reset_crawler_singleton() -> Generator[None]:
     scraper.reset_shared_crawler_for_tests()
     yield
     scraper.reset_shared_crawler_for_tests()

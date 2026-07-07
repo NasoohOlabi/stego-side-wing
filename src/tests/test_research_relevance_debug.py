@@ -154,7 +154,9 @@ def test_append_jsonl_not_called_when_debug_dir_none(monkeypatch):
         preview_generation=lambda **kwargs: {"terms": ["t"], "cache_hit": False}
     )
     pipeline.backend = SimpleNamespace(
-        google_search=lambda **kw: {"results": [{"link": "https://x.com", "title": "", "snippet": ""}]}
+        google_search=lambda **kw: {
+            "results": [{"link": "https://x.com", "title": "", "snippet": ""}]
+        }
     )
     pipeline.fetch_content = SimpleNamespace(
         fetch=lambda url, use_cache: FetchUrlResult(url=url, success=True, text=".")

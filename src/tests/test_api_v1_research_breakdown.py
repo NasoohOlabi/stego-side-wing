@@ -1,4 +1,5 @@
 """Tests for research workflow include_breakdown via /workflows/run and /workflows/research."""
+
 from __future__ import annotations
 
 import pytest
@@ -28,9 +29,7 @@ def _fake_run_research(*, include_breakdown: bool = False, **_kwargs):
                     "runner_trace_id": "tid",
                     "preview_total_ms_sum": 10,
                 },
-                "posts": [
-                    {"post_id": "p1", "report": {"timing": {"preview_total_ms": 10}}}
-                ],
+                "posts": [{"post_id": "p1", "report": {"timing": {"preview_total_ms": 10}}}],
             },
         }
     return [{"id": "p1"}]

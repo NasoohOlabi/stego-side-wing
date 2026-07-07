@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -16,10 +16,10 @@ class Article:
     id: str
     title: str
     content_excerpt: str
-    full_content_html: Optional[str]
-    full_content_sanitized: Optional[str]
-    author: Optional[str]
-    keywords: List[str]
+    full_content_html: str | None
+    full_content_sanitized: str | None
+    author: str | None
+    keywords: list[str]
     language: str
     country: str
     publisher_id: str
@@ -29,16 +29,16 @@ class Article:
     published_at: int  # Unix timestamp
     sentiment_score: float
     source_link: str
-    image_url: Optional[str]
+    image_url: str | None
 
 
 @dataclass
 class ArticlesResponse:
     meta: Meta
-    data: List[Article]
+    data: list[Article]
 
     @staticmethod
-    def from_dict(obj: Dict[str, Any]) -> "ArticlesResponse":
+    def from_dict(obj: dict[str, Any]) -> "ArticlesResponse":
         meta_dict = obj.get("meta", {})
         meta = Meta(
             total_hits=meta_dict.get("total_hits", 0),

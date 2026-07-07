@@ -609,9 +609,7 @@ def wf_double_process_new_post() -> Any:
     if explicit_post_id:
         reconcile_stale_double_process_claim_vs_explicit(
             explicit_post_id,
-            has_active_double_process_run=has_active_run_for_command(
-                "double-process-new-post"
-            ),
+            has_active_double_process_run=has_active_run_for_command("double-process-new-post"),
         )
         claimed = try_read_double_process_claim()
         if claimed and claimed[0] != explicit_post_id:
@@ -1061,9 +1059,7 @@ def wf_run() -> Any:
         if explicit_post_id_cmd:
             reconcile_stale_double_process_claim_vs_explicit(
                 explicit_post_id_cmd,
-                has_active_double_process_run=has_active_run_for_command(
-                    "double-process-new-post"
-                ),
+                has_active_double_process_run=has_active_run_for_command("double-process-new-post"),
             )
             claimed_cmd = try_read_double_process_claim()
             if claimed_cmd and claimed_cmd[0] != explicit_post_id_cmd:

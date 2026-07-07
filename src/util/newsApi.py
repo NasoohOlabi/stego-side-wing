@@ -1,8 +1,9 @@
-import json
 import os
 import sys  # Added import for sys.stderr
-from typing import Union  # Added import for cast
-from typing import List, Optional, TypedDict, cast
+from typing import (
+    TypedDict,
+    cast,
+)
 from urllib.parse import urlencode
 
 import dotenv
@@ -16,27 +17,27 @@ from infrastructure.process_tracking import append_current_pid_to_log
 
 # Defines the structure for the source object within an Article.
 class ArticleSource(TypedDict):
-    id: Optional[str]
+    id: str | None
     name: str
 
 
 # Defines the structure for a single news article returned by the API.
 class Article(TypedDict):
     source: ArticleSource
-    author: Optional[str]
+    author: str | None
     title: str
-    description: Optional[str]
+    description: str | None
     url: str
-    urlToImage: Optional[str]
+    urlToImage: str | None
     publishedAt: str  # ISO 8601 date string
-    content: Optional[str]
+    content: str | None
 
 
 # Defines the overall successful response structure for the /everything endpoint.
 class NewsApiSuccessResponse(TypedDict):
     status: str  # Should be 'ok'
     totalResults: int
-    articles: List[Article]
+    articles: list[Article]
 
 
 # Defines the structure for an error response from the API.
@@ -47,7 +48,7 @@ class NewsApiErrorResponse(TypedDict):
 
 
 # The union of possible API responses.
-NewsApiResponse = Union[NewsApiSuccessResponse, NewsApiErrorResponse]
+NewsApiResponse = NewsApiSuccessResponse | NewsApiErrorResponse
 
 # --- 2. Request Parameters Type Definition (TypedDict) ---
 
@@ -125,9 +126,7 @@ def fetch_everything(params: EverythingParams) -> NewsApiResponse:
                 status=data["status"], code=data["code"], message=data["message"]
             )
             # Re-raise the API-specific error, but return the typed structure
-            raise Exception(
-                f"News API Error [{error_data['code']}]: {error_data['message']}"
-            )
+            raise Exception(f"News API Error [{error_data['code']}]: {error_data['message']}")
 
         # Cast the data to the success type after runtime check
         return cast(NewsApiSuccessResponse, data)

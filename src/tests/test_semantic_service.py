@@ -30,9 +30,7 @@ def fake_semantic_runtime(monkeypatch):
     fake_module = types.ModuleType("sentence_transformers")
     fake_module.util = types.SimpleNamespace(cos_sim=fake_cos_sim)
     monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
-    monkeypatch.setattr(
-        semantic_service, "get_semantic_model", lambda: _FakeModel()
-    )
+    monkeypatch.setattr(semantic_service, "get_semantic_model", lambda: _FakeModel())
 
 
 def test_semantic_search_rejects_missing_text():

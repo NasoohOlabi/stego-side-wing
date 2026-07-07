@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from infrastructure.cache import deterministic_hash_sha256
 from content_acquisition.angles.angle_runner import analyze_angles_from_texts, angles_model_name
+from infrastructure.cache import deterministic_hash_sha256
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +38,9 @@ def test_analyze_angles_retries_read_timeout_then_ok(monkeypatch: pytest.MonkeyP
         fake_post,
     )
     monkeypatch.setattr("content_acquisition.angles.angle_runner._llm_max_attempts", lambda: 5)
-    monkeypatch.setattr("content_acquisition.angles.angle_runner._llm_retry_backoff_sec", lambda _i: 0.0)
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._llm_retry_backoff_sec", lambda _i: 0.0
+    )
     monkeypatch.setattr("content_acquisition.angles.angle_runner.time.sleep", lambda _s: None)
 
     out = analyze_angles_from_texts(["hello world"], use_cache=False)
@@ -65,7 +67,9 @@ def test_analyze_angles_retries_retryable_http_status_then_ok(
 
     monkeypatch.setattr("content_acquisition.angles.angle_runner.requests.post", fake_post)
     monkeypatch.setattr("content_acquisition.angles.angle_runner._llm_max_attempts", lambda: 4)
-    monkeypatch.setattr("content_acquisition.angles.angle_runner._llm_retry_backoff_sec", lambda _i: 0.0)
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._llm_retry_backoff_sec", lambda _i: 0.0
+    )
     monkeypatch.setattr("content_acquisition.angles.angle_runner.time.sleep", lambda _s: None)
 
     out = analyze_angles_from_texts(["hello world"], use_cache=False)
@@ -87,7 +91,9 @@ def test_analyze_angles_exhausts_retryable_http_status(
 
     monkeypatch.setattr("content_acquisition.angles.angle_runner.requests.post", fake_post)
     monkeypatch.setattr("content_acquisition.angles.angle_runner._llm_max_attempts", lambda: 2)
-    monkeypatch.setattr("content_acquisition.angles.angle_runner._llm_retry_backoff_sec", lambda _i: 0.0)
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._llm_retry_backoff_sec", lambda _i: 0.0
+    )
     monkeypatch.setattr("content_acquisition.angles.angle_runner.time.sleep", lambda _s: None)
 
     with pytest.raises(requests.exceptions.HTTPError) as excinfo:
@@ -103,13 +109,15 @@ def test_analyze_angles_connection_error_splits_and_completes(
 ) -> None:
     """Large multi-segment input triggers transport split when the LLM drops the connection."""
     monkeypatch.setattr("content_acquisition.angles.angle_runner._llm_max_attempts", lambda: 2)
-    monkeypatch.setattr("content_acquisition.angles.angle_runner._llm_retry_backoff_sec", lambda _i: 0.0)
-    monkeypatch.setattr("content_acquisition.angles.angle_runner.time.sleep", lambda _s: None)
-    monkeypatch.setattr("content_acquisition.angles.angle_runner._max_transport_split_depth", lambda: 8)
-
-    ok_row = (
-        '[{"source_quote":"q","tangent":"t","category":"c"}]'
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._llm_retry_backoff_sec", lambda _i: 0.0
     )
+    monkeypatch.setattr("content_acquisition.angles.angle_runner.time.sleep", lambda _s: None)
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._max_transport_split_depth", lambda: 8
+    )
+
+    ok_row = '[{"source_quote":"q","tangent":"t","category":"c"}]'
 
     def fake_call_llm(prompt: str) -> str:
         if len(prompt) > 25_000:
@@ -129,9 +137,13 @@ def test_analyze_angles_quarantines_corrupt_cache_file(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("content_acquisition.angles.angle_runner.get_angles_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner.get_angles_cache_dir", lambda: tmp_path
+    )
     monkeypatch.setattr("content_acquisition.angles.angle_runner._llm_max_attempts", lambda: 1)
-    monkeypatch.setattr("content_acquisition.angles.angle_runner._llm_retry_backoff_sec", lambda _i: 0.0)
+    monkeypatch.setattr(
+        "content_acquisition.angles.angle_runner._llm_retry_backoff_sec", lambda _i: 0.0
+    )
     monkeypatch.setattr("content_acquisition.angles.angle_runner.time.sleep", lambda _s: None)
 
     text = "hello world"

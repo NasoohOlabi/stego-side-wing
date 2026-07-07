@@ -1208,9 +1208,7 @@ class WorkflowRunner:
             matches = baseline_payload == rerun_payload
             changed_keys = [] if matches else collect_diff_paths(baseline_payload, rerun_payload)
             snippets = (
-                []
-                if matches
-                else collect_mismatch_value_snippets(baseline_payload, rerun_payload)
+                [] if matches else collect_mismatch_value_snippets(baseline_payload, rerun_payload)
             )
             steps_report[stage_name] = {
                 "step": step,
@@ -1300,15 +1298,11 @@ class WorkflowRunner:
             raise ValueError(f"Invalid post filename returned by posts_list: {file_name!r}")
         return post_id, file_name
 
-    def _resolve_double_process_post(
-        self, explicit_post_id: str | None
-    ) -> tuple[str, str, bool]:
+    def _resolve_double_process_post(self, explicit_post_id: str | None) -> tuple[str, str, bool]:
         """Return (post_id, file_name, resumed_from_claim). Raises if explicit id conflicts with claim."""
         reconcile_stale_double_process_claim_vs_explicit(
             explicit_post_id,
-            has_active_double_process_run=has_active_run_for_command(
-                "double-process-new-post"
-            ),
+            has_active_double_process_run=has_active_run_for_command("double-process-new-post"),
         )
         claimed = try_read_double_process_claim()
         if explicit_post_id:
@@ -1605,9 +1599,7 @@ class WorkflowRunner:
             data={"allow_angles_fallback": allow_angles_fallback},
         )
         # endregion
-        post_id, file_name, resumed_from_claim = self._resolve_double_process_post(
-            explicit_post_id
-        )
+        post_id, file_name, resumed_from_claim = self._resolve_double_process_post(explicit_post_id)
         self._emit(
             on_progress,
             "stage_progress",

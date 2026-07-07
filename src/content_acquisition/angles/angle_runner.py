@@ -683,9 +683,7 @@ def _run_context_window_split(batch: list[str], batch_index: int) -> list[dict[s
     return merged
 
 
-def _workflow_transport_error_should_split(
-    llm: LLMAdapter, exc: BaseException
-) -> bool:
+def _workflow_transport_error_should_split(llm: LLMAdapter, exc: BaseException) -> bool:
     meta = getattr(llm, "last_call_metadata", {}) or {}
     error_kind = str(meta.get("error_kind") or type(exc).__name__).lower()
     if any(token in error_kind for token in _WORKFLOW_TRANSPORT_NAME_TOKENS):
@@ -951,9 +949,7 @@ def _run_workflow_angle_batch(
             temperature=TEMPERATURE,
             max_tokens=8192,
         )
-        return _parse_or_repair_workflow(
-            llm, provider=provider, model=model, raw_text=answer
-        )
+        return _parse_or_repair_workflow(llm, provider=provider, model=model, raw_text=answer)
     except Exception as exc:
         if _depth >= _max_transport_split_depth():
             raise

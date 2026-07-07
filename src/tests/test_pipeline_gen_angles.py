@@ -57,7 +57,9 @@ def test_generate_angles_falls_back_to_llm():
     pipeline.backend = SimpleNamespace(
         analyze_angles=lambda texts: (_ for _ in ()).throw(RuntimeError("api down"))
     )
-    pipeline._generate_angles_llm = lambda texts: [{"source_quote": "q", "tangent": "t", "category": "c"}]
+    pipeline._generate_angles_llm = lambda texts: [
+        {"source_quote": "q", "tangent": "t", "category": "c"}
+    ]
 
     angles = pipeline.generate_angles({"selftext": "content"}, allow_fallback=True)
     assert angles == [
@@ -250,10 +252,10 @@ def test_process_posts_uses_tagged_queue_and_saves_tagged_filename():
     seen = {}
     pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
     pipeline.backend = SimpleNamespace(
-        posts_list=lambda step, count, offset, tag=None: seen.update(
-            {"step": step, "count": count, "offset": offset, "tag": tag}
-        )
-        or {"fileNames": ["p1.json"]},
+        posts_list=lambda step, count, offset, tag=None: (
+            seen.update({"step": step, "count": count, "offset": offset, "tag": tag})
+            or {"fileNames": ["p1.json"]}
+        ),
         get_post_local=lambda file_name, step: {"id": "p1"},
         save_object_local=lambda data, step, filename: saved.append((step, filename)),
     )
@@ -274,8 +276,7 @@ def test_process_post_id_prefers_tagged_source_when_present():
     calls = []
     pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
     pipeline.backend = SimpleNamespace(
-        get_post_local=lambda file_name, step: calls.append((file_name, step))
-        or {"id": "p1"},
+        get_post_local=lambda file_name, step: calls.append((file_name, step)) or {"id": "p1"},
         save_object_local=lambda data, step, filename: None,
     )
     pipeline.process_post = lambda post, step, allow_fallback=False: {

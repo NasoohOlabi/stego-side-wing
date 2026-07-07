@@ -7,8 +7,8 @@ from typing import Any
 from loguru import logger
 
 from infrastructure.config import (
-    get_workflow_angles_max_output,
     get_workflow_angles_generation_mode,
+    get_workflow_angles_max_output,
     get_workflow_llm_backend,
     resolve_workflow_llm_provider_and_model,
 )

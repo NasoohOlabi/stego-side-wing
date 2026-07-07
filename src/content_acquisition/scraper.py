@@ -262,9 +262,7 @@ async def _extract_structured_google_backend(
                 url=url,
                 text_chars=len(http_text),
             )
-            quick = _sync_llm_schema_extract(
-                http_text, url, schema, model_name, instruction
-            )
+            quick = _sync_llm_schema_extract(http_text, url, schema, model_name, instruction)
             if quick is not None:
                 _SCRAPER_LOG.info("crawl4ai_success", url=url)
                 _tracker.end(url, start_time, success=True)
@@ -294,9 +292,7 @@ async def _extract_structured_google_backend(
         _tracker.end(url, start_time, success=False)
         return None
 
-    out = _sync_llm_schema_extract(
-        page_text, url, schema, model_name, instruction
-    )
+    out = _sync_llm_schema_extract(page_text, url, schema, model_name, instruction)
     if out is not None:
         _SCRAPER_LOG.info("crawl4ai_success", url=url)
         _tracker.end(url, start_time, success=True)
@@ -334,16 +330,12 @@ async def _extract_structured_lm_studio_backend(
                 url=url,
                 text_chars=len(http_text),
             )
-            quick = _sync_llm_schema_extract(
-                http_text, url, schema, model_name, instruction
-            )
+            quick = _sync_llm_schema_extract(http_text, url, schema, model_name, instruction)
             if quick is not None:
                 _SCRAPER_LOG.info("crawl4ai_success", url=url)
                 _tracker.end(url, start_time, success=True)
                 return quick
-            _SCRAPER_LOG.warning(
-                "crawl4ai_lm_http_first_llm_miss_fallback_browser", url=url
-            )
+            _SCRAPER_LOG.warning("crawl4ai_lm_http_first_llm_miss_fallback_browser", url=url)
 
     base_url = get_lm_studio_url()
     llm_config = LLMConfig(

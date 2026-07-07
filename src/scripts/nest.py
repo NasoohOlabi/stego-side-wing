@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 from infrastructure.process_tracking import append_current_pid_to_log
 
@@ -10,7 +10,7 @@ COMMENTS_FILE_PATH = "datasets/2024/r_news_comments.jsonl"
 OUTPUT_DIR = "datasets/2024/news"
 
 
-def load_posts(filepath: str) -> Dict[str, Any]:
+def load_posts(filepath: str) -> dict[str, Any]:
     """
     Loads posts from the JSONL file into a dictionary, keyed by 't3_ID' for
     easy matching with comment link_id.
@@ -19,7 +19,7 @@ def load_posts(filepath: str) -> Dict[str, Any]:
     posts = {}
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     post = json.loads(line)
@@ -35,7 +35,7 @@ def load_posts(filepath: str) -> Dict[str, Any]:
         return {}
 
 
-def group_comments_by_parent(filepath: str) -> Dict[str, List[Dict[str, Any]]]:
+def group_comments_by_parent(filepath: str) -> dict[str, list[dict[str, Any]]]:
     """
     Loads comments and groups them into a dictionary where the key is the
     parent_id (either t3_ID for a post or t1_ID for another comment) and
@@ -46,7 +46,7 @@ def group_comments_by_parent(filepath: str) -> Dict[str, List[Dict[str, Any]]]:
     comment_count = 0
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     comment = json.loads(line)
@@ -71,7 +71,7 @@ def group_comments_by_parent(filepath: str) -> Dict[str, List[Dict[str, Any]]]:
         return {}
 
 
-def nest_comments(parent_id: str, comments_by_parent: Dict[str, List[Dict[str, Any]]]):
+def nest_comments(parent_id: str, comments_by_parent: dict[str, list[dict[str, Any]]]):
     """
     Recursively finds and attaches replies to a given parent ID.
     The parent_id can be a post ID (t3_) or a comment ID (t1_).

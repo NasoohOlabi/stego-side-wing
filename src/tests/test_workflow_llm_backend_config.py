@@ -108,9 +108,7 @@ def test_resolve_defaults_to_qwen_lm_studio_when_backend_unset(
     )
 
 
-def test_resolve_google_path(
-    monkeypatch: pytest.MonkeyPatch, clear_llm_backend_env: None
-) -> None:
+def test_resolve_google_path(monkeypatch: pytest.MonkeyPatch, clear_llm_backend_env: None) -> None:
     monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "google")
     monkeypatch.setenv("GOOGLE_AI_STUDIO_MODEL", "my-gemma")
     assert resolve_workflow_llm_provider_and_model("ignored-lm-id") == (

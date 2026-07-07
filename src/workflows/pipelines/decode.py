@@ -87,9 +87,7 @@ def _content_tokens(text: Any) -> set[str]:
 
 
 def _angle_text(angle: dict[str, Any]) -> str:
-    return " ".join(
-        str(angle.get(key, "")) for key in ("category", "source_quote", "tangent")
-    )
+    return " ".join(str(angle.get(key, "")) for key in ("category", "source_quote", "tangent"))
 
 
 def _lexical_overlap_score(stego_text: str, angle: dict[str, Any]) -> float:

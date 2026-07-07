@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 import dotenv
 import requests
@@ -23,7 +23,7 @@ dotenv.load_dotenv()
 # return list of the following type
 
 
-def searchGoogle(query: str, maxResults: int = 10) -> List[Dict[str, Any]]:
+def searchGoogle(query: str, maxResults: int = 10) -> list[dict[str, Any]]:
     """
     Search Google using the ScrapingDog API
     return list of the following type
@@ -46,7 +46,7 @@ def searchGoogle(query: str, maxResults: int = 10) -> List[Dict[str, Any]]:
         "query": query,
         "results": maxResults,
         "country": "us",
-        "domain": "google.com"
+        "domain": "google.com",
     }
 
     response = requests.get(url, params=params)
@@ -64,5 +64,4 @@ def searchGoogle(query: str, maxResults: int = 10) -> List[Dict[str, Any]]:
 
 if __name__ == "__main__":
     append_current_pid_to_log()
-    searchGoogle(
-        "Meta Ray‑Ban Display AR glasses gesture recognition failure at Meta Connect 2025")
+    searchGoogle("Meta Ray‑Ban Display AR glasses gesture recognition failure at Meta Connect 2025")

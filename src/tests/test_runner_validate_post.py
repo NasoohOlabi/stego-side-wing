@@ -47,7 +47,10 @@ def test_validation_failure_summary_rerun_incomplete() -> None:
     steps = {
         "data_load": {"comparison": "match"},
         "research": {"comparison": "rerun_failed", "error": "google timed out"},
-        "gen_angles": {"comparison": "skipped", "error": "Skipped because an upstream stage failed"},
+        "gen_angles": {
+            "comparison": "skipped",
+            "error": "Skipped because an upstream stage failed",
+        },
     }
     order = ("data_load", "research", "gen_angles")
     outcome, _ = validation_outcome_from_report(valid=False, steps_report=steps, stage_order=order)

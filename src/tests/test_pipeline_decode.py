@@ -19,10 +19,7 @@ def test_decode_prefers_labeled_idx_in_verbose_response():
     pipeline.backend = SimpleNamespace(
         semantic_search=lambda text, objects, n: {"results": [{"object": angles[1]}]}
     )
-    verbose = (
-        "Step 1: consider candidates 0 1 2. Scores vary. "
-        "The best match is angle 1. idx: 1"
-    )
+    verbose = "Step 1: consider candidates 0 1 2. Scores vary. The best match is angle 1. idx: 1"
     pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: verbose)
 
     assert pipeline.decode("message", angles) == 1

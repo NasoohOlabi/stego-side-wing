@@ -8,9 +8,7 @@ from pydantic import BaseModel, Field, validate_call
 
 from infrastructure.config import get_workflow_url_fetch_http_timeout_sec
 
-USER_AGENT = (
-    "Mozilla/5.0 (compatible; stego-side-wing/0.1; +https://example.invalid)"
-)
+USER_AGENT = "Mozilla/5.0 (compatible; stego-side-wing/0.1; +https://example.invalid)"
 
 
 class _HttpExtractArgs(BaseModel):

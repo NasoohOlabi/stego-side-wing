@@ -5,6 +5,7 @@ Re-exports symbols that tests monkeypatch on this module (see ``src/tests/test_a
 
 from app.routes.api_v1 import bp, init_workflow_runner, runner
 from infrastructure.json_logging import clear_api_log_file, get_api_log_file_stats
+from services.recent_updates_service import get_recent_git_updates
 from services.stego_metrics_service import (
     delete_metrics_output_sample,
     list_metrics_history,
@@ -12,7 +13,6 @@ from services.stego_metrics_service import (
     run_perplexity_metrics,
     run_single_post_metrics,
 )
-from services.recent_updates_service import get_recent_git_updates
 from services.workflow_facade import (
     default_workflow_llm_prompts,
     get_prompts,

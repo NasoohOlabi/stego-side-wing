@@ -94,7 +94,11 @@ def test_prep_until_google_quota_then_stego_streaming(client, monkeypatch):
             )
             on_progress(
                 "phase_transition",
-                {"from_phase": "prep", "to_phase": "stego", "reason": "google_search_quota_detected"},
+                {
+                    "from_phase": "prep",
+                    "to_phase": "stego",
+                    "reason": "google_search_quota_detected",
+                },
             )
             on_progress("phase_start", {"phase": "stego"})
             on_progress(

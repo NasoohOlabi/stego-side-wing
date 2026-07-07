@@ -15,13 +15,9 @@ def assert_no_invisible_carrier(text: str) -> None:
 
 
 def test_n8n_save_object_body_legacy_shape():
-    body = n8n_save_object_body(
-        {"stego_text": "x", "embedding": {"a": 1}, "post": {"id": "1"}}
-    )
+    body = n8n_save_object_body({"stego_text": "x", "embedding": {"a": 1}, "post": {"id": "1"}})
     assert body == [{"stegoText": "x", "embedding": {"a": 1}, "post": {"id": "1"}}]
-    assert n8n_save_object_body({}) == [
-        {"stegoText": "", "embedding": None, "post": None}
-    ]
+    assert n8n_save_object_body({}) == [{"stegoText": "", "embedding": None, "post": None}]
 
 
 def test_stego_helpers_cover_edge_cases():
@@ -39,9 +35,7 @@ def test_stego_comment_strings_from_parsed_requires_three_strings() -> None:
     assert stego._stego_comment_strings_from_parsed(["a", "b", "c"]) == ["a", "b", "c"]
     assert stego._stego_comment_strings_from_parsed(["a", "b"]) is None
     assert stego._stego_comment_strings_from_parsed(["a", "b", "c", "d"]) is None
-    assert stego._stego_comment_strings_from_parsed(
-        {"texts": ["x", "y", "z"]}
-    ) == ["x", "y", "z"]
+    assert stego._stego_comment_strings_from_parsed({"texts": ["x", "y", "z"]}) == ["x", "y", "z"]
     assert stego._stego_comment_strings_from_parsed({"texts": ["x", "y"]}) is None
 
 
@@ -84,9 +78,7 @@ def test_encode_returns_success_with_mocked_stages():
         [{"category": "c", "source_quote": "q", "tangent": "t"}],
         [{"category": "c", "source_quote": "q", "tangent": "t"}],
     )
-    pipeline._generate_stego_texts = lambda sample, comment_embedding, **kwargs: [
-        "candidate text"
-    ]
+    pipeline._generate_stego_texts = lambda sample, comment_embedding, **kwargs: ["candidate text"]
     pipeline._evaluate_candidate_groups = lambda **kwargs: {
         "succeeded": True,
         "accepted_candidate": {
@@ -349,7 +341,11 @@ def test_process_post_falls_back_to_angles_step_and_persists_on_success():
             (step, filename, bool(data and data[0].get("stegoText")))
         ),
     )
-    pipeline.encode = lambda payload, post, tag: {"succeeded": True, "post": post, "stego_text": "ok"}
+    pipeline.encode = lambda payload, post, tag: {
+        "succeeded": True,
+        "post": post,
+        "stego_text": "ok",
+    }
 
     result = pipeline.process_post(post_id="p9", payload="x", tag="v1", step="final-step")
 
@@ -363,9 +359,7 @@ def test_process_post_auto_selects_next_unprocessed_post_with_tag():
     pipeline = StegoPipeline.__new__(StegoPipeline)
 
     def fake_posts_list(step, count, offset, tag):
-        selected.update(
-            {"step": step, "count": count, "offset": offset, "tag": tag}
-        )
+        selected.update({"step": step, "count": count, "offset": offset, "tag": tag})
         return {"fileNames": ["p10.json"]}
 
     pipeline.backend = SimpleNamespace(
@@ -500,7 +494,12 @@ def test_selected_angle_anchor_variant_adds_distinctive_phrase():
 
 def test_evaluate_candidate_groups_prefers_context_safe_exact_match():
     pipeline = StegoPipeline.__new__(StegoPipeline)
-    selected_angle = {"idx": 1, "category": "Politics", "tangent": "policy abuse", "source_quote": "policy abuse"}
+    selected_angle = {
+        "idx": 1,
+        "category": "Politics",
+        "tangent": "policy abuse",
+        "source_quote": "policy abuse",
+    }
     tangents_db = [
         {"idx": 1, "category": "Other", "tangent": "other", "source_quote": "other"},
         selected_angle,

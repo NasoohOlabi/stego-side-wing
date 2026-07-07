@@ -6,9 +6,7 @@ from workflows.pipelines.data_load import DataLoadPipeline
 
 def test_process_posts_returns_empty_when_no_files():
     pipeline = DataLoadPipeline.__new__(DataLoadPipeline)
-    pipeline.backend = SimpleNamespace(
-        posts_list=lambda step, count, offset: {"fileNames": []}
-    )
+    pipeline.backend = SimpleNamespace(posts_list=lambda step, count, offset: {"fileNames": []})
     pipeline.fetch_pipeline = SimpleNamespace(fetch=lambda url, use_cache: None)
 
     assert pipeline.process_posts() == []

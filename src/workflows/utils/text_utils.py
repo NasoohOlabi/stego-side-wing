@@ -265,9 +265,9 @@ def build_post_text_dictionary(
 ) -> list[str]:
     """Collect searchable text chunks from post body, search results, and comments."""
     return list(
-        build_post_text_dictionary_bundle(
-            post, apply_capacity_profile=apply_capacity_profile
-        )["texts"]
+        build_post_text_dictionary_bundle(post, apply_capacity_profile=apply_capacity_profile)[
+            "texts"
+        ]
     )
 
 
@@ -276,9 +276,9 @@ def build_post_text_dictionary_report(
 ) -> dict[str, Any]:
     """Deterministic metadata for dictionary drift and observability checks."""
     return dict(
-        build_post_text_dictionary_bundle(
-            post, apply_capacity_profile=apply_capacity_profile
-        )["report"]
+        build_post_text_dictionary_bundle(post, apply_capacity_profile=apply_capacity_profile)[
+            "report"
+        ]
     )
 
 

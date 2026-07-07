@@ -148,7 +148,9 @@ def summarize_receiver_decode(receiver_info: dict[str, Any] | None) -> dict[str,
             isinstance(info.get("semantic_decoded_angle_index"), int)
             and info.get("semantic_decoded_angle_index") != info.get("decoded_angle_index")
         ),
-        "recovery_meta": info.get("recovery_meta") if isinstance(info.get("recovery_meta"), dict) else {},
+        "recovery_meta": info.get("recovery_meta")
+        if isinstance(info.get("recovery_meta"), dict)
+        else {},
     }
 
 
@@ -198,16 +200,25 @@ def plan_adaptive_action(failure_code: str, state: AdaptiveSampleState) -> dict[
     if failure_code == "stego_invalid_json" and state.stego_max_retries_bonus < 2:
         state.stego_max_retries_bonus += 1
         return {"action": "increase_stego_max_retries", "value": state.stego_max_retries_bonus}
-    if failure_code == "stego_contextuality_reject" and "WORKFLOW_STEGO_SAMPLE_ANGLE_COUNT" not in state.env_overrides:
+    if (
+        failure_code == "stego_contextuality_reject"
+        and "WORKFLOW_STEGO_SAMPLE_ANGLE_COUNT" not in state.env_overrides
+    ):
         state.env_overrides["WORKFLOW_STEGO_SAMPLE_ANGLE_COUNT"] = "6"
         return {"action": "increase_candidate_angles", "env": dict(state.env_overrides)}
-    if failure_code == "receiver_angle_mismatch" and "WORKFLOW_DECODE_SEMANTIC_TOP_N" not in state.env_overrides:
+    if (
+        failure_code == "receiver_angle_mismatch"
+        and "WORKFLOW_DECODE_SEMANTIC_TOP_N" not in state.env_overrides
+    ):
         state.env_overrides["WORKFLOW_DECODE_SEMANTIC_TOP_N"] = "40"
         state.env_overrides["WORKFLOW_STEGO_SAMPLE_ANGLE_COUNT"] = "6"
         return {"action": "expand_angle_search", "env": dict(state.env_overrides)}
     if failure_code == "receiver_payload_recovery_failed" and state.max_padding_bits < 1024:
         state.max_padding_bits = 1024
-        return {"action": "expand_payload_recovery_padding", "max_padding_bits": state.max_padding_bits}
+        return {
+            "action": "expand_payload_recovery_padding",
+            "max_padding_bits": state.max_padding_bits,
+        }
     if failure_code == "receiver_context_drift":
         return {"action": "record_context_drift_for_cached_audit_review"}
     return None
@@ -237,7 +248,9 @@ class StegoFeedbackRun:
 
     def finalize(self, e2e_summary: dict[str, Any]) -> dict[str, Any]:
         failures = [event for event in self._events if event.get("outcome") == "failed"]
-        counter = Counter(str(event.get("failure_code") or "generation_failure") for event in failures)
+        counter = Counter(
+            str(event.get("failure_code") or "generation_failure") for event in failures
+        )
         clusters = {
             "created_at_utc": datetime.now(UTC).isoformat(),
             "clusters": [
@@ -245,11 +258,9 @@ class StegoFeedbackRun:
                     "failure_code": code,
                     "count": count,
                     "likely_subsystem": code.split("_", 1)[0],
-                    "examples": [
-                        event
-                        for event in failures
-                        if event.get("failure_code") == code
-                    ][:5],
+                    "examples": [event for event in failures if event.get("failure_code") == code][
+                        :5
+                    ],
                 }
                 for code, count in counter.most_common()
             ],
@@ -296,9 +307,12 @@ class StegoFeedbackRun:
             "rows": rows,
         }
         _write_json(self.run_dir / "leaderboard.json", leaderboard)
-        _write_json(self.run_dir / "latest_summary.json", {
-            "e2e_summary_path": e2e_summary.get("run_dir"),
-            "leaderboard": leaderboard,
-            "top_failure_cluster": clusters["clusters"][0] if clusters["clusters"] else None,
-        })
+        _write_json(
+            self.run_dir / "latest_summary.json",
+            {
+                "e2e_summary_path": e2e_summary.get("run_dir"),
+                "leaderboard": leaderboard,
+                "top_failure_cluster": clusters["clusters"][0] if clusters["clusters"] else None,
+            },
+        )
         return leaderboard

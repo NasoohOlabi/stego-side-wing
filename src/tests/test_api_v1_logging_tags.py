@@ -1,4 +1,5 @@
 """GET /api/v1/logging/tags returns the structured log tag catalog."""
+
 from __future__ import annotations
 
 import pytest

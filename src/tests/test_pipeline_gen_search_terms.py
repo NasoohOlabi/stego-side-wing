@@ -5,19 +5,19 @@ from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline
 
 def test_parse_terms_handles_json_and_markdown_fences():
     pipeline = GenSearchTermsPipeline.__new__(GenSearchTermsPipeline)
-    parsed = pipeline._parse_terms("```json\n[\"a\", \"b\"]\n```")
+    parsed = pipeline._parse_terms('```json\n["a", "b"]\n```')
     assert parsed == ["a", "b"]
 
 
 def test_parse_terms_extracts_embedded_array():
     pipeline = GenSearchTermsPipeline.__new__(GenSearchTermsPipeline)
-    parsed = pipeline._parse_terms("prefix text [\"x\", \"y\"] suffix")
+    parsed = pipeline._parse_terms('prefix text ["x", "y"] suffix')
     assert parsed == ["x", "y"]
 
 
 def test_parse_terms_falls_back_to_lines():
     pipeline = GenSearchTermsPipeline.__new__(GenSearchTermsPipeline)
-    parsed = pipeline._parse_terms("one\n\"two\"\n[three]")
+    parsed = pipeline._parse_terms('one\n"two"\n[three]')
     assert parsed == ["one", "two", "three"]
 
 
@@ -38,7 +38,7 @@ def test_generate_parses_and_caches_llm_response():
     cached = []
     pipeline = GenSearchTermsPipeline.__new__(GenSearchTermsPipeline)
     pipeline.config = SimpleNamespace(model="dummy")
-    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "[\"term-a\", \"term-b\"]")
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: '["term-a", "term-b"]')
     pipeline._get_cached_terms = lambda post_id: None
     pipeline._cache_terms = lambda post_id, terms: cached.append((post_id, terms))
 
@@ -89,7 +89,7 @@ def test_preview_generation_includes_retry_metadata_on_llm_error():
 def test_preview_generation_carries_cache_error_metadata():
     pipeline = GenSearchTermsPipeline.__new__(GenSearchTermsPipeline)
     pipeline.config = SimpleNamespace(model="dummy")
-    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "[\"term-a\"]", last_call_metadata={})
+    pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: '["term-a"]', last_call_metadata={})
     pipeline._get_cached_terms = lambda post_id: None
     pipeline._cache_terms = lambda post_id, terms: None
     pipeline._last_cache_error = "cache root must be array"
@@ -109,7 +109,7 @@ def test_preview_generation_caps_terms_but_caches_raw_terms(
     pipeline = GenSearchTermsPipeline.__new__(GenSearchTermsPipeline)
     pipeline.config = SimpleNamespace(model="dummy")
     pipeline.llm = SimpleNamespace(
-        call_llm=lambda **kwargs: "[\"t1\", \"t2\", \"t3\", \"t4\"]",
+        call_llm=lambda **kwargs: '["t1", "t2", "t3", "t4"]',
         last_call_metadata={},
     )
     pipeline._get_cached_terms = lambda post_id: None

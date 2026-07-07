@@ -16,9 +16,7 @@ def test_needle_finder_batch_falls_back_to_local_on_request_error(monkeypatch):
         raise RequestException("network down")
 
     monkeypatch.setattr("workflows.adapters.backend_api.requests.post", fail_post)
-    monkeypatch.setattr(
-        adapter, "_needle_finder_batch_local", lambda needles, haystack: expected
-    )
+    monkeypatch.setattr(adapter, "_needle_finder_batch_local", lambda needles, haystack: expected)
 
     result = adapter.needle_finder_batch(["a"], ["x"])
     assert result == expected
@@ -34,9 +32,7 @@ def test_needle_finder_batch_local_handles_mixed_inputs(monkeypatch):
             raise RuntimeError("explode")
         return {"best_match": haystack[0], "index": 0, "score": 0.99}
 
-    monkeypatch.setattr(
-        "services.semantic_service.find_best_match", fake_find_best_match
-    )
+    monkeypatch.setattr("services.semantic_service.find_best_match", fake_find_best_match)
 
     result = adapter._needle_finder_batch_local(
         needles=["good", 123, "bad", "boom"],

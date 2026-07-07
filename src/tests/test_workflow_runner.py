@@ -155,9 +155,7 @@ def test_run_stego_run_all_max_posts_zero_is_unlimited():
             raise ValueError("No unprocessed posts found for step='final-step' and tag='manual'.")
 
     runner.stego = _DummyStego()
-    result = runner.run_stego(
-        run_all=True, payload="hello", tag="manual", max_posts=0
-    )
+    result = runner.run_stego(run_all=True, payload="hello", tag="manual", max_posts=0)
 
     assert result["processed_count"] == 3
     assert result["max_posts"] is None
@@ -197,9 +195,7 @@ def test_run_stego_run_all_max_posts_one_caps_batch():
             }
 
     runner.stego = _DummyStego()
-    result = runner.run_stego(
-        run_all=True, payload="hello", tag="manual", max_posts=1
-    )
+    result = runner.run_stego(run_all=True, payload="hello", tag="manual", max_posts=1)
 
     assert result["processed_count"] == 1
     assert result["max_posts"] == 1
@@ -246,7 +242,9 @@ def test_run_prep_until_google_quota_then_stego_transitions_and_runs_stego_only(
             assert list_offset == 0
             if self.calls == 1:
                 return {"succeeded": True, "retry_count": 0, "post": {"id": "p1"}}
-            raise ValueError("No unprocessed posts found for step='final-step' and tag='version_42'.")
+            raise ValueError(
+                "No unprocessed posts found for step='final-step' and tag='version_42'."
+            )
 
     runner.research = _DummyResearch()
     runner.gen_angles = _DummyAngles()
@@ -513,9 +511,7 @@ def test_run_double_process_new_post_retries_same_post_until_fetch_succeeds(monk
         use_fetch_cache = kwargs["use_fetch_cache"]
         calls.append((post_id, use_fetch_cache))
         if post_id == "bad" and sum(1 for p, c in calls if p == "bad" and c is True) < 2:
-            raise RuntimeError(
-                "Failed to fetch URL content for post bad: Empty extraction list"
-            )
+            raise RuntimeError("Failed to fetch URL content for post bad: Empty extraction list")
         return {
             "settings": {
                 "use_terms_cache": kwargs["use_terms_cache"],
@@ -811,9 +807,14 @@ def test_validate_post_pipeline_success(tmp_path):
 
     baseline_data_load = {"id": post_id, "selftext": "x"}
     baseline_research = {"id": post_id, "search_results": ["a", "b"]}
-    baseline_angles = {"id": post_id, "angles": [{"source_quote": "a", "tangent": "b", "category": "c"}]}
+    baseline_angles = {
+        "id": post_id,
+        "angles": [{"source_quote": "a", "tangent": "b", "category": "c"}],
+    }
 
-    _write_json(config.get_step_dirs("filter-url-unresolved")[1] / f"{post_id}.json", baseline_data_load)
+    _write_json(
+        config.get_step_dirs("filter-url-unresolved")[1] / f"{post_id}.json", baseline_data_load
+    )
     _write_json(config.get_step_dirs("filter-researched")[1] / f"{post_id}.json", baseline_research)
     _write_json(config.get_step_dirs("angles-step")[1] / f"{post_id}.json", baseline_angles)
 
@@ -847,9 +848,14 @@ def test_validate_post_pipeline_reports_mismatch(tmp_path):
 
     baseline_data_load = {"id": post_id, "selftext": "x"}
     baseline_research = {"id": post_id, "search_results": ["a", "b"]}
-    baseline_angles = {"id": post_id, "angles": [{"source_quote": "a", "tangent": "b", "category": "c"}]}
+    baseline_angles = {
+        "id": post_id,
+        "angles": [{"source_quote": "a", "tangent": "b", "category": "c"}],
+    }
 
-    _write_json(config.get_step_dirs("filter-url-unresolved")[1] / f"{post_id}.json", baseline_data_load)
+    _write_json(
+        config.get_step_dirs("filter-url-unresolved")[1] / f"{post_id}.json", baseline_data_load
+    )
     _write_json(config.get_step_dirs("filter-researched")[1] / f"{post_id}.json", baseline_research)
     _write_json(config.get_step_dirs("angles-step")[1] / f"{post_id}.json", baseline_angles)
 
@@ -950,12 +956,12 @@ def test_validate_post_pipeline_reports_stage_error_without_raising(tmp_path):
         "post": {"id": post_id, "selftext": "x"},
         "report": {"fetch_success": True},
     }
-    runner.preview_research_post = lambda post_id, source_post=None, **kwargs: (_ for _ in ()).throw(
-        RuntimeError("google timed out")
-    )
-    runner.preview_gen_angles_post = lambda post_id, source_post=None, **kwargs: (_ for _ in ()).throw(
-        AssertionError("gen_angles should be skipped after research failure")
-    )
+    runner.preview_research_post = lambda post_id, source_post=None, **kwargs: (
+        _ for _ in ()
+    ).throw(RuntimeError("google timed out"))
+    runner.preview_gen_angles_post = lambda post_id, source_post=None, **kwargs: (
+        _ for _ in ()
+    ).throw(AssertionError("gen_angles should be skipped after research failure"))
 
     result = runner.validate_post_pipeline(post_id)
 
@@ -976,7 +982,9 @@ def test_validate_post_pipeline_missing_baseline(tmp_path):
     runner.backend = _DummyBackend(config)
     post_id = "p3"
 
-    _write_json(config.get_step_dirs("filter-url-unresolved")[1] / f"{post_id}.json", {"id": post_id})
+    _write_json(
+        config.get_step_dirs("filter-url-unresolved")[1] / f"{post_id}.json", {"id": post_id}
+    )
     _write_json(config.get_step_dirs("filter-researched")[1] / f"{post_id}.json", {"id": post_id})
     # Intentionally omit angles baseline.
 
@@ -1011,9 +1019,7 @@ def test_reconcile_stale_double_process_claim_clears_when_idle(tmp_path, monkeyp
     )
     double_process_cache_base_root()
     write_double_process_claim("old", "old.json")
-    reconcile_stale_double_process_claim_vs_explicit(
-        "new", has_active_double_process_run=False
-    )
+    reconcile_stale_double_process_claim_vs_explicit("new", has_active_double_process_run=False)
     assert try_read_double_process_claim() is None
 
 
@@ -1031,7 +1037,5 @@ def test_reconcile_stale_double_process_claim_keeps_when_active(tmp_path, monkey
     )
     double_process_cache_base_root()
     write_double_process_claim("old", "old.json")
-    reconcile_stale_double_process_claim_vs_explicit(
-        "new", has_active_double_process_run=True
-    )
+    reconcile_stale_double_process_claim_vs_explicit("new", has_active_double_process_run=True)
     assert try_read_double_process_claim() == ("old", "old.json")

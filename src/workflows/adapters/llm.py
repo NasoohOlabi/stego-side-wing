@@ -877,6 +877,7 @@ class LLMAdapter:
         endpoint = _provider_endpoint("gemini", model=model_name)
         keys = self.google_generative_language_api_keys
         last_exc: BaseException | None = None
+
         def _make_request(
             resolved_key: str,
             *,

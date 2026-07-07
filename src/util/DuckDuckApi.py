@@ -1,7 +1,7 @@
 import asyncio
 import json
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiohttp
 from icecream import ic
@@ -9,9 +9,7 @@ from icecream import ic
 from infrastructure.process_tracking import append_current_pid_to_log
 
 
-async def searchDuckDuckGo(
-    query: str, max_results: int = 10, timeout: int = 10
-) -> Dict[str, Any]:
+async def searchDuckDuckGo(query: str, max_results: int = 10, timeout: int = 10) -> dict[str, Any]:
     """
     Search DuckDuckGo using their instant answer API with proper error handling.
 
@@ -43,9 +41,7 @@ async def searchDuckDuckGo(
         print(f'🔍 Searching DuckDuckGo: "{query}"')
 
         async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(
-                url, timeout=aiohttp.ClientTimeout(total=timeout)
-            ) as response:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
                 # Check status
                 if response.status != 200:
                     print(f"⚠️  HTTP {response.status}: {response.reason}")
@@ -106,7 +102,7 @@ async def searchDuckDuckGo(
 
         return {"organic_results": organic_results}
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         print(f"⏰ Search timed out after {timeout}s")
         return {"organic_results": []}
     except json.JSONDecodeError as e:
@@ -117,9 +113,7 @@ async def searchDuckDuckGo(
         return {"organic_results": []}
 
 
-async def search_duckduckgo_with_fallback(
-    query: str, max_results: int = 10
-) -> Dict[str, Any]:
+async def search_duckduckgo_with_fallback(query: str, max_results: int = 10) -> dict[str, Any]:
     """
     Try API first, then fallback to HTML parsing if needed.
     """
@@ -136,7 +130,7 @@ async def search_duckduckgo_with_fallback(
     return result
 
 
-def search_sync(query: str, max_results: int = 10) -> Dict[str, Any]:
+def search_sync(query: str, max_results: int = 10) -> dict[str, Any]:
     """Synchronous wrapper"""
     return asyncio.run(search_duckduckgo_with_fallback(query, max_results))
 

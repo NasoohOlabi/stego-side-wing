@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 def _load_runner_module():
-    script_path = Path(__file__).resolve().parents[2] / "scripts" / (
-        "run_model_naturalness_ablation.py"
+    script_path = (
+        Path(__file__).resolve().parents[2] / "scripts" / ("run_model_naturalness_ablation.py")
     )
     spec = importlib.util.spec_from_file_location("run_model_naturalness_ablation", script_path)
     assert spec is not None and spec.loader is not None
@@ -205,9 +205,9 @@ def test_run_model_naturalness_ablation_skips_and_blinds(
     assert result["leaderboard"]["rows"][0]["average_sample_elapsed_ms"] == 123.0
     assert result["lane_summaries"][0]["summary"]["timing"]["request_elapsed_ms"] == [17.0, 19.0]
 
-    judge_lines = (tmp_path / "ablation" / "judge_samples.jsonl").read_text(
-        encoding="utf-8"
-    ).splitlines()
+    judge_lines = (
+        (tmp_path / "ablation" / "judge_samples.jsonl").read_text(encoding="utf-8").splitlines()
+    )
     assert len(judge_lines) == 2
     exported = json.loads(judge_lines[0])
     assert exported["lane_id"].startswith("lane_")

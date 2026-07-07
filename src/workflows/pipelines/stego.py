@@ -33,6 +33,7 @@ from workflows.utils.output_results_shape import (
     assert_valid_n8n_stego_artifact,
     n8n_save_object_body,
 )
+from workflows.utils.protocol_utils import stable_hash
 from workflows.utils.stego_codec import (
     augment_post as codec_augment_post,
 )
@@ -49,9 +50,6 @@ from workflows.utils.stego_codec import (
     compress_payload as codec_compress_payload,
 )
 from workflows.utils.stego_codec import (
-    protect_payload,
-)
-from workflows.utils.stego_codec import (
     embed_in_angle_selection as codec_embed_in_angle_selection,
 )
 from workflows.utils.stego_codec import (
@@ -59,8 +57,8 @@ from workflows.utils.stego_codec import (
 )
 from workflows.utils.stego_codec import (
     flatten_comments,
+    protect_payload,
 )
-from workflows.utils.protocol_utils import stable_hash
 from workflows.utils.workflow_llm_prompts import stego_encode_prompts_for_style
 
 # Backward-compatible names for tests and callers.
@@ -306,7 +304,9 @@ def _contextuality_gate(
 ) -> dict[str, Any]:
     normalized = " ".join(text.split()).lower()
     support_vocab = set(
-        _tokenize_content_words(" ".join(_context_support_texts(post_augmentation, sample, selected_angle)))
+        _tokenize_content_words(
+            " ".join(_context_support_texts(post_augmentation, sample, selected_angle))
+        )
     )
     candidate_tokens = _tokenize_content_words(text)
     overlap = [token for token in candidate_tokens if token in support_vocab]
@@ -891,9 +891,8 @@ class StegoPipeline:
                         strict_mode=False,
                     )
                 decoded_obj = None
-                if (
-                    isinstance(relaxed_decoded_idx, int)
-                    and 0 <= relaxed_decoded_idx < len(tangents_db)
+                if isinstance(relaxed_decoded_idx, int) and 0 <= relaxed_decoded_idx < len(
+                    tangents_db
                 ):
                     decoded_obj = tangents_db[relaxed_decoded_idx]
                 context_gate = _contextuality_gate(
@@ -950,8 +949,7 @@ class StegoPipeline:
         promising_candidates = [
             item
             for item in evaluations
-            if item["distance_bucket"] in {"exact", "adjacent"}
-            or item["matches_selected_angle"]
+            if item["distance_bucket"] in {"exact", "adjacent"} or item["matches_selected_angle"]
         ][:3]
         promising = promising_candidates[0] if promising_candidates else None
         eval_ms = _elapsed_ms_since(t_eval)
@@ -1022,7 +1020,7 @@ class StegoPipeline:
             "2. Do not add new facts, slogans, or broad policy framing.\n"
             "3. Keep it grounded in the post and comment chain.\n"
             "4. Make the target tangent slightly clearer using only ideas already present in the context.\n"
-            "5. Return JSON with exactly one key: {\"text\": \"...\"}.\n\n"
+            '5. Return JSON with exactly one key: {"text": "..."}.\n\n'
             f"Post title: {context.get('title', '')}\n"
             f"Post body: {context.get('selftext', '')}\n"
             f"Comment chain:\n" + "\n".join(chain_lines) + "\n\n"
@@ -1399,7 +1397,9 @@ class StegoPipeline:
                         },
                         [
                             item.get("decoded_index")
-                            for item in validation.get("validationDetails", {}).get("candidates", [])
+                            for item in validation.get("validationDetails", {}).get(
+                                "candidates", []
+                            )
                         ],
                     )
                     _log_encode_timing_complete(
@@ -1432,7 +1432,9 @@ class StegoPipeline:
                         "encoded_samples": encoded_results,
                         "decoded_indices": [
                             item.get("decoded_index")
-                            for item in validation.get("validationDetails", {}).get("candidates", [])
+                            for item in validation.get("validationDetails", {}).get(
+                                "candidates", []
+                            )
                         ],
                         "validation_details": validation.get("validationDetails"),
                     }
@@ -1498,7 +1500,9 @@ class StegoPipeline:
                                 "group_index": accepted_candidate.get("group_index"),
                                 "candidate_index": accepted_candidate.get("candidate_index"),
                                 "decoded_index": accepted_candidate.get("decoded_index"),
-                                "strict_decoded_index": accepted_candidate.get("strict_decoded_index"),
+                                "strict_decoded_index": accepted_candidate.get(
+                                    "strict_decoded_index"
+                                ),
                             }
                             return {
                                 "stego_text": str(accepted_candidate.get("text", "")),
@@ -1513,7 +1517,9 @@ class StegoPipeline:
                                 "encoded_samples": encoded_results,
                                 "decoded_indices": [
                                     item.get("decoded_index")
-                                    for item in sharpen_validation.get("validationDetails", {}).get("candidates", [])
+                                    for item in sharpen_validation.get("validationDetails", {}).get(
+                                        "candidates", []
+                                    )
                                 ],
                                 "validation_details": sharpen_validation.get("validationDetails"),
                             }
@@ -1749,7 +1755,9 @@ class StegoPipeline:
                         "encoded_samples": encoded_results,
                         "decoded_indices": [
                             item.get("decoded_index")
-                            for item in validation.get("validationDetails", {}).get("candidates", [])
+                            for item in validation.get("validationDetails", {}).get(
+                                "candidates", []
+                            )
                         ],
                         "validation_details": validation.get("validationDetails"),
                         "binary_selection_bits": bits,

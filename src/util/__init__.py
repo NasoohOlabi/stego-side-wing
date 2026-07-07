@@ -1,21 +1,20 @@
 """Backward compatibility shims for util/* imports."""
 
 # Re-export from integrations for backward compatibility
+# DuckDuckGo API - note: keeping original casing for compatibility
+from integrations.duckduckgo_api import (
+    search_duckduckgo_with_fallback,
+    search_sync,
+    searchDuckDuckGo,
+)
 from integrations.news_api import (
     Article,
     ArticleSource,
     EverythingParams,
     NewsApiErrorResponse,
-    NewsApiSuccessResponse,
     NewsApiResponse,
+    NewsApiSuccessResponse,
     fetch_everything,
-)
-
-# DuckDuckGo API - note: keeping original casing for compatibility
-from integrations.duckduckgo_api import (
-    searchDuckDuckGo,
-    search_duckduckgo_with_fallback,
-    search_sync,
 )
 
 # ScrapingDog API

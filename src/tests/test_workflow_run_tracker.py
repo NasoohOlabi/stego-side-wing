@@ -1,4 +1,5 @@
 """Tests for workflow run tracking and GET /api/v1/workflows/runs."""
+
 import pytest
 
 from app.app_factory import create_app

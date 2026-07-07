@@ -1,27 +1,22 @@
 """Tests for stripping <redacted_thinking> from LLM assistant text."""
 
 import json
-from pathlib import Path
 
 import pytest
 
 from infrastructure.config import REPO_ROOT
 from workflows.adapters.llm import (
     LLMAdapter,
-    _strip_lm_studio_control_envelope,
     _split_thinking_and_answer,
+    _strip_lm_studio_control_envelope,
     _strip_redacted_thinking,
 )
 
-_OPTIONAL_STEGO_LOG = (
-    REPO_ROOT / "logs" / "stego_prompts_20260403_064546.log"
-)
+_OPTIONAL_STEGO_LOG = REPO_ROOT / "logs" / "stego_prompts_20260403_064546.log"
 
 
 def test_strip_removes_single_block_and_preserves_answer() -> None:
-    raw = (
-        "<redacted_thinking>\nstep 1\n</redacted_thinking>\n\nidx: 3\n"
-    )
+    raw = "<redacted_thinking>\nstep 1\n</redacted_thinking>\n\nidx: 3\n"
     assert _strip_redacted_thinking(raw) == "idx: 3"
 
 
@@ -73,20 +68,12 @@ def test_strip_plain_thinking_process_before_json_array() -> None:
 
 
 def test_strip_plain_thinking_process_before_json_object() -> None:
-    raw = (
-        "Thinking Process:\n\n"
-        "Step 1.\n"
-        '{"texts": ["x", "y", "z"]}\n'
-    )
+    raw = 'Thinking Process:\n\nStep 1.\n{"texts": ["x", "y", "z"]}\n'
     assert _strip_redacted_thinking(raw) == '{"texts": ["x", "y", "z"]}'
 
 
 def test_strip_plain_thinking_then_idx_line() -> None:
-    raw = (
-        "Thinking Process:\n\n"
-        "1. compare angles\n"
-        "idx: 2\n"
-    )
+    raw = "Thinking Process:\n\n1. compare angles\nidx: 2\n"
     assert _strip_redacted_thinking(raw) == "idx: 2"
 
 
@@ -96,15 +83,8 @@ def test_strip_plain_thinking_markdown_bold_header() -> None:
 
 
 def test_strip_plain_thinking_fenced_json() -> None:
-    raw = (
-        "Thinking Process:\n\n"
-        "```json\n"
-        '{"texts": ["u"]}\n'
-        "```\n"
-    )
-    assert _strip_redacted_thinking(raw) == (
-        '```json\n{"texts": ["u"]}\n```'
-    )
+    raw = 'Thinking Process:\n\n```json\n{"texts": ["u"]}\n```\n'
+    assert _strip_redacted_thinking(raw) == ('```json\n{"texts": ["u"]}\n```')
 
 
 def test_plain_thinking_only_yields_empty() -> None:
@@ -114,7 +94,7 @@ def test_plain_thinking_only_yields_empty() -> None:
 
 def test_strip_plain_thinking_bom_before_json_array() -> None:
     """BOM before ``[`` must not hide the payload from plain-thinking split."""
-    raw = "Thinking Process:\n\n\uFEFF[]\n"
+    raw = "Thinking Process:\n\n\ufeff[]\n"
     out = _strip_redacted_thinking(raw)
     assert out.strip().startswith("[")
     assert json.loads(out) == []
@@ -127,10 +107,7 @@ def test_no_strip_when_thinking_not_leading() -> None:
 
 
 def test_strip_lm_studio_control_envelope_returns_json_payload() -> None:
-    raw = (
-        '<|channel|>final <|constrain|>json<|message|>'
-        '["a", "b", "c"]'
-    )
+    raw = '<|channel|>final <|constrain|>json<|message|>["a", "b", "c"]'
     assert _strip_lm_studio_control_envelope(raw) == '["a", "b", "c"]'
 
 
@@ -140,9 +117,7 @@ def test_strip_lm_studio_control_envelope_leaves_plain_json_alone() -> None:
 
 
 def test_split_thinking_and_answer_tagged_plus_idx() -> None:
-    raw = (
-        "<redacted_thinking>\nstep 1\n</redacted_thinking>\n\nidx: 3\n"
-    )
+    raw = "<redacted_thinking>\nstep 1\n</redacted_thinking>\n\nidx: 3\n"
     thinking, response = _split_thinking_and_answer(raw)
     assert "redacted_thinking" in thinking
     assert response == "idx: 3"
@@ -150,11 +125,7 @@ def test_split_thinking_and_answer_tagged_plus_idx() -> None:
 
 
 def test_split_thinking_and_answer_plain_process_plus_json() -> None:
-    raw = (
-        "Thinking Process:\n\n"
-        "1. analyze\n"
-        '["a", "b", "c"]\n'
-    )
+    raw = 'Thinking Process:\n\n1. analyze\n["a", "b", "c"]\n'
     thinking, response = _split_thinking_and_answer(raw)
     assert "Thinking Process" in thinking
     assert response == '["a", "b", "c"]'

@@ -86,12 +86,12 @@ def test_e2e_extractive_zero_kld_multi_sample_large_payloads(
         assert not (set(result["stego_text"]) & FORBIDDEN_INVISIBLE_CHARS)
         assert result["breakdown"]["embedded_payload_bits"] == len(payload.encode("utf-8")) * 8
 
-        (dataset_dir / f'{post["id"]}.json').write_text(
+        (dataset_dir / f"{post['id']}.json").write_text(
             json.dumps({"comments": post["comments"]}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         artifact = n8n_save_object_body(result)
-        (output_dir / f'{post["id"]}_version_e2e.json').write_text(
+        (output_dir / f"{post['id']}_version_e2e.json").write_text(
             json.dumps(artifact, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -102,6 +102,5 @@ def test_e2e_extractive_zero_kld_multi_sample_large_payloads(
     assert report["dataset_summary"]["usable_stego_samples"] == len(posts)
     assert abs(report["primary_baseline_matched_post"]["average_kl_stego_vs_matched_post"]) < 1e-12
     assert (
-        abs(report["secondary_baseline_global_corpus"]["average_kl_stego_vs_global_corpus"])
-        < 1e-12
+        abs(report["secondary_baseline_global_corpus"]["average_kl_stego_vs_global_corpus"]) < 1e-12
     )

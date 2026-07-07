@@ -96,10 +96,14 @@ def build_prompt(corpus: str, cover_texts: list[str], seed: int, n_cover: int) -
     return PROMPT_TEMPLATE.format(corpus=corpus, context=context)
 
 
-def build_api_prompt(corpus: str, cover_texts: list[str], seed: int, n_cover: int) -> str:
+def build_api_prompt(
+    corpus: str,
+    cover_texts: list[str] | None = None,
+    seed: int = 2023,
+    n_cover: int = DEFAULT_N_COVER,
+) -> str:
+    cover_texts = cover_texts or []
     clean = [_normalize_whitespace(text) for text in cover_texts if _normalize_whitespace(text)]
-    if not clean:
-        raise ValueError("cover_texts is empty after normalization")
     with_random = random.Random(seed)
     chosen = clean[:]
     if len(clean) > n_cover:
@@ -143,7 +147,11 @@ def _partial_hide_result(
     latency_ms: int,
     attempt: int,
 ) -> dict[str, Any]:
-    target_bits_actual = target_bits if isinstance(target_bits, int) and target_bits > 0 else _target_bits_for_payload(target_bytes)
+    target_bits_actual = (
+        target_bits
+        if isinstance(target_bits, int) and target_bits > 0
+        else _target_bits_for_payload(target_bytes)
+    )
     encoded_bytes = _encoded_payload_bytes(max(0, used_bits), target_bytes)
     payload_raw = target_payload.encode("utf-8")
     remaining_raw = payload_raw[encoded_bytes:]
@@ -248,9 +256,15 @@ def _get_local_stego_model(model_name: str) -> tuple[Any, Any]:
     model = AutoModelForCausalLM.from_pretrained(model_name, local_files_only=True)
     model.eval()
     model.vocab_size = model.config.vocab_size
-    if getattr(tokenizer, "pad_token_id", None) is None and getattr(tokenizer, "eos_token", None) is not None:
+    if (
+        getattr(tokenizer, "pad_token_id", None) is None
+        and getattr(tokenizer, "eos_token", None) is not None
+    ):
         tokenizer.pad_token = tokenizer.eos_token
-    if getattr(model.config, "pad_token_id", None) is None and getattr(tokenizer, "pad_token_id", None) is not None:
+    if (
+        getattr(model.config, "pad_token_id", None) is None
+        and getattr(tokenizer, "pad_token_id", None) is not None
+    ):
         model.config.pad_token_id = tokenizer.pad_token_id
     cached = (model, tokenizer)
     _LOCAL_MODEL_CACHE[cache_key] = cached
@@ -291,13 +305,13 @@ def _run_local_hf_sample(sample: ComparisonInput, prompt: str, target_bytes: int
     stegotext = stego_tokenizer.decode(stego_ids.tolist())
     if is_truncated:
         params_used = {
-                "mode": "huffman",
-                "threshold": sample.threshold,
-                "temperature": sample.temperature,
-                "temperature_alpha": sample.temperature_alpha,
-                "max_bpw": sample.max_bpw,
-                "local_model": stego_model_name,
-                "used_bit_len": used_bit_len,
+            "mode": "huffman",
+            "threshold": sample.threshold,
+            "temperature": sample.temperature,
+            "temperature_alpha": sample.temperature_alpha,
+            "max_bpw": sample.max_bpw,
+            "local_model": stego_model_name,
+            "used_bit_len": used_bit_len,
         }
         return _partial_hide_result(
             target_payload=sample.target_payload,
@@ -369,8 +383,12 @@ def _run_local_hf_sample(sample: ComparisonInput, prompt: str, target_bytes: int
                 "attempt": 1,
             }
         recovered_wrapped = codec.unwrap_bits(recovered_bits, size_bits=8, ef_bits=4)
-        recovered_ids = codec.decode_bitstream(codec_model, recovered_wrapped, remove_bos_token=True)
-        recovered_secret = codec_tokenizer.decode(recovered_ids[0].tolist(), skip_special_tokens=True)
+        recovered_ids = codec.decode_bitstream(
+            codec_model, recovered_wrapped, remove_bos_token=True
+        )
+        recovered_secret = codec_tokenizer.decode(
+            recovered_ids[0].tolist(), skip_special_tokens=True
+        )
         if recovered_secret != sample.target_payload:
             return {
                 "accepted": False,
@@ -489,6 +507,7 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
     hide_url = f"{base}/hide"
     reveal_url = f"{base}/reveal"
 
+    failure_reason: str | None = None
     if not sample.server_url.startswith("local://"):
         started = time.perf_counter()
         try:
@@ -511,79 +530,80 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
                 },
             )
         except Exception as exc:
-            return {
-                "accepted": False,
-                "reason": f"capacity_probe_failed: {exc}",
-                "payload_bits_encoded": 0,
-                "protocol_overhead_bits": 0,
-                "total_embedded_bits": 0,
-                "payload_bytes_target": target_bytes,
-                "payload_bytes_actual": 0,
-                "stegotext": None,
-                "decode_ok": None,
-                "quality_passed": False,
-                "ppl": None,
-                "params_used": None,
-                "latency_ms": int((time.perf_counter() - started) * 1000),
-                "attempt": 1,
-            }
+            failure_reason = f"capacity_probe_failed: {exc}"
+        else:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            raw_trials = probe_resp.get("trials")
+            trials: list[Any] = raw_trials if isinstance(raw_trials, list) else []
+            successful_trials = [
+                trial
+                for trial in trials
+                if isinstance(trial, dict)
+                and bool(trial.get("success"))
+                and isinstance(trial.get("stegotext"), str)
+                and not stegotext_has_prompt_leakage(str(trial.get("stegotext")))
+            ]
+            best = max(
+                successful_trials,
+                key=lambda trial: int(
+                    trial.get("payload_bits_exact") or trial.get("payload_bits") or 0
+                ),
+                default=None,
+            )
+            if best is None and isinstance(probe_resp.get("best_success"), dict):
+                candidate = probe_resp["best_success"]
+                if isinstance(candidate.get("stegotext"), str) and not stegotext_has_prompt_leakage(
+                    str(candidate.get("stegotext"))
+                ):
+                    best = candidate
+            if not isinstance(best, dict):
+                failure_reason = "capacity_probe_no_clean_success"
+            else:
+                ppl_value = best.get("ppl")
+                return {
+                    "accepted": True,
+                    "reason": None,
+                    "payload_bits_encoded": int(
+                        best.get("payload_bits_exact") or best.get("payload_bits") or 0
+                    ),
+                    "protocol_overhead_bits": int(best.get("header_bits") or 0),
+                    "total_embedded_bits": int(
+                        best.get("total_used_bits") or best.get("used_bits") or 0
+                    ),
+                    "encoded_bits": int(best.get("total_used_bits") or best.get("used_bits") or 0),
+                    "target_bits": int(best.get("total_target_bits") or 0),
+                    "payload_bytes_target": int(best.get("payload_bytes") or 0),
+                    "payload_bytes_actual": int(best.get("payload_bytes") or 0),
+                    "stegotext": best.get("stegotext")
+                    if isinstance(best.get("stegotext"), str)
+                    else None,
+                    "decode_ok": bool(best.get("decode_ok")),
+                    "quality_passed": bool(best.get("quality_passed")),
+                    "word_count_api": int(best.get("word_count") or 0),
+                    "ppl": float(ppl_value) if isinstance(ppl_value, (int, float)) else None,
+                    "params_used": best.get("params_used")
+                    if isinstance(best.get("params_used"), dict)
+                    else probe_resp.get("params_used"),
+                    "latency_ms": latency_ms,
+                    "attempt": 1,
+                    "capacity_best_success": best,
+                    "capacity_trials": trials,
+                }
 
-        latency_ms = int((time.perf_counter() - started) * 1000)
-        trials = probe_resp.get("trials") if isinstance(probe_resp.get("trials"), list) else []
-        successful_trials = [
-            trial
-            for trial in trials
-            if isinstance(trial, dict)
-            and bool(trial.get("success"))
-            and isinstance(trial.get("stegotext"), str)
-            and not stegotext_has_prompt_leakage(str(trial.get("stegotext")))
-        ]
-        best = max(successful_trials, key=lambda trial: int(trial.get("payload_bits_exact") or trial.get("payload_bits") or 0), default=None)
-        if best is None and isinstance(probe_resp.get("best_success"), dict):
-            candidate = probe_resp["best_success"]
-            if isinstance(candidate.get("stegotext"), str) and not stegotext_has_prompt_leakage(str(candidate.get("stegotext"))):
-                best = candidate
-        if not isinstance(best, dict):
-            return {
-                "accepted": False,
-                "reason": "capacity_probe_no_clean_success",
-                "payload_bits_encoded": 0,
-                "protocol_overhead_bits": 0,
-                "total_embedded_bits": 0,
-                "payload_bytes_target": target_bytes,
-                "payload_bytes_actual": 0,
-                "stegotext": None,
-                "decode_ok": False,
-                "quality_passed": False,
-                "ppl": None,
-                "params_used": probe_resp.get("params_used") if isinstance(probe_resp.get("params_used"), dict) else None,
-                "latency_ms": latency_ms,
-                "attempt": 1,
-                "capacity_trials": trials,
-            }
+    if sample.max_retries < 1:
         return {
-            "accepted": True,
-            "reason": None,
-            "payload_bits_encoded": int(best.get("payload_bits_exact") or best.get("payload_bits") or 0),
-            "protocol_overhead_bits": int(best.get("header_bits") or 0),
-            "total_embedded_bits": int(best.get("total_used_bits") or best.get("used_bits") or 0),
-            "encoded_bits": int(best.get("total_used_bits") or best.get("used_bits") or 0),
-            "target_bits": int(best.get("total_target_bits") or 0),
-            "payload_bytes_target": int(best.get("payload_bytes") or 0),
-            "payload_bytes_actual": int(best.get("payload_bytes") or 0),
-            "stegotext": best.get("stegotext") if isinstance(best.get("stegotext"), str) else None,
-            "decode_ok": bool(best.get("decode_ok")),
-            "quality_passed": bool(best.get("quality_passed")),
-            "word_count_api": int(best.get("word_count") or 0),
-            "ppl": float(best.get("ppl")) if isinstance(best.get("ppl"), (int, float)) else None,
-            "params_used": best.get("params_used") if isinstance(best.get("params_used"), dict) else probe_resp.get("params_used"),
-            "latency_ms": latency_ms,
-            "attempt": 1,
-            "capacity_best_success": best,
-            "capacity_trials": trials,
+            "accepted": False,
+            "reason": failure_reason or "max_retries_must_be_positive",
+            "payload_bytes_target": target_bytes,
+            "payload_bytes_actual": 0,
+            "stegotext": None,
+            "decode_ok": None,
+            "ppl": None,
+            "params_used": None,
+            "latency_ms": 0,
+            "attempt": 0,
         }
 
-    failure_reason: str | None = None
     for attempt in range(1, sample.max_retries + 1):
         started = time.perf_counter()
         try:
@@ -626,12 +646,12 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
                 "latency_ms": 0,
                 "attempt": attempt,
                 "hide_request_debug": {
-                        "prompt_chars": len(prompt),
-                        "secret_bytes": target_bytes,
-                        "corpus": sample.corpus,
-                        "examples_in_prompt": min(len(sample.cover_texts), max(1, sample.n_cover)),
-                        "seed": sample.seed,
-                        "n_cover": sample.n_cover,
+                    "prompt_chars": len(prompt),
+                    "secret_bytes": target_bytes,
+                    "corpus": sample.corpus,
+                    "examples_in_prompt": min(len(sample.cover_texts), max(1, sample.n_cover)),
+                    "seed": sample.seed,
+                    "n_cover": sample.n_cover,
                     "threshold": sample.threshold,
                     "temperature": sample.temperature,
                     "temperature_alpha": sample.temperature_alpha,

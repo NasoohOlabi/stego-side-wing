@@ -117,7 +117,10 @@ def test_metrics_single_post_endpoint_ok(client, monkeypatch):
             "perplexity": 10.0,
             "resolved_device": "cpu",
             "primary_baseline_matched_post": None,
-            "secondary_baseline_global_corpus": {"kl_stego_vs_global_corpus": 0.1, "jsd_stego_vs_global_corpus": 0.05},
+            "secondary_baseline_global_corpus": {
+                "kl_stego_vs_global_corpus": 0.1,
+                "jsd_stego_vs_global_corpus": 0.05,
+            },
             "warnings": [],
             "config": {},
         },

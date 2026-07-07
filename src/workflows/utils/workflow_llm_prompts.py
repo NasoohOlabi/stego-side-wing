@@ -199,6 +199,7 @@ _DEFAULT_GEN_SEARCH_CONTENT = "## Content:\n{text}"
 
 class StegoEncodePrompts(BaseModel):
     """Stego sender LLM templates."""
+
     model_config = ConfigDict(extra="forbid")
 
     system_template: str = Field(min_length=1)
@@ -207,6 +208,7 @@ class StegoEncodePrompts(BaseModel):
 
 class StegoDecodePrompts(BaseModel):
     """Stego decode LLM templates."""
+
     model_config = ConfigDict(extra="forbid")
 
     user_template: str = Field(min_length=1)
@@ -215,6 +217,7 @@ class StegoDecodePrompts(BaseModel):
 
 class GenAnglesPrompts(BaseModel):
     """Gen-angles LLM templates."""
+
     model_config = ConfigDict(extra="forbid")
 
     user_template: str = Field(min_length=1)
@@ -223,6 +226,7 @@ class GenAnglesPrompts(BaseModel):
 
 class GenSearchTermsPrompts(BaseModel):
     """Gen-terms LLM templates."""
+
     model_config = ConfigDict(extra="forbid")
 
     system_template: str = Field(min_length=1)
@@ -233,6 +237,7 @@ class GenSearchTermsPrompts(BaseModel):
 
 class WorkflowLlmPromptsDocument(BaseModel):
     """Root document for config/workflow_llm_prompts.json."""
+
     model_config = ConfigDict(extra="forbid")
 
     version: int = Field(ge=1)
@@ -380,4 +385,3 @@ def format_gen_search_terms_user_prompt(
     if post_text:
         parts.append(p.user_content_template.format(text=post_text))
     return "\n\n".join(parts)
-

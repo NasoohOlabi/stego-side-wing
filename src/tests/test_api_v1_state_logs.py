@@ -1,4 +1,5 @@
 """API routes for API JSONL log size and truncate."""
+
 from __future__ import annotations
 
 import pytest

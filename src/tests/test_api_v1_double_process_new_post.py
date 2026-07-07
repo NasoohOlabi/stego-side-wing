@@ -72,7 +72,10 @@ def test_double_process_new_post_passes_explicit_post_id(client, monkeypatch):
 
     def _run(on_progress=None, allow_angles_fallback=False, explicit_post_id=None):
         captured.append(explicit_post_id)
-        return {"post_id": explicit_post_id or "x", "source_file": f"{explicit_post_id or 'x'}.json"}
+        return {
+            "post_id": explicit_post_id or "x",
+            "source_file": f"{explicit_post_id or 'x'}.json",
+        }
 
     monkeypatch.setattr(api_v1_routes.runner, "run_double_process_new_post", _run)
 
@@ -132,7 +135,10 @@ def test_double_process_new_post_stale_claim_cleared_when_idle(client, monkeypat
 
     def _run(on_progress=None, allow_angles_fallback=False, explicit_post_id=None):
         captured.append(explicit_post_id)
-        return {"post_id": explicit_post_id or "x", "source_file": f"{explicit_post_id or 'x'}.json"}
+        return {
+            "post_id": explicit_post_id or "x",
+            "source_file": f"{explicit_post_id or 'x'}.json",
+        }
 
     monkeypatch.setattr(api_v1_routes.runner, "run_double_process_new_post", _run)
 

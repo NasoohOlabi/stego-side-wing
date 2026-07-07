@@ -6,7 +6,6 @@ import httpx
 import pytest
 import requests
 
-import infrastructure.config as infra_config
 from workflows.adapters.llm import LLMAdapter
 from workflows.cache_context import angles_cache_context
 
@@ -104,9 +103,7 @@ def test_analyze_angles_google_transport_split_recovers(
         prompt = str(kwargs["prompt"])
         calls.append(len(prompt))
         if len(prompt) > 25_000:
-            raise httpx.RemoteProtocolError(
-                "Server disconnected without sending a response."
-            )
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
         return '[{"source_quote":"a","tangent":"b","category":"c"}]'
 
     monkeypatch.setattr(LLMAdapter, "call_llm", fake_call_llm)

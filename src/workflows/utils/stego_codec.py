@@ -394,6 +394,63 @@ def compress_payload(payload: str, dictionary: list[str]) -> dict[str, Any]:
     }
 
 
+def _comment_id_aliases(comment_id: Any) -> list[str]:
+    if not isinstance(comment_id, str):
+        return []
+    aliases = [comment_id]
+    if "_" in comment_id:
+        aliases.append(comment_id.split("_", 1)[1])
+    return aliases
+
+
+def _comment_lookup_by_id(comments: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    comment_map: dict[str, dict[str, Any]] = {}
+    for comment in comments:
+        for alias in _comment_id_aliases(comment.get("id")):
+            comment_map[alias] = comment
+    return comment_map
+
+
+def _comment_chain_entry(comment: dict[str, Any]) -> dict[str, Any]:
+    author = comment.get("author")
+    return {
+        "name": author if isinstance(author, str) and author.strip() else "Unknown",
+        "body": comment.get("body") if isinstance(comment.get("body"), str) else "",
+        "id": comment.get("id"),
+        "parent_id": comment.get("parent_id"),
+        "permalink": comment.get("permalink"),
+    }
+
+
+def _picked_comment_chain(
+    picked_comment: dict[str, Any],
+    comment_map: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    picked_chain: list[dict[str, Any]] = []
+    current = picked_comment
+    visited: set[str] = set()
+
+    while True:
+        current_id = str(current.get("id", ""))
+        if current_id in visited:
+            break
+        visited.add(current_id)
+        picked_chain.insert(0, _comment_chain_entry(current))
+
+        parent_id = current.get("parent_id")
+        if parent_id == current.get("link_id"):
+            break
+
+        parent = comment_map.get(str(parent_id))
+        if parent is None and isinstance(parent_id, str) and "_" in parent_id:
+            parent = comment_map.get(parent_id.split("_", 1)[1])
+        if parent is None or parent is current:
+            break
+        current = parent
+
+    return picked_chain
+
+
 def embed_in_comment_selection(bits: str, post: dict[str, Any]) -> dict[str, Any]:
     flattened_comments = flatten_comments(post.get("comments", []))
     n = len(flattened_comments)
@@ -406,45 +463,10 @@ def embed_in_comment_selection(bits: str, post: dict[str, Any]) -> dict[str, Any
     picked_chain: list[dict[str, Any]] = []
     if selection_index > 0 and n > 0:
         picked_comment = flattened_comments[selection_index - 1]
-        comment_map: dict[str, dict[str, Any]] = {}
-        for comment in flattened_comments:
-            cid = comment.get("id")
-            if isinstance(cid, str):
-                comment_map[cid] = comment
-                if "_" in cid:
-                    comment_map[cid.split("_", 1)[1]] = comment
-
-        current = picked_comment
-        visited: set[str] = set()
-        while True:
-            current_id = str(current.get("id", ""))
-            if current_id in visited:
-                break
-            visited.add(current_id)
-            picked_chain.insert(
-                0,
-                {
-                    "name": (
-                        current.get("author")
-                        if isinstance(current.get("author"), str) and current.get("author").strip()
-                        else "Unknown"
-                    ),
-                    "body": (current.get("body") if isinstance(current.get("body"), str) else ""),
-                    "id": current.get("id"),
-                    "parent_id": current.get("parent_id"),
-                    "permalink": current.get("permalink"),
-                },
-            )
-            parent_id = current.get("parent_id")
-            link_id = current.get("link_id")
-            if parent_id == link_id:
-                break
-            parent = comment_map.get(str(parent_id))
-            if parent is None and isinstance(parent_id, str) and "_" in parent_id:
-                parent = comment_map.get(parent_id.split("_", 1)[1])
-            if parent is None or parent is current:
-                break
-            current = parent
+        picked_chain = _picked_comment_chain(
+            picked_comment,
+            _comment_lookup_by_id(flattened_comments),
+        )
 
     return {
         "result": {

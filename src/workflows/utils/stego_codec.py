@@ -530,23 +530,41 @@ def embed_in_angle_selection(
     }
 
 
-def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
+def _selection_embedding_fields(bits: str, post: dict[str, Any]) -> dict[str, Any]:
     nested_angles = _nested_angle_groups(post.get("angles", []))
+    comment_emb = embed_in_comment_selection(bits, post)
+    angle_emb = embed_in_angle_selection(comment_emb["remainingBits"], nested_angles)
+    selection_signature = comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"]
+
+    warnings: list[str] = []
+    if comment_emb["result"].get("insufficientBits"):
+        warnings.append("Padding used in Comment Selection.")
+    if angle_emb.get("insufficientBits"):
+        warnings.append("Padding used in Angle Selection.")
+
+    return {
+        "commentEmbedding": comment_emb["result"],
+        "angleEmbedding": angle_emb,
+        "totalBitsEmbedded": comment_emb["result"]["bitsCount"] + angle_emb["bitsCount"],
+        "fullEncodedBits": selection_signature,
+        "commentBits": comment_emb["result"]["bitsUsed"],
+        "angleBits": angle_emb["bitsUsed"],
+        "selectionSignature": selection_signature,
+        "warnings": warnings,
+        "_remainingBitsUnembedded": len(angle_emb.get("remainingBits", "")),
+    }
+
+
+def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
     dictionary = build_dictionary(post)
     compression = compress_payload(payload, dictionary)
     warnings: list[str] = []
     if compression.get("method") == "standard":
         warnings.append("Dictionary compression inefficient; used standard encoding.")
 
-    comment_emb = embed_in_comment_selection(compression["compressed"], post)
-    if comment_emb["result"].get("insufficientBits"):
-        warnings.append("Padding used in Comment Selection.")
-
-    angle_emb = embed_in_angle_selection(comment_emb["remainingBits"], nested_angles)
-    if angle_emb.get("insufficientBits"):
-        warnings.append("Padding used in Angle Selection.")
-    selection_signature = comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"]
-    remaining_channel_bits = len(angle_emb.get("remainingBits", ""))
+    selection = _selection_embedding_fields(compression["compressed"], post)
+    warnings.extend(selection.pop("warnings"))
+    remaining_channel_bits = int(selection.pop("_remainingBitsUnembedded"))
     if remaining_channel_bits > 0:
         warnings.append(
             "Selection channel did not carry the full compressed payload; "
@@ -555,14 +573,8 @@ def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "compression": compression,
-        "commentEmbedding": comment_emb["result"],
-        "angleEmbedding": angle_emb,
-        "totalBitsEmbedded": comment_emb["result"]["bitsCount"] + angle_emb["bitsCount"],
+        **selection,
         "remainingBitsUnembedded": remaining_channel_bits,
-        "fullEncodedBits": selection_signature,
-        "commentBits": comment_emb["result"]["bitsUsed"],
-        "angleBits": angle_emb["bitsUsed"],
-        "selectionSignature": selection_signature,
         "warnings": warnings,
     }
 
@@ -572,15 +584,8 @@ def augment_post_with_selection_bits(bits: str, post: dict[str, Any]) -> dict[st
     if set(bits) - {"0", "1"}:
         raise ValueError("Selection bits must contain only '0' and '1'")
 
-    nested_angles = _nested_angle_groups(post.get("angles", []))
-    comment_emb = embed_in_comment_selection(bits, post)
-    angle_emb = embed_in_angle_selection(comment_emb["remainingBits"], nested_angles)
-    selection_signature = comment_emb["result"]["bitsUsed"] + angle_emb["bitsUsed"]
-    warnings: list[str] = []
-    if comment_emb["result"].get("insufficientBits"):
-        warnings.append("Padding used in Comment Selection.")
-    if angle_emb.get("insufficientBits"):
-        warnings.append("Padding used in Angle Selection.")
+    selection = _selection_embedding_fields(bits, post)
+    selection.pop("_remainingBitsUnembedded")
 
     return {
         "compression": {
@@ -593,14 +598,7 @@ def augment_post_with_selection_bits(bits: str, post: dict[str, Any]) -> dict[st
             "references": [],
             "compressionSkipped": True,
         },
-        "commentEmbedding": comment_emb["result"],
-        "angleEmbedding": angle_emb,
-        "totalBitsEmbedded": comment_emb["result"]["bitsCount"] + angle_emb["bitsCount"],
-        "fullEncodedBits": selection_signature,
-        "commentBits": comment_emb["result"]["bitsUsed"],
-        "angleBits": angle_emb["bitsUsed"],
-        "selectionSignature": selection_signature,
-        "warnings": warnings,
+        **selection,
         "diagnostic": {
             "binary_selection_bits": bits,
             "compression_skipped": True,
@@ -781,6 +779,25 @@ def recover_payload_with_compressed_full(
     This is audit-assisted recovery, not proof that one visible comment carried
     the whole payload. Pure stego recovery only observes the selection bits.
     """
+    return _recover_known_compressed_full(
+        compressed_full,
+        dictionary,
+        pre_sender_post,
+        nested_angles,
+        decoded_angle_index,
+        include_method=False,
+    )
+
+
+def _recover_known_compressed_full(
+    compressed_full: str,
+    dictionary: list[str],
+    pre_sender_post: dict[str, Any],
+    nested_angles: list[list[dict[str, Any]]],
+    decoded_angle_index: int,
+    *,
+    include_method: bool,
+) -> tuple[str, dict[str, Any]] | None:
     lc = comment_selection_bit_width(pre_sender_post)
     angles = flatten_angle_groups(nested_angles)
 
@@ -802,6 +819,8 @@ def recover_payload_with_compressed_full(
         "lc": lc,
         "la": la,
     }
+    if include_method:
+        meta["method"] = compress_payload(payload, dictionary).get("method")
     return payload, meta
 
 
@@ -866,21 +885,14 @@ def recover_payload_bruteforce_comment_bits(
         return None
 
     if compressed_full is not None:
-        if len(compressed_full) < lc + la:
-            return None
-        angle_bits = compressed_full[lc : lc + la]
-        if not angle_bits_decode_to_index(angle_bits, decoded_angle_index, len(angles)):
-            return None
-        payload = decompress_after_embed_prefix(compressed_full, dictionary, lc, la)
-        if payload is None:
-            return None
-        return payload, {
-            "comment_bits": compressed_full[:lc],
-            "angle_bits": angle_bits,
-            "lc": lc,
-            "la": la,
-            "method": compress_payload(payload, dictionary).get("method"),
-        }
+        return _recover_known_compressed_full(
+            compressed_full,
+            dictionary,
+            pre_sender_post,
+            nested_angles,
+            decoded_angle_index,
+            include_method=True,
+        )
 
     # This path is intentionally bounded for small selection channels. It is
     # not suitable for large payload search; multi-post framing should carry

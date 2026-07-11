@@ -900,6 +900,34 @@ class WorkflowRunner:
         )
         return result
 
+    def run_multi_frame_stego(
+        self,
+        payload: str,
+        posts: list[dict[str, Any]],
+        *,
+        max_frames_per_post: int = 3,
+        tag: str | None = None,
+    ) -> dict[str, Any]:
+        return self.stego.encode_payload_frames(
+            payload=payload,
+            posts=posts,
+            max_frames_per_post=max_frames_per_post,
+            tag=tag,
+        )
+
+    def run_multi_frame_receiver(
+        self,
+        posts_or_profile_feed: list[dict[str, Any]],
+        sender_user_id: str,
+        *,
+        payload_transform: str | None = None,
+    ) -> dict[str, Any]:
+        return self.receiver.run_multi_frame(
+            posts_or_profile_feed,
+            sender_user_id,
+            payload_transform=payload_transform,
+        )
+
     def run_stego_receiver_live_sim(
         self,
         sender_user_id: str,

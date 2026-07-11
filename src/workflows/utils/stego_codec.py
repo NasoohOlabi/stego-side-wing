@@ -12,6 +12,7 @@ import hmac
 import math
 import secrets
 import zlib
+from itertools import product
 from typing import Any
 
 from pydantic import validate_call
@@ -32,6 +33,14 @@ SECURE_PAYLOAD_V1_PREFIX = "swsec1."
 SECURE_PAYLOAD_V2_PREFIX = "swsec2."
 SECURE_PAYLOAD_NONCE_BYTES = 16
 SECURE_PAYLOAD_MAC_BYTES = 16
+FRAME_MAGIC = "1010010110100101"
+FRAME_VERSION = 1
+FRAME_VERSION_BITS = 8
+FRAME_PAYLOAD_LENGTH_BITS = 64
+FRAME_CRC32_BITS = 32
+FRAME_HEADER_BITS = (
+    len(FRAME_MAGIC) + FRAME_VERSION_BITS + FRAME_PAYLOAD_LENGTH_BITS + FRAME_CRC32_BITS
+)
 
 
 @validate_call
@@ -42,6 +51,17 @@ def is_non_empty_string(value: Any) -> bool:
 @validate_call
 def to_binary_utf8(text: str) -> str:
     return "".join(format(b, "08b") for b in text.encode("utf-8"))
+
+
+@validate_call
+def from_binary_utf8(bits: str) -> str | None:
+    if len(bits) % 8 != 0:
+        return None
+    try:
+        payload = bytes(int(bits[i : i + 8], 2) for i in range(0, len(bits), 8))
+        return payload.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        return None
 
 
 def _b64_urlsafe(raw: bytes) -> str:
@@ -252,6 +272,57 @@ def get_bit_width(max_value: int) -> int:
     return 1 if max_value == 1 else math.ceil(math.log2(max_value + 1))
 
 
+def _bits_crc32(bits: str) -> int:
+    return zlib.crc32(bits.encode("ascii")) & 0xFFFFFFFF
+
+
+@validate_call
+def frame_payload_bits(payload_bits: str) -> str:
+    if set(payload_bits) - {"0", "1"}:
+        raise ValueError("Payload bits must contain only '0' and '1'")
+    length_bits = format(len(payload_bits), f"0{FRAME_PAYLOAD_LENGTH_BITS}b")
+    crc_bits = format(_bits_crc32(payload_bits), f"0{FRAME_CRC32_BITS}b")
+    version_bits = format(FRAME_VERSION, f"0{FRAME_VERSION_BITS}b")
+    return f"{FRAME_MAGIC}{version_bits}{length_bits}{crc_bits}{payload_bits}"
+
+
+@validate_call
+def parse_framed_payload_bits(bits: str) -> dict[str, Any]:
+    if len(bits) < FRAME_HEADER_BITS:
+        raise ValueError("Framed payload is shorter than the header")
+    cursor = 0
+    magic = bits[cursor : cursor + len(FRAME_MAGIC)]
+    cursor += len(FRAME_MAGIC)
+    if magic != FRAME_MAGIC:
+        raise ValueError("Invalid framed payload magic")
+    version = int(bits[cursor : cursor + FRAME_VERSION_BITS], 2)
+    cursor += FRAME_VERSION_BITS
+    if version != FRAME_VERSION:
+        raise ValueError("Unsupported framed payload version")
+    payload_bit_length = int(bits[cursor : cursor + FRAME_PAYLOAD_LENGTH_BITS], 2)
+    cursor += FRAME_PAYLOAD_LENGTH_BITS
+    expected_crc32 = int(bits[cursor : cursor + FRAME_CRC32_BITS], 2)
+    cursor += FRAME_CRC32_BITS
+    payload_end = cursor + payload_bit_length
+    if len(bits) < payload_end:
+        raise ValueError("Framed payload is truncated")
+    payload_bits = bits[cursor:payload_end]
+    actual_crc32 = _bits_crc32(payload_bits)
+    if actual_crc32 != expected_crc32:
+        raise ValueError("Framed payload checksum mismatch")
+    return {
+        "magic": magic,
+        "version": version,
+        "payload_bit_length": payload_bit_length,
+        "expected_crc32": expected_crc32,
+        "actual_crc32": actual_crc32,
+        "payload_bits": payload_bits,
+        "header_bits": bits[:FRAME_HEADER_BITS],
+        "payload_end_offset": payload_end,
+        "padding_bits": bits[payload_end:],
+    }
+
+
 @validate_call
 def encode_int(value: int, max_value: int) -> str:
     width = get_bit_width(max_value)
@@ -451,6 +522,33 @@ def _picked_comment_chain(
     return picked_chain
 
 
+def comment_selection_choice_count(post: dict[str, Any]) -> int:
+    return len(flatten_comments(post.get("comments", []))) + 1
+
+
+def comment_selection_index(post: dict[str, Any], parent_id: Any) -> int:
+    if not isinstance(parent_id, str) or not parent_id.strip():
+        return 0
+    parent_aliases = set(_comment_id_aliases(parent_id))
+    for idx, comment in enumerate(flatten_comments(post.get("comments", [])), start=1):
+        if parent_aliases & set(_comment_id_aliases(comment.get("id"))):
+            return idx
+    return 0
+
+
+def comment_bit_aliases_for_index(idx: int, post: dict[str, Any]) -> list[str]:
+    width = comment_selection_bit_width(post)
+    choice_count = comment_selection_choice_count(post)
+    if width <= 0:
+        return [""]
+    target = idx % choice_count
+    return [
+        format(value, f"0{width}b")
+        for value in range(1 << width)
+        if (value if value <= choice_count - 1 else value % choice_count) == target
+    ]
+
+
 def embed_in_comment_selection(bits: str, post: dict[str, Any]) -> dict[str, Any]:
     flattened_comments = flatten_comments(post.get("comments", []))
     n = len(flattened_comments)
@@ -627,6 +725,79 @@ def augment_post_with_selection_bits(bits: str, post: dict[str, Any]) -> dict[st
             "payload_transform_skipped": True,
         },
     }
+
+
+def selection_channel_capacity(post: dict[str, Any]) -> int:
+    """Maximum number of selection bits that can be carried by one post."""
+    nested_angles = _nested_angle_groups(post.get("angles", []))
+    comment_bits = comment_selection_bit_width(post)
+    angle_bits = angle_selection_bit_width(len(flatten_angle_groups(nested_angles)))
+    return comment_bits + angle_bits
+
+
+def frame_bits_across_posts(
+    bits: str, posts: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Split an arbitrary bitstring across a sequence of posts.
+
+    Each frame uses the existing single-post selection channel, so the caller can
+    recover the full bitstring by concatenating ``frame["bitsUsed"]`` in order.
+    """
+    if set(bits) - {"0", "1"}:
+        raise ValueError("Selection bits must contain only '0' and '1'")
+    if not posts:
+        return {
+            "originalBits": bits,
+            "originalBitsLength": len(bits),
+            "frames": [],
+            "remainingBits": bits,
+        }
+
+    remaining = bits
+    frames: list[dict[str, Any]] = []
+    for index, post in enumerate(posts):
+        if not remaining:
+            break
+        capacity = selection_channel_capacity(post)
+        taken, remaining, _ = take_bits(remaining, capacity)
+        framed = augment_post_with_selection_bits(taken, post)
+        framed["frameIndex"] = index
+        framed["postId"] = post.get("id")
+        framed["selectionChannelCapacity"] = capacity
+        frames.append(framed)
+
+    return {
+        "originalBits": bits,
+        "originalBitsLength": len(bits),
+        "frames": frames,
+        "remainingBits": remaining,
+    }
+
+
+def recover_bits_from_post_frames(frames: list[dict[str, Any]]) -> str:
+    """Reassemble a multi-post bitstring produced by ``frame_bits_across_posts``."""
+    parts: list[str] = []
+    for frame in frames:
+        compression = frame.get("compression", {})
+        if not isinstance(compression, dict):
+            continue
+        compressed = compression.get("compressed")
+        if isinstance(compressed, str):
+            parts.append(compressed)
+    return "".join(parts)
+
+
+def frame_bit_candidates_from_observations(
+    *,
+    post: dict[str, Any],
+    parent_id: Any,
+    decoded_angle_index: int,
+    n_angles: int,
+) -> list[str]:
+    comment_idx = comment_selection_index(post, parent_id)
+    comment_aliases = comment_bit_aliases_for_index(comment_idx, post)
+    angle_aliases = angle_bit_aliases_for_index(decoded_angle_index, n_angles)
+    return [f"{cb}{ab}" for cb, ab in product(comment_aliases, angle_aliases)]
 
 
 def comment_selection_bit_width(post: dict[str, Any]) -> int:
@@ -842,7 +1013,9 @@ def _recover_known_compressed_full(
         "la": la,
     }
     if include_method:
-        meta["method"] = compress_payload(payload, dictionary).get("method")
+        method = compress_payload(payload, dictionary).get("method")
+        if isinstance(method, str):
+            meta["method"] = method
     return payload, meta
 
 

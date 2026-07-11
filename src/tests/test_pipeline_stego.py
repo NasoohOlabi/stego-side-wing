@@ -183,6 +183,70 @@ def test_encode_binary_selection_bits_reports_decode_mismatch():
     assert result["validation_details"]["candidates"][0]["decoded_index"] == 1
 
 
+def test_plan_payload_frames_is_deterministic_and_skips_zero_capacity_posts():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    posts = [{"id": "p0", "comments": [], "angles": []}]
+    for idx in range(1, 40):
+        posts.append(
+            {
+                "id": f"p{idx}",
+                "comments": [
+                    {"id": f"c{idx}a", "author": "a", "body": "one", "replies": []},
+                    {"id": f"c{idx}b", "author": "b", "body": "two", "replies": []},
+                ],
+                "angles": [
+                    {"source_quote": "q1", "tangent": "t1", "category": "c1"},
+                    {"source_quote": "q2", "tangent": "t2", "category": "c2"},
+                    {"source_quote": "q3", "tangent": "t3", "category": "c3"},
+                ],
+            }
+        )
+
+    plan1 = pipeline.plan_payload_frames("hi", posts, max_frames_per_post=2)
+    plan2 = pipeline.plan_payload_frames("hi", posts, max_frames_per_post=2)
+
+    assert plan1["succeeded"] is True
+    assert plan1["frames"] == plan2["frames"]
+    assert all(frame["post_id"] != "p0" for frame in plan1["frames"])
+
+
+def test_encode_payload_frames_builds_local_artifact_feed():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    pipeline.encode_binary_selection_bits = lambda bits, post, tag=None, max_retries=0: {
+        "succeeded": True,
+        "stego_text": f"carrier-{bits}",
+        "angle_index": 0,
+        "sender_audit": {"bits": bits},
+    }
+    posts = []
+    for idx in range(40):
+        posts.append(
+            {
+                "id": f"p{idx + 1}",
+                "comments": [
+                    {"id": f"c{idx + 1}a", "author": "a", "body": "one", "replies": []},
+                    {"id": f"c{idx + 1}b", "author": "b", "body": "two", "replies": []},
+                ],
+                "angles": [
+                    {"source_quote": "q1", "tangent": "t1", "category": "c1"},
+                    {"source_quote": "q2", "tangent": "t2", "category": "c2"},
+                    {"source_quote": "q3", "tangent": "t3", "category": "c3"},
+                ],
+            }
+        )
+
+    out = pipeline.encode_payload_frames("hi", posts, max_frames_per_post=3, tag="t")
+
+    assert out["succeeded"] is True
+    assert out["frames"]
+    assert out["posts"]
+    assert any(
+        comment["author"] == "sender"
+        for post in out["posts"]
+        for comment in stego._flatten_comments(post.get("comments", []))
+    )
+
+
 def test_encode_uses_context_sharpen_after_validation_exhausted():
     pipeline = StegoPipeline.__new__(StegoPipeline)
     angle = {"idx": 2, "category": "c", "tangent": "target tangent", "source_quote": "q"}

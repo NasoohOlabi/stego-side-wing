@@ -339,3 +339,42 @@ def test_receiver_decode_payload_uses_sender_audit_index_when_semantic_decode_dr
     assert payload == secret
     assert info["decoded_angle_index"] == angle_idx
     assert info["semantic_decoded_angle_index"] == alt_idx
+
+
+def test_receiver_run_multi_frame_recovers_ordered_payload():
+    sender = StegoPipeline.__new__(StegoPipeline)
+    sender.encode_binary_selection_bits = lambda bits, post, tag=None, max_retries=0: {
+        "succeeded": True,
+        "stego_text": f"carrier-{bits}",
+        "angle_index": int(bits[-2:] or "0", 2) % 3,
+        "sender_audit": {"bits": bits},
+    }
+    posts = []
+    for idx in range(40):
+        posts.append(
+            {
+                "id": f"post{idx + 1}",
+                "comments": [
+                    {"id": f"c{idx + 1}a", "author": "a", "body": "one", "replies": []},
+                    {"id": f"c{idx + 1}b", "author": "b", "body": "two", "replies": []},
+                ],
+                "angles": [
+                    {"source_quote": "q1", "tangent": "t1", "category": "c1"},
+                    {"source_quote": "q2", "tangent": "t2", "category": "c2"},
+                    {"source_quote": "q3", "tangent": "t3", "category": "c3"},
+                ],
+            }
+        )
+    encoded = sender.encode_payload_frames("hi", posts, max_frames_per_post=4)
+
+    rp = ReceiverPipeline()
+    rp.decode.decode = lambda **kwargs: int(
+        str(kwargs["stego_text"]).split("carrier-", 1)[1][-2:] or "0",
+        2,
+    ) % 3
+
+    out = rp.run_multi_frame(encoded["posts"], "sender", payload_transform="plain")
+
+    assert out["succeeded"] is True
+    assert out["payload"] == "hi"
+    assert out["frame_count"] == len(encoded["frames"])

@@ -17,6 +17,11 @@ from workflows.utils.stego_codec import (
     recover_payload_with_compressed_full,
     strip_invisible_payload,
     unprotect_payload,
+    frame_bits_across_posts,
+    frame_payload_bits,
+    parse_framed_payload_bits,
+    recover_bits_from_post_frames,
+    selection_channel_capacity,
 )
 
 
@@ -113,6 +118,80 @@ def test_augment_post_with_selection_bits_selects_comment_and_angle_without_comp
     assert aug["commentEmbedding"]["pickedCommentChain"][-1]["id"] == "c2"
     assert aug["angleEmbedding"]["selectedAngle"]["idx"] == 1
     assert normal["compression"]["method"] != "diagnostic_binary_selection_bits"
+
+
+def test_frame_bits_across_posts_splits_and_reassembles_arbitrary_length_bits():
+    posts = []
+    for idx in range(4):
+        posts.append(
+            {
+                "id": f"p{idx + 1}",
+                "comments": [
+                    {"id": "c1", "author": "a", "body": "one", "replies": []},
+                    {"id": "c2", "author": "b", "body": "two", "replies": []},
+                ],
+                "angles": [
+                    {"source_quote": "q1", "tangent": "t1", "category": "c1"},
+                    {"source_quote": "q2", "tangent": "t2", "category": "c2"},
+                    {"source_quote": "q3", "tangent": "t3", "category": "c3"},
+                ],
+            }
+        )
+    bits = "1010110011110001"
+
+    framed = frame_bits_across_posts(bits, posts)
+
+    assert framed["originalBits"] == bits
+    assert framed["remainingBits"] == ""
+    assert len(framed["frames"]) == 4
+    assert [frame["frameIndex"] for frame in framed["frames"]] == [0, 1, 2, 3]
+    assert recover_bits_from_post_frames(framed["frames"]) == bits
+
+
+def test_frame_payload_bits_round_trip_and_padding_trim():
+    payload_bits = "1" * 257
+    framed = frame_payload_bits(payload_bits)
+
+    parsed = parse_framed_payload_bits(framed + "0000")
+
+    assert parsed["payload_bits"] == payload_bits
+    assert parsed["payload_bit_length"] == len(payload_bits)
+    assert parsed["padding_bits"] == "0000"
+
+
+def test_parse_framed_payload_bits_rejects_bad_magic_and_checksum():
+    framed = frame_payload_bits("10101010")
+    with_bad_magic = "0" + framed[1:]
+    with_bad_checksum = framed[:-1] + ("1" if framed[-1] == "0" else "0")
+
+    try:
+        parse_framed_payload_bits(with_bad_magic)
+        assert False, "expected bad magic failure"
+    except ValueError as exc:
+        assert "magic" in str(exc)
+
+    try:
+        parse_framed_payload_bits(with_bad_checksum)
+        assert False, "expected checksum failure"
+    except ValueError as exc:
+        assert "checksum" in str(exc)
+
+
+def test_selection_channel_capacity_matches_selected_embedding_width():
+    post = {
+        "id": "p-cap",
+        "comments": [
+            {"id": "c1", "author": "a", "body": "one", "replies": []},
+            {"id": "c2", "author": "b", "body": "two", "replies": []},
+        ],
+        "angles": [
+            {"source_quote": "q1", "tangent": "t1", "category": "c1"},
+            {"source_quote": "q2", "tangent": "t2", "category": "c2"},
+            {"source_quote": "q3", "tangent": "t3", "category": "c3"},
+        ],
+    }
+
+    assert selection_channel_capacity(post) == 4
 
 
 def test_recover_with_compressed_full_accepts_modulo_angle_bits():

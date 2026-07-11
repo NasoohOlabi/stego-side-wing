@@ -31,6 +31,34 @@ def test_run_full_pipeline_stops_when_data_load_empty():
     assert calls == [("data", 3)]
 
 
+def test_run_multi_frame_stego_and_receiver_delegate_to_pipelines():
+    runner = WorkflowRunner.__new__(WorkflowRunner)
+
+    class _DummyStego:
+        def encode_payload_frames(self, **kwargs):
+            return {"kind": "stego", **kwargs}
+
+    class _DummyReceiver:
+        def run_multi_frame(self, posts_or_profile_feed, sender_user_id, payload_transform=None):
+            return {
+                "kind": "receiver",
+                "posts": posts_or_profile_feed,
+                "sender_user_id": sender_user_id,
+                "payload_transform": payload_transform,
+            }
+
+    runner.stego = _DummyStego()
+    runner.receiver = _DummyReceiver()
+
+    stego_out = runner.run_multi_frame_stego("payload", [{"id": "p1"}], max_frames_per_post=2)
+    recv_out = runner.run_multi_frame_receiver([{"id": "p1"}], "sender", payload_transform="plain")
+
+    assert stego_out["kind"] == "stego"
+    assert stego_out["max_frames_per_post"] == 2
+    assert recv_out["kind"] == "receiver"
+    assert recv_out["sender_user_id"] == "sender"
+
+
 def test_run_full_pipeline_stops_when_research_empty():
     runner = WorkflowRunner.__new__(WorkflowRunner)
     calls = []

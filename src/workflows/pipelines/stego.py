@@ -48,6 +48,7 @@ from workflows.utils.stego_codec import (
 )
 from workflows.utils.stego_codec import (
     compress_payload as codec_compress_payload,
+    comment_selection_index,
 )
 from workflows.utils.stego_codec import (
     embed_in_angle_selection as codec_embed_in_angle_selection,
@@ -56,8 +57,11 @@ from workflows.utils.stego_codec import (
     embed_in_comment_selection as codec_embed_in_comment_selection,
 )
 from workflows.utils.stego_codec import (
+    frame_payload_bits,
+    from_binary_utf8,
     flatten_comments,
     protect_payload,
+    selection_channel_capacity,
 )
 from workflows.utils.workflow_llm_prompts import stego_encode_prompts_for_style
 
@@ -464,6 +468,54 @@ def _sender_audit_from_post(
     }
 
 
+def _clone_post(post: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(post))
+
+
+def _append_comment_to_tree(
+    comments: list[dict[str, Any]],
+    comment: dict[str, Any],
+    parent_id: str | None,
+) -> list[dict[str, Any]]:
+    updated, _ = _append_comment_to_tree_with_flag(comments, comment, parent_id)
+    return updated
+
+
+def _append_comment_to_tree_with_flag(
+    comments: list[dict[str, Any]],
+    comment: dict[str, Any],
+    parent_id: str | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    if not parent_id:
+        return [*comments, comment], True
+    out: list[dict[str, Any]] = []
+    inserted = False
+    for raw in comments:
+        if not isinstance(raw, dict):
+            continue
+        node = dict(raw)
+        replies = list(node.get("replies", []) or [])
+        current_id = str(node.get("id", ""))
+        if current_id == parent_id or current_id.split("_", 1)[-1] == parent_id:
+            node["replies"] = [*replies, comment]
+            inserted = True
+        else:
+            node["replies"], child_inserted = _append_comment_to_tree_with_flag(
+                replies, comment, parent_id
+            )
+            inserted = inserted or child_inserted
+        out.append(node)
+    return (out, True) if inserted else (list(comments), False)
+
+
+def _planned_parent_id(post_augmentation: dict[str, Any]) -> str | None:
+    chain = post_augmentation.get("commentEmbedding", {}).get("pickedCommentChain", [])
+    if not isinstance(chain, list) or not chain:
+        return None
+    parent_id = chain[-1].get("id")
+    return str(parent_id) if isinstance(parent_id, str) and parent_id else None
+
+
 def _log_encode_timing_complete(
     *,
     encode_run_id: str,
@@ -572,6 +624,188 @@ class StegoPipeline:
 
     def _compress_payload(self, payload: str, dictionary: list[str]) -> dict[str, Any]:
         return codec_compress_payload(payload, dictionary)
+
+    def _prepare_multi_frame_payload_bits(self, payload: str) -> dict[str, Any]:
+        payload_transform = get_workflow_payload_transform()
+        protected_payload = protect_payload(
+            payload,
+            transform=payload_transform,
+            secret=get_workflow_encoding_secret(),
+        )
+        compressed = self._compress_payload(protected_payload, [])
+        compressed_bits = compressed.get("compressed", "")
+        if not isinstance(compressed_bits, str) or set(compressed_bits) - {"0", "1"}:
+            raise RuntimeError("Prepared multi-frame payload bits are invalid")
+        return {
+            "payload_transform": payload_transform,
+            "protected_payload": protected_payload,
+            "compression": compressed,
+            "payload_bits": compressed_bits,
+            "framed_bits": frame_payload_bits(compressed_bits),
+        }
+
+    def _frame_plan_for_post(
+        self,
+        *,
+        post: dict[str, Any],
+        post_index: int,
+        framed_bits: str,
+        start_offset: int,
+        max_frames_per_post: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        capacity = selection_channel_capacity(post)
+        if capacity <= 0 or max_frames_per_post <= 0:
+            return [], start_offset
+        frames: list[dict[str, Any]] = []
+        cursor = start_offset
+        for frame_offset in range(max_frames_per_post):
+            if cursor >= len(framed_bits):
+                break
+            frame_bits = framed_bits[cursor : cursor + capacity]
+            augmentation = codec_augment_post_with_selection_bits(frame_bits, post)
+            parent_id = _planned_parent_id(augmentation)
+            comment_idx = comment_selection_index(post, parent_id)
+            frame_end = min(cursor + capacity, len(framed_bits))
+            frames.append(
+                {
+                    "post_index": post_index,
+                    "frame_index": len(frames),
+                    "frame_bits": frame_bits,
+                    "bit_start": cursor,
+                    "bit_end": frame_end,
+                    "capacity": capacity,
+                    "padding_bits": max(0, capacity - (frame_end - cursor)),
+                    "post_id": post.get("id"),
+                    "parent_id": parent_id,
+                    "comment_selection_index": comment_idx,
+                    "selected_angle_index": augmentation.get("angleEmbedding", {})
+                    .get("selectedAngle", {})
+                    .get("idx"),
+                    "selection_bits": {
+                        "comment_bits": augmentation.get("commentBits", ""),
+                        "angle_bits": augmentation.get("angleBits", ""),
+                    },
+                    "embedding_plan": augmentation,
+                }
+            )
+            cursor += capacity
+        return frames, cursor
+
+    def plan_payload_frames(
+        self,
+        payload: str,
+        posts: list[dict[str, Any]],
+        max_frames_per_post: int = 3,
+    ) -> dict[str, Any]:
+        prepared = self._prepare_multi_frame_payload_bits(payload)
+        framed_bits = prepared["framed_bits"]
+        frames: list[dict[str, Any]] = []
+        posts_used = 0
+        cursor = 0
+        for post_index, post in enumerate(posts):
+            post_frames, cursor = self._frame_plan_for_post(
+                post=post,
+                post_index=post_index,
+                framed_bits=framed_bits,
+                start_offset=cursor,
+                max_frames_per_post=max_frames_per_post,
+            )
+            if post_frames:
+                posts_used += 1
+                frames.extend(post_frames)
+            if cursor >= len(framed_bits):
+                break
+        remaining_bits = framed_bits[cursor:]
+        return {
+            "succeeded": not remaining_bits,
+            "payload": payload,
+            "message_id": stable_hash(prepared["protected_payload"]),
+            "frame_count": len(frames),
+            "posts_used": posts_used,
+            "frames": frames,
+            "recovery_meta": {
+                "payload_transform": prepared["payload_transform"],
+                "ordering_source": "planned_post_order_then_frame_order",
+                "framed_bit_length": len(framed_bits),
+                "payload_bit_length": len(prepared["payload_bits"]),
+                "payload_bits_crc32": stable_hash(prepared["payload_bits"]),
+            },
+            "prepared_payload": prepared,
+            "remaining_bits": remaining_bits,
+            "error": None
+            if not remaining_bits
+            else "Insufficient multi-frame capacity for framed payload bitstream",
+        }
+
+    def encode_payload_frames(
+        self,
+        payload: str,
+        posts: list[dict[str, Any]],
+        max_frames_per_post: int = 3,
+        tag: str | None = None,
+    ) -> dict[str, Any]:
+        plan = self.plan_payload_frames(payload, posts, max_frames_per_post=max_frames_per_post)
+        if not plan.get("succeeded"):
+            return plan
+        posts_out = [_clone_post(post) for post in posts]
+        encoded_frames: list[dict[str, Any]] = []
+        created_utc_base = int(time.time())
+        for global_frame_index, frame in enumerate(plan["frames"]):
+            post = posts[frame["post_index"]]
+            result = self.encode_binary_selection_bits(
+                bits=frame["frame_bits"],
+                post=post,
+                tag=tag,
+                max_retries=0,
+            )
+            frame_result = dict(frame)
+            frame_result["succeeded"] = bool(result.get("succeeded"))
+            frame_result["error"] = result.get("error")
+            if not result.get("succeeded"):
+                encoded_frames.append(frame_result)
+                return {
+                    **plan,
+                    "succeeded": False,
+                    "frames": encoded_frames,
+                    "failed_frame_index": global_frame_index,
+                    "error": f"Frame generation failed at index {global_frame_index}",
+                }
+            comment_id = f"mf_{global_frame_index + 1}"
+            created_utc = created_utc_base + global_frame_index
+            comment = {
+                "id": comment_id,
+                "author": "sender",
+                "body": result.get("stego_text", ""),
+                "parent_id": frame["parent_id"],
+                "created_utc": created_utc,
+                "replies": [],
+            }
+            posts_out[frame["post_index"]]["comments"] = _append_comment_to_tree(
+                list(posts_out[frame["post_index"]].get("comments", []) or []),
+                comment,
+                frame["parent_id"],
+            )
+            frame_result.update(
+                {
+                    "comment_id": comment_id,
+                    "created_utc": created_utc,
+                    "stego_text": result.get("stego_text", ""),
+                    "sender_audit": result.get("sender_audit"),
+                    "selected_angle_index": result.get("angle_index"),
+                }
+            )
+            encoded_frames.append(frame_result)
+        return {
+            **plan,
+            "succeeded": True,
+            "frames": encoded_frames,
+            "posts": posts_out,
+            "sender_user_id": "sender",
+            "payload_transform": plan["prepared_payload"]["payload_transform"],
+            "compressed_payload": from_binary_utf8(plan["prepared_payload"]["payload_bits"][1:])
+            if str(plan["prepared_payload"]["payload_bits"]).startswith("0")
+            else None,
+        }
 
     def _embed_in_comment_selection(self, bits: str, post: dict[str, Any]) -> dict[str, Any]:
         return codec_embed_in_comment_selection(bits, post)

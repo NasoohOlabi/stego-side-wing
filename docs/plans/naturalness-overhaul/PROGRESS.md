@@ -105,6 +105,23 @@ preparing a corpus under the isolated dataset root; do not overwrite the reprodu
 
 ## Plan 3 — method-comparison-metrics-v2
 
+### 2026-07-18 — Viewer M1/M2 headline DONE, validated
+
+- Promoted reader-facing M1 human-likeness and M2 synthetic-detection metrics above the
+  distributional proxy cards in the ZLG comparison dashboard.
+- M1 reads either the summary-ingested result or standalone cached scorer output and displays
+  the post-clustered score, bootstrap CI, sign-test p-value, independent-post count, and judge
+  prompt/model provenance. Missing live judgments are labeled `Not run`.
+- M2 is recomputed from cached result rows with posts as the independent unit; the existing
+  row-level McNemar result remains explicitly labeled as row-level.
+
+Validation: Biome passed for the edited page and `git diff --check` passed. Repo-wide TypeScript
+checking remains blocked by pre-existing errors in stego-process/admin files and the existing
+Recharts formatter types; no new error was reported for the edited page.
+
+**Next:** add offline M3 thread-relevance and M4 writing-quality judge scaffolding with cached
+results, prompt hashes, model provenance, and post-clustered scoring. Do not run live judges.
+
 ### 2026-07-18 — Phase 1 offline M1 scoring DONE, validated
 
 - Added deterministic M1 scoring with ties worth 0.5, post-clustered win rate, bootstrap CI,

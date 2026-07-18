@@ -105,6 +105,23 @@ preparing a corpus under the isolated dataset root; do not overwrite the reprodu
 
 ## Plan 3 — method-comparison-metrics-v2
 
+### 2026-07-18 — Viewer M3/M4/M5 two-axis panel DONE, validated
+
+- Added a dedicated dashboard panel that separates M3 thread relevance from M4 judged writing
+  quality and M5 deterministic lexical quality.
+- M3/M4 read summary-ingested or standalone cached scorer output and report method means,
+  post-clustered differences, bootstrap confidence intervals, sign-test p-values, independent
+  post counts, and prompt/model provenance. Missing judgments are explicitly labeled `Not run`.
+- No live judge calls or output regeneration were performed.
+
+Validation: Biome passed for the edited page and `git diff --check` passed. Repo-wide TypeScript
+checking remains blocked by pre-existing stego-process/admin and Recharts type errors; no new
+error was reported for the edited page.
+
+**Next:** complete Phase 2 M6 by relabeling perplexity/KL/JSD throughout the viewer as
+distributional topical-fit/fluency proxies, with explicit caveats against treating them as
+reader-facing naturalness.
+
 ### 2026-07-18 — Phase 2 offline M3/M4 scaffolding DONE, validated
 
 - Added one cached `LLMAdapter` runner for M3 thread relevance and M4 writing quality, with

@@ -21,6 +21,7 @@ from services.zlg_comparison_service import stegotext_has_prompt_leakage  # noqa
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 LEXICAL_QUALITY_INDEX_VERSION = "lexical_quality_v1"
+TANGENT_DB_QUALITY_SUMMARY_VERSION = "tangent_db_quality_summary_v1"
 
 
 def _read_json(path: Path) -> Any:
@@ -115,6 +116,13 @@ def _metric_block(metrics: dict[str, Any]) -> dict[str, Any]:
         "jsd_global_corpus": secondary.get("jsd_stego_vs_global_corpus"),
         "metric_warnings": metrics.get("warnings") or [],
     }
+
+
+def _extract_tangent_db_report(payload: dict[str, Any]) -> dict[str, Any] | None:
+    for container in (payload, payload.get("post"), payload.get("sender_audit")):
+        if isinstance(container, dict) and isinstance(container.get("tangent_db_report"), dict):
+            return container["tangent_db_report"]
+    return None
 
 
 def _zlg_capacity_fields(row: dict[str, Any]) -> dict[str, int]:
@@ -353,6 +361,141 @@ def _independence_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _numeric_summary(values: list[float]) -> dict[str, float | int] | None:
+    finite = [value for value in values if math.isfinite(value)]
+    if not finite:
+        return None
+    return {
+        "n": len(finite),
+        "mean": statistics.fmean(finite),
+        "median": statistics.median(finite),
+        "min": min(finite),
+        "max": max(finite),
+    }
+
+
+def _report_metrics(report: dict[str, Any]) -> dict[str, Any]:
+    kept = max(0, int(report.get("kept_count") or 0))
+    source_mix = report.get("source_mix_kept") or {}
+    relevance = report.get("relevance") or {}
+    distinctness = report.get("distinctness") or {}
+    dropped = report.get("dropped") or {}
+    config = report.get("config") or {}
+    scores = [float(v) for v in relevance.get("scores_kept", []) if isinstance(v, (int, float))]
+    relevance_mean = statistics.fmean(scores) if scores else relevance.get("mean")
+    near_duplicate = max(0, int(dropped.get("near_duplicate") or 0))
+    admitted_before_dedup = kept + near_duplicate + max(0, int(dropped.get("capped") or 0))
+    min_size = max(0, int(config.get("min_size") or 0))
+    relaxations = report.get("relaxations") if isinstance(report.get("relaxations"), list) else []
+    return {
+        "kept_count": kept,
+        "relevance_mean": relevance_mean,
+        "relevance_median": relevance.get("median"),
+        "mean_pairwise_jaccard": distinctness.get("mean_pairwise_jaccard"),
+        "source_counts": {
+            source: max(0, int(source_mix.get(source) or 0))
+            for source in ("post", "comments", "search_results")
+        },
+        "near_duplicate_drops": near_duplicate,
+        "dedup_drop_rate": near_duplicate / admitted_before_dedup if admitted_before_dedup else 0.0,
+        "relaxation_used": bool(relaxations),
+        "relaxation_steps": len(relaxations),
+        "capacity_floor": min_size,
+        "capacity_floor_met": min_size == 0 or kept >= min_size,
+        "config_hash": str(report.get("config_hash") or ""),
+    }
+
+
+def _mean_post_metric(posts: list[dict[str, Any]], key: str) -> dict[str, float | int] | None:
+    values = [float(post[key]) for post in posts if isinstance(post.get(key), (int, float))]
+    return _numeric_summary(values)
+
+
+def _tangent_db_quality_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize reports with post IDs, rather than repeated payload rows, as units."""
+    reports_by_post: dict[str, list[dict[str, Any]]] = {}
+    report_rows = 0
+    for row in rows:
+        report = row.get("tangent_db_report")
+        if row.get("method") != "our_method" or not isinstance(report, dict):
+            continue
+        report_rows += 1
+        reports_by_post.setdefault(str(row.get("post_id")), []).append(_report_metrics(report))
+    posts: list[dict[str, Any]] = []
+    for post_id, reports in sorted(reports_by_post.items()):
+        reports.sort(key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
+        post: dict[str, Any] = {"post_id": post_id, "report_rows": len(reports)}
+        for key in (
+            "kept_count",
+            "relevance_mean",
+            "relevance_median",
+            "mean_pairwise_jaccard",
+            "near_duplicate_drops",
+            "dedup_drop_rate",
+            "relaxation_steps",
+        ):
+            values = [float(r[key]) for r in reports if isinstance(r.get(key), (int, float))]
+            post[key] = statistics.fmean(values) if values else None
+        source_counts = {
+            source: statistics.fmean(float(r["source_counts"][source]) for r in reports)
+            for source in ("post", "comments", "search_results")
+        }
+        total = sum(source_counts.values())
+        post["source_counts"] = source_counts
+        post["source_shares"] = {
+            source: count / total if total else 0.0 for source, count in source_counts.items()
+        }
+        post["relaxation_used"] = any(bool(r["relaxation_used"]) for r in reports)
+        post["capacity_floor_met"] = all(bool(r["capacity_floor_met"]) for r in reports)
+        posts.append(post)
+    source_share = {
+        source: _mean_post_metric(
+            [{"value": post["source_shares"][source]} for post in posts], "value"
+        )
+        for source in ("post", "comments", "search_results")
+    }
+    return {
+        "version": TANGENT_DB_QUALITY_SUMMARY_VERSION,
+        "inference_unit": "unique_post_id",
+        "report_rows": report_rows,
+        "unique_posts": len(posts),
+        "relevance": {
+            "kept_score_mean_by_post": _mean_post_metric(posts, "relevance_mean"),
+            "kept_score_median_by_post": _mean_post_metric(posts, "relevance_median"),
+        },
+        "distinctness": {
+            "mean_pairwise_jaccard_by_post": _mean_post_metric(
+                posts, "mean_pairwise_jaccard"
+            ),
+            "lower_is_more_distinct": True,
+        },
+        "source_composition": {
+            "mean_share_by_post": source_share,
+            "search_share_by_post": source_share["search_results"],
+        },
+        "deduplication": {
+            "near_duplicate_drops_by_post": _mean_post_metric(posts, "near_duplicate_drops"),
+            "drop_rate_by_post": _mean_post_metric(posts, "dedup_drop_rate"),
+            "posts_with_dedup_drops": sum((post.get("near_duplicate_drops") or 0) > 0 for post in posts),
+        },
+        "capacity_floor_relaxation": {
+            "posts_relaxed": sum(bool(post["relaxation_used"]) for post in posts),
+            "relaxation_steps_by_post": _mean_post_metric(posts, "relaxation_steps"),
+            "posts_floor_unmet": sum(not bool(post["capacity_floor_met"]) for post in posts),
+        },
+        "kept_count_by_post": _mean_post_metric(posts, "kept_count"),
+        "config_hashes": sorted(
+            {
+                str(report.get("config_hash"))
+                for reports in reports_by_post.values()
+                for report in reports
+                if report.get("config_hash")
+            }
+        ),
+        "posts": posts,
+    }
+
+
 def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
     zlg_run_dir = Path(args.zlg_run_dir).resolve()
     zlg_rows = _load_jsonl(zlg_run_dir / "results.jsonl")
@@ -383,6 +526,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         if not isinstance(our_top, dict):
             continue
         our_text = str(our_top.get("stegoText") or "")
+        tangent_db_report = _extract_tangent_db_report(our_top)
         embedding = our_top.get("embedding") if isinstance(our_top.get("embedding"), dict) else {}
         comment_embedding = (
             embedding.get("commentEmbedding")
@@ -432,6 +576,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 "recovery_source": "audit_assisted_compressed_full",
                 "source_output_file": str(source_file),
+                "tangent_db_report": tangent_db_report,
                 **our_quality,
                 **_metric_block(our_metrics),
             }
@@ -500,6 +645,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 "length_sanity_5_to_120_words": 0.1,
             },
         },
+        "tangent_db_quality": _tangent_db_quality_summary(rows),
         "rows_jsonl": str(rows_path),
         "capacity_fields_note": (
             "our_method capacity fields (embedded_bits/payload_bits_encoded/total_embedded_bits/"
@@ -548,6 +694,7 @@ def main() -> int:
         summary["paired_statistics"] = _clustered_paired_stats(rows)
         summary["independence_diagnostics"] = _independence_diagnostics(rows)
         summary["diversity_guard"] = diversity
+        summary["tangent_db_quality"] = _tangent_db_quality_summary(rows)
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0

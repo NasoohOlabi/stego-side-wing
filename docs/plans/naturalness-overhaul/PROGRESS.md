@@ -105,6 +105,27 @@ preparing a corpus under the isolated dataset root; do not overwrite the reprodu
 
 ## Plan 3 — method-comparison-metrics-v2
 
+### 2026-07-18 — Phase 3 M7 offline summary contract DONE, validated
+
+- Extended `tangent_db_report.relevance` with the exact kept-score distribution and mean; its
+  existing min/median/max/threshold fields remain available.
+- Added deterministic `tangent_db_quality_summary_v1` computation to comparison summaries. It
+  reports kept relevance, pairwise-Jaccard distinctness, post/comments/search composition and
+  search share, near-duplicate removal, kept capacity, and capacity-floor relaxation outcomes.
+- Repeated payload rows are collapsed by `post_id`; the contract explicitly records
+  `unique_post_id` as its inference unit, stable post ordering, and sorted config hashes.
+- New builds retain each our-method row's source `tangent_db_report`; statistics-only refreshes
+  recompute M7 without a live model or corpus run. Missing reports yield an explicit zero-post
+  summary rather than invented measurements.
+
+Validation: targeted M7/tangent-builder tests passed (19); Ruff passed. Full pytest and full
+Pyright passed. No live legacy-vs-v1 comparison was run.
+
+**Next:** expose the completed `tangent_db_quality_summary_v1` contract in the viewer as a
+legacy/v1-ready toggle/panel, with unavailable sides labeled `Not run`. Do not run the live
+legacy-vs-v1 corpus comparison yet. After the viewer contract, prepare the isolated corpus and
+perform the explicit live comparison only when authorized.
+
 ### 2026-07-18 — Viewer Phase 2 M6 relabeling DONE, validated
 
 - Relabeled perplexity as a model-predictability/fluency proxy and KL/JSD as

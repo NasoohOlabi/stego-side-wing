@@ -137,3 +137,66 @@ def test_zlg_capacity_fields_preserve_explicit_accounting() -> None:
     assert fields["payload_bits_encoded"] == 64
     assert fields["protocol_overhead_bits"] == 7
     assert fields["total_embedded_bits"] == 71
+
+
+def _tangent_report(*, search: int, relaxed: bool = False) -> dict:
+    return {
+        "kept_count": 4,
+        "dropped": {"near_duplicate": 1, "capped": 0},
+        "relevance": {
+            "mean": 0.5,
+            "median": 0.5,
+            "scores_kept": [0.2, 0.4, 0.6, 0.8],
+        },
+        "distinctness": {"mean_pairwise_jaccard": 0.25},
+        "source_mix_kept": {"post": 1, "comments": 3 - search, "search_results": search},
+        "config": {"min_size": 4},
+        "config_hash": "cfg-b" if relaxed else "cfg-a",
+        "relaxations": [{"max_similarity": 0.75, "kept_count": 4}] if relaxed else [],
+    }
+
+
+def test_tangent_db_quality_summary_clusters_repeated_rows_by_post() -> None:
+    module = _load_module()
+    rows = [
+        {
+            **_row(0, "p1", "our_method", 0.4),
+            "tangent_db_report": _tangent_report(search=0),
+        },
+        {
+            **_row(1, "p1", "our_method", 0.5),
+            "tangent_db_report": _tangent_report(search=0),
+        },
+        {
+            **_row(2, "p2", "our_method", 0.6),
+            "tangent_db_report": _tangent_report(search=2, relaxed=True),
+        },
+    ]
+
+    summary = module._tangent_db_quality_summary(rows)
+
+    assert summary["version"] == "tangent_db_quality_summary_v1"
+    assert summary["report_rows"] == 3
+    assert summary["unique_posts"] == 2
+    assert summary["inference_unit"] == "unique_post_id"
+    assert summary["relevance"]["kept_score_mean_by_post"]["mean"] == 0.5
+    assert summary["source_composition"]["search_share_by_post"]["mean"] == 0.25
+    assert summary["deduplication"]["posts_with_dedup_drops"] == 2
+    assert summary["capacity_floor_relaxation"]["posts_relaxed"] == 1
+    assert summary["config_hashes"] == ["cfg-a", "cfg-b"]
+
+
+def test_tangent_db_quality_summary_is_deterministic_and_handles_missing_reports() -> None:
+    module = _load_module()
+    rows = [
+        {**_row(0, "p2", "our_method", 0.4), "tangent_db_report": _tangent_report(search=1)},
+        _row(1, "p1", "our_method", 0.5),
+        {**_row(2, "p2", "zlg", 0.6), "tangent_db_report": _tangent_report(search=3)},
+    ]
+
+    forward = module._tangent_db_quality_summary(rows)
+    reverse = module._tangent_db_quality_summary(list(reversed(rows)))
+
+    assert forward == reverse
+    assert forward["unique_posts"] == 1
+    assert forward["posts"][0]["post_id"] == "p2"

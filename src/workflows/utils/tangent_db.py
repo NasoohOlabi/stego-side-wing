@@ -117,7 +117,7 @@ class TangentDbReport(BaseModel):
     input_candidate_count: int
     kept_count: int
     dropped: dict[str, int]
-    relevance: dict[str, float]
+    relevance: dict[str, Any]
     distinctness: dict[str, float]
     source_mix_kept: dict[str, int]
     config: dict[str, Any]
@@ -230,15 +230,27 @@ def _apply_capacity(
     return kept, {"near_duplicate": near_dup, "capped": capped}, relaxations
 
 
-def _relevance_stats(admitted: list[ScoredCandidate], threshold: float) -> dict[str, float]:
-    scores = sorted(s.relevance for s in admitted)
+def _relevance_stats(kept: list[ScoredCandidate], threshold: float) -> dict[str, Any]:
+    """Persist the exact kept-score distribution so later summaries need no raw angles."""
+    scores = sorted(round(s.relevance, 6) for s in kept)
     if not scores:
-        return {"min": 0.0, "median": 0.0, "max": 0.0, "threshold": round(threshold, 6)}
+        return {
+            "min": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "max": 0.0,
+            "threshold": round(threshold, 6),
+            "scores_kept": [],
+        }
+    middle = len(scores) // 2
+    median = scores[middle] if len(scores) % 2 else (scores[middle - 1] + scores[middle]) / 2
     return {
         "min": round(scores[0], 6),
-        "median": round(scores[len(scores) // 2], 6),
+        "mean": round(sum(scores) / len(scores), 6),
+        "median": round(median, 6),
         "max": round(scores[-1], 6),
         "threshold": round(threshold, 6),
+        "scores_kept": scores,
     }
 
 
@@ -274,7 +286,7 @@ def build_tangent_db(
         input_candidate_count=len(candidates),
         kept_count=len(kept),
         dropped={"low_thread_relevance": low_relevance, **drop_counts},
-        relevance=_relevance_stats(admitted, cfg.min_relevance),
+        relevance=_relevance_stats(kept, cfg.min_relevance),
         distinctness={
             "mean_pairwise_jaccard": _mean_pairwise_jaccard(kept),
             "max_similarity": cfg.max_similarity,

@@ -135,4 +135,11 @@ def test_empty_candidates_yield_empty_db() -> None:
     result = build_tangent_db([], ctx, _default_cfg())
     assert result.angles == []
     assert result.report.kept_count == 0
-    assert result.report.relevance == {"min": 0.0, "median": 0.0, "max": 0.0, "threshold": 0.12}
+    assert result.report.relevance == {
+        "min": 0.0,
+        "mean": 0.0,
+        "median": 0.0,
+        "max": 0.0,
+        "threshold": 0.12,
+        "scores_kept": [],
+    }

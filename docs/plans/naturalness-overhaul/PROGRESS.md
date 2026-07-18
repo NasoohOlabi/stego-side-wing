@@ -79,6 +79,27 @@ pipeline (viewer scan roots in `recent_updates_service.py`, the ad-hoc `/posts` 
 
 ## Plan 2 — tangent-db-revamp
 
+### 2026-07-18 — Luna M2 suspiciousness pass DONE, validated
+
+- Used only the ChatGPT-backed Codex CLI subscription (`gpt-5.6-sol`, Luna worker role) for a
+  fresh lane-blind three-way suspiciousness pass over the same 28 cached legacy/v1 comments.
+  Each task mixed one generated comment with two deterministic cached human decoys; Luna never
+  received the answer key or lane labels. No OpenRouter, search, LM Studio, or external provider
+  was used.
+- Strict validation confirmed all 28 expected task IDs exactly once and in order, with valid
+  zero-based selections. Persisted ignored blind/private task inputs, frozen prompt, output
+  schema, raw Luna output, judge-contract JSONL, root/per-lane scored results, post summaries,
+  hashes, and Codex/model provenance.
+- Luna identified the generated candidate in 14/14 legacy and 14/14 v1 tasks: both descriptive
+  detection rates are `1.0`, so v1-minus-legacy is `0.0`. This is a severe shared
+  synthetic-style signal, not a lane win. There is only one independent post; M4 also remains
+  uninformative because every writing-quality score hit the 5/5 ceiling.
+
+**Next:** attribute the shared M2 failure against comment-level style features and the cached
+human decoys, then finalize the legacy-v1 report. Preserve the one-post limitation and M4
+ceiling-effect caveat; do not claim cross-post significance or a naturalness improvement from
+the zero lane difference. Do not use OpenRouter, search, LM Studio, or external providers.
+
 ### 2026-07-18 — Luna M4 writing-quality pass DONE, validated
 
 - Used only the ChatGPT-backed Codex CLI subscription (`gpt-5.6-sol`, Luna worker role) for a

@@ -19,6 +19,8 @@ Keep this file current. Newest status at the top of each phase section. Dates ar
 
 - Hardened malformed historical JSONL handling and made live preparation require `--allow-live`.
 - Reused all **46** eligible existing real-source angle artifacts without provider calls.
+- Ran the clean-tree preflight twice on the 46-post subset: post hash, deterministic payload
+  assignments, and angle hashes reproduced exactly (`post_ids_sha256` starts `e44bb13f`).
 - The remaining **54** posts require authorized search and angle-generation calls before the
   100-post manifest can be frozen.
 

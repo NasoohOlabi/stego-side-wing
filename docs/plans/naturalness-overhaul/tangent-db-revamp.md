@@ -1,6 +1,6 @@
 # Plan: Tangent-DB Revamp — Relevant *and* Distinct Tangents
 
-Status: Phase 0 complete (report-only shadow); Phase 1 not activated
+Status: Phase 1 activated offline; live isolated-corpus validation not run
 Owner: (you)
 Related plans: [[prepared-posts-separate-persistence]], [[method-comparison-metrics-v2]]
 

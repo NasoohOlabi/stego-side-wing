@@ -8,7 +8,7 @@ Keep this file current. Newest status at the top of each plan section. Dates are
 |---|---|---|---|
 | 1. prepared-posts-separate-persistence | Phase 0 (rebasing core) | ✅ done + validated | No (default-unset = identical) |
 | 1. manifest + runner flag | Phase 0 tooling | ✅ done + validated | Opt-in only |
-| 2. tangent-db-revamp | Phase 0 (report-only shadow) | ✅ done + validated | No (legacy angles still emitted) |
+| 2. tangent-db-revamp | Phase 1 (v1 selection activated) | ✅ offline validated | Opt-in v1 only |
 | 3. method-comparison-metrics-v2 | Phase 1 offline (M5) | ✅ done + validated | Adds deterministic quality scoring |
 
 Operating directive from user: **implement one plan at a time, be careful about breaking
@@ -78,6 +78,24 @@ pipeline (viewer scan roots in `recent_updates_service.py`, the ad-hoc `/posts` 
 ---
 
 ## Plan 2 — tangent-db-revamp
+
+### 2026-07-18 — Phase 1 v1 emitted-angle selection DONE, offline validated
+
+- `WORKFLOW_TANGENT_DB_BUILDER=v1` now emits the deterministic builder's selected angles on
+  extractive, analyzed, and fallback generation paths instead of running report-only shadow
+  selection. Persisted `angles`, `options_count`, and `tangent_db_report` describe the same DB.
+- The unset/default `legacy` path is unchanged and still emits no tangent report.
+- Re-running angle generation from the same post/config produces identical ordering and config
+  hash for sender/receiver reconstruction.
+
+Validation: targeted tangent/gen-angles/codec/receiver/naturalness/stego tests passed (90).
+Full pytest, Pyright, Ruff, and `git diff --check` passed. No provider or corpus write ran.
+
+**Remaining live-run steps/blocker:** populate the initialized isolated legacy/v1 lanes under
+`datasets/prep_runs/naturalness_legacy_v1_20260718`; generate one distinct our-method comment
+per payload; run M1/M3/M4/M2 judges; build both summaries; run drift attribution; then run
+`prepare_tangent_db_comparison.py finalize`. This needs explicit authorization, credentials,
+and chargeable generation/search/judge calls. Do not overwrite the reproducible corpus.
 
 ### 2026-07-18 — Phase 0 DONE (report-only shadow), validated
 

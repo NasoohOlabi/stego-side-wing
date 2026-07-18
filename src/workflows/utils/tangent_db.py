@@ -2,8 +2,8 @@
 
 Pure functions only (input -> output; no I/O, no wall-clock, no RNG). The receiver must be
 able to reproduce the identical DB from the persisted post alone, so every ordering decision
-here is deterministic. Phase 0 runs this builder only as a shadow report behind
-``WORKFLOW_TANGENT_DB_BUILDER=v1``; emitted legacy angles remain unchanged.
+here is deterministic. ``WORKFLOW_TANGENT_DB_BUILDER=v1`` emits the selected angles;
+``legacy`` preserves the previous angle path unchanged.
 
 Pipeline: Stage A (relevance anchor) -> Stage B (Jaccard distinctness) -> Stage C (capacity
 reconciliation with an optional similarity-relaxing floor). See

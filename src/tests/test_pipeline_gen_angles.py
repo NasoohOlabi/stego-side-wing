@@ -247,7 +247,9 @@ def test_preview_post_extractive_zero_kld_mode_skips_backend(
     assert out["post"]["options_count"] == len(out["post"]["angles"])
 
 
-def test_tangent_db_v1_is_shadow_only_and_persists_report(monkeypatch, clear_workflow_capacity_env):
+def test_tangent_db_v1_emits_selected_angles_and_persists_report(
+    monkeypatch, clear_workflow_capacity_env
+):
     monkeypatch.setenv("WORKFLOW_ANGLES_GENERATION_MODE", "extractive_zero_kld")
     monkeypatch.setenv("WORKFLOW_TANGENT_DB_BUILDER", "v1")
     pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
@@ -263,12 +265,38 @@ def test_tangent_db_v1_is_shadow_only_and_persists_report(monkeypatch, clear_wor
 
     out = pipeline.preview_post(post)
 
-    assert len(out["post"]["angles"]) == 2
+    assert len(out["post"]["angles"]) == 1
+    assert "Rescue teams" in out["post"]["angles"][0]["tangent"]
     tangent_report = out["post"]["tangent_db_report"]
     assert tangent_report == out["report"]["tangent_db_report"]
     assert tangent_report["input_candidate_count"] == 2
     assert tangent_report["kept_count"] == 1
     assert tangent_report["dropped"]["low_thread_relevance"] == 1
+    assert out["report"]["angles"] == out["post"]["angles"]
+
+
+def test_tangent_db_v1_selection_is_sender_receiver_reproducible(
+    monkeypatch, clear_workflow_capacity_env
+):
+    monkeypatch.setenv("WORKFLOW_ANGLES_GENERATION_MODE", "extractive_zero_kld")
+    monkeypatch.setenv("WORKFLOW_TANGENT_DB_BUILDER", "v1")
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+    pipeline.backend = SimpleNamespace()
+    post = {
+        "id": "p-parity",
+        "title": "Flash flood rescue",
+        "selftext": "Rescue teams searched the flooded river through the night.",
+        "comments": [{"body": "Campers waited while rescue crews searched downstream."}],
+        "search_results": ["Coffee retailers reported lower quarterly margins."],
+    }
+
+    sender = pipeline.preview_post(post)["post"]
+    receiver = pipeline.preview_post(post)["post"]
+
+    assert receiver["angles"] == sender["angles"]
+    assert receiver["tangent_db_report"]["config_hash"] == sender["tangent_db_report"][
+        "config_hash"
+    ]
 
 
 def test_tangent_db_legacy_does_not_add_report(monkeypatch, clear_workflow_capacity_env):

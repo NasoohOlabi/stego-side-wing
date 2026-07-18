@@ -125,16 +125,16 @@ def _candidate_for_entry(angle: dict[str, Any], entries: list[dict[str, Any]]) -
     return candidate
 
 
-def _run_tangent_db_shadow(
+def _apply_tangent_db_builder(
     *,
     post: dict[str, Any],
     entries: list[dict[str, Any]],
     angles: list[dict[str, Any]],
     max_output: int,
     report: dict[str, Any],
-) -> None:
+) -> list[dict[str, Any]]:
     if get_workflow_tangent_db_builder() != "v1":
-        return
+        return angles
     candidates = [_candidate_for_entry(angle, entries) for angle in angles]
     result = build_tangent_db(
         candidates, PostContext.from_post(post), tangent_db_config_from_env(max_output)
@@ -142,13 +142,14 @@ def _run_tangent_db_shadow(
     tangent_report = result.report.model_dump(mode="json")
     report["tangent_db_report"] = tangent_report
     _gen_angles_bind_log().info(
-        "tangent_db_shadow_complete",
+        "tangent_db_selection_complete",
         post_id=post.get("id"),
         input_count=tangent_report["input_candidate_count"],
         kept_count=tangent_report["kept_count"],
         dropped=tangent_report["dropped"],
         config_hash=tangent_report["config_hash"],
     )
+    return result.angles
 
 
 def _post_with_angles(
@@ -284,7 +285,7 @@ class GenAnglesPipeline:
             },
         )
         if not dictionary:
-            _run_tangent_db_shadow(
+            angles = _apply_tangent_db_builder(
                 post=post,
                 entries=entry_bundle,
                 angles=[],
@@ -309,7 +310,7 @@ class GenAnglesPipeline:
             extract_ms = _elapsed_ms(t_extract)
             angles_raw_count = len(angles)
             max_angles = get_workflow_angles_max_output()
-            _run_tangent_db_shadow(
+            angles = _apply_tangent_db_builder(
                 post=post,
                 entries=entry_bundle,
                 angles=angles,
@@ -378,7 +379,7 @@ class GenAnglesPipeline:
                         angles.append(angle)
             angles_raw_count = len(angles)
             max_angles = get_workflow_angles_max_output()
-            _run_tangent_db_shadow(
+            angles = _apply_tangent_db_builder(
                 post=post,
                 entries=entry_bundle,
                 angles=angles,
@@ -479,7 +480,7 @@ class GenAnglesPipeline:
                 a.setdefault("source_document", 0)
             angles_raw_count = len(angles)
             max_angles = get_workflow_angles_max_output()
-            _run_tangent_db_shadow(
+            angles = _apply_tangent_db_builder(
                 post=post,
                 entries=entry_bundle,
                 angles=angles,

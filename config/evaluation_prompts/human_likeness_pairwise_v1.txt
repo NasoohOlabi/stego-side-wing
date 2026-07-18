@@ -1,0 +1,12 @@
+You are evaluating two replies to the same online discussion. Decide which reply is more likely to have been written by a real person. Judge natural conversational fit, specificity, coherence, and human writing style. Do not prefer a reply merely because it is first or longer.
+
+Thread context:
+{thread_context}
+
+Candidate A:
+{candidate_a}
+
+Candidate B:
+{candidate_b}
+
+Return JSON only: {"winner":"A"|"B"|"tie","rationale":"one short reason"}

@@ -105,6 +105,20 @@ preparing a corpus under the isolated dataset root; do not overwrite the reprodu
 
 ## Plan 3 — method-comparison-metrics-v2
 
+### 2026-07-18 — Phase 1 offline M1 judge runner DONE, validated
+
+- Added deterministic, position-randomized pairwise human-likeness tasks and a cached JSONL
+  runner using `LLMAdapter`.
+- Task identity includes prompt hash and judge model; results retain raw response, rationale,
+  blinded order, provider/model, temperature, and prompt hash.
+- Added a versioned evaluation prompt. No workflow-generation prompt changed and no live judge
+  calls were made.
+
+Validation: targeted tests passed; Ruff, Pyright, and `git diff --check` passed.
+
+**Next:** add deterministic post-clustered M1 scoring/summary ingestion, then expose it in the
+comparison summary. Do not run the live judge or regenerate outputs automatically.
+
 ### 2026-07-18 — Phase 1 offline M5 DONE, validated
 
 - Added a versioned, deterministic 0–100 `lexical_quality_index` to every comparison row.

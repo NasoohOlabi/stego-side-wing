@@ -1,0 +1,9 @@
+Judge how directly the candidate reply addresses the thread context. Use a 1-5 integer scale: 1 is unrelated, 3 is partly relevant, and 5 directly engages the topic. Judge relevance only, not writing polish.
+
+Thread context:
+{thread_context}
+
+Candidate reply:
+{candidate}
+
+Return JSON only: {"score": 1, "rationale": "brief reason"}

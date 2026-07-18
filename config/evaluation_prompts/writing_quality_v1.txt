@@ -1,0 +1,9 @@
+Judge the candidate reply's writing quality independently of whether it agrees with or closely matches the thread. Use a 1-5 integer scale for grammaticality, coherence, absence of run-ons or repetition, and a consistent single voice.
+
+Thread context (background only):
+{thread_context}
+
+Candidate reply:
+{candidate}
+
+Return JSON only: {"score": 1, "rationale": "brief reason"}

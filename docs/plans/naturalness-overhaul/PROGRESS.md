@@ -105,6 +105,20 @@ preparing a corpus under the isolated dataset root; do not overwrite the reprodu
 
 ## Plan 3 — method-comparison-metrics-v2
 
+### 2026-07-18 — Phase 2 offline M3/M4 scaffolding DONE, validated
+
+- Added one cached `LLMAdapter` runner for M3 thread relevance and M4 writing quality, with
+  separate versioned evaluation prompts, stable task IDs, prompt hashes, model/provider
+  provenance, raw responses, and strict 1–5 parsing.
+- Added standalone/summary-ingesting scoring with post-clustered paired differences, bootstrap
+  confidence intervals, sign tests, invalid-response accounting, and row-level method means.
+- No live judge calls or output regeneration were performed.
+
+Validation: targeted M1/M3/M4 tests passed; Ruff, Pyright, and `git diff --check` passed.
+
+**Next:** expose the M3 relevance vs M4/M5 writing-quality two-axis panel in the viewer, while
+keeping missing live judgments labeled `Not run`.
+
 ### 2026-07-18 — Viewer M1/M2 headline DONE, validated
 
 - Promoted reader-facing M1 human-likeness and M2 synthetic-detection metrics above the

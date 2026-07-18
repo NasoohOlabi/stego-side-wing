@@ -80,17 +80,15 @@ def analyze(paired: list[dict[str, Any]], judgments: list[dict[str, Any]]) -> di
     detected_posts = {
         str(row.get("post_id"))
         for row in judgments
-        if row.get("method") == "our_method"
-        and row.get("valid") is True
+        if row.get("valid") is True
         and row.get("correct") is True
     }
     detected = [report for post_id, report in reports.items() if post_id in detected_posts]
     undetected = [report for post_id, report in reports.items() if post_id not in detected_posts]
     reasons = Counter(
-        _reason_category(str(row.get("reason") or ""))
+        _reason_category(_judgment_reason(row))
         for row in judgments
-        if row.get("method") == "our_method"
-        and row.get("valid") is True
+        if row.get("valid") is True
         and row.get("correct") is True
         and str(row.get("post_id")) in reports
     )
@@ -102,6 +100,21 @@ def analyze(paired: list[dict[str, Any]], judgments: list[dict[str, Any]]) -> di
         "not_detected": _group_summary(undetected),
         "detected_reason_categories": dict(sorted(reasons.items())),
     }
+
+
+def _judgment_reason(row: dict[str, Any]) -> str:
+    reason = row.get("reason")
+    if isinstance(reason, str) and reason:
+        return reason
+    raw = row.get("raw_response")
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+        if isinstance(parsed, dict):
+            return str(parsed.get("rationale") or "")
+    return ""
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:

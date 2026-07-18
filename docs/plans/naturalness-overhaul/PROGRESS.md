@@ -17,6 +17,26 @@ requiring a live LLM run. Decision already made: **regenerate the ZLG comparison
 comments per payload before drawing any metric conclusions** (plan 3 M9 is a prerequisite, not
 optional).
 
+### 2026-07-18 — Isolated legacy/v1 comparison FINALIZED
+
+- Ran cached M8 drift attribution for both lanes and finalized
+  `datasets/prep_runs/naturalness_legacy_v1_20260718/summary.json` without provider/search calls.
+- The viewer-ingestable contract now carries M1 preference, M2 synthetic detection, M3 thread
+  relevance, M4 writing quality, deterministic M5 lexical quality, explicit M6 status, M7
+  tangent-DB quality, M8 attribution, M9 diversity, codec round trips, manifests, input hashes,
+  judge provenance, and run caveats. Repeated finalization produced the identical SHA-256
+  `8894abe9b818df07ae5c5ebe65fd4d4791ee4786f78e5149432e3b35401f0d1a`.
+- Descriptively, v1 won M1 8–6; both lanes were identical on M2 (100% detected), M3 (3/5), and
+  M4 (5/5 ceiling). M5 was computed from each lane's distinct comments. V1 M7 records 14 kept
+  tangents, mean relevance 0.758261, search share 0.571429, and mean pairwise Jaccard 0.048189.
+  M8 cannot separate detected from undetected posts because every comment was detected; legacy
+  has no report because its artifact predates `tangent_db_report`.
+- Audit result: the naturalness-overhaul implementation and isolated one-post validation are
+  complete. No code step remains. A publication-strength claim still requires a larger cached or
+  newly generated multi-post comparison; that is optional follow-up, not unfinished overhaul
+  implementation. Preserve the one-post, M4 ceiling, universal-M2-detection, and legacy-M7
+  unavailable caveats if these results are cited.
+
 ---
 
 ## Plan 1 — prepared-posts-separate-persistence

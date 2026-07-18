@@ -19,7 +19,7 @@
       "id": "selection_channel_capacity_accounting",
       "title": "Selection-channel capacity/accounting",
       "metric": "bps_selection",
-      "threshold": { "kind": "min", "value": 0.0 }
+      "threshold": { "kind": "min", "value": 0.001 }
     },
     {
       "id": "naturalness_stealth",

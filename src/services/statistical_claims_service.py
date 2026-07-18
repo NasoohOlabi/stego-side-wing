@@ -38,6 +38,7 @@ class VariantEvidence:
     matched_post_kl: list[float] = field(default_factory=list)
     perplexity: list[float] = field(default_factory=list)
     per_post_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
+    per_post_metric_values: dict[str, dict[str, list[float]]] = field(default_factory=dict)
     aggregate_metrics: dict[str, Any] = field(default_factory=dict)
 
 
@@ -131,6 +132,10 @@ def _as_float(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) and math.isfinite(float(value)) else None
 
 
+def _as_mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _collect_float(entry: dict[str, Any], group: str, key: str) -> float | None:
     for root_key in ("sample_metrics", "metrics"):
         root = entry.get(root_key)
@@ -170,11 +175,14 @@ def _variant_from_lane(lane: dict[str, Any], fallback_post_ids: list[str]) -> Va
     name = str(lane.get("variant") or lane.get("profile") or "unknown")
     evidence = VariantEvidence(
         name=name,
-        successful_samples=int(lane.get("samples_succeeded") or lane.get("samples") or len(entries)),
-        failed_samples=int(lane.get("samples_failed") or len(failures)),
-        post_ids=[str(entry.get("post_id")) for entry in entries if entry.get("post_id") is not None]
+        # Artifact entries/failures are the auditable observations. Summary counters can be stale.
+        successful_samples=len(entries),
+        failed_samples=len(failures),
+        post_ids=[
+            str(entry.get("post_id")) for entry in entries if entry.get("post_id") is not None
+        ]
         or list(fallback_post_ids),
-        aggregate_metrics=lane.get("summary_metrics") if isinstance(lane.get("summary_metrics"), dict) else {},
+        aggregate_metrics=_as_mapping(lane.get("summary_metrics")),
     )
     for failure in failures:
         evidence.failure_classes[str(failure.get("failure_code") or "unclassified_failure")] += 1
@@ -186,10 +194,12 @@ def _variant_from_lane(lane: dict[str, Any], fallback_post_ids: list[str]) -> Va
             isinstance(context_drift, dict) and context_drift.get("mismatches")
         ):
             evidence.context_drift_failures += 1
-        metrics = entry.get("sample_metrics") if isinstance(entry.get("sample_metrics"), dict) else {}
-        if bool(metrics.get("receiver_success")) or isinstance(entry.get("receiver_decode"), dict):
-            evidence.receiver_successes += 1
+        metrics = _as_mapping(entry.get("sample_metrics"))
         receiver_decode = entry.get("receiver_decode")
+        if bool(metrics.get("receiver_success")) or (
+            isinstance(receiver_decode, dict) and receiver_decode.get("succeeded") is True
+        ):
+            evidence.receiver_successes += 1
         if isinstance(receiver_decode, dict):
             if isinstance(receiver_decode.get("decoded_angle_index"), int):
                 evidence.semantic_angle_successes += 1
@@ -216,10 +226,15 @@ def _variant_from_lane(lane: dict[str, Any], fallback_post_ids: list[str]) -> Va
                 dest.append(value)
         post_id = entry.get("post_id")
         if isinstance(post_id, str):
+            values = evidence.per_post_metric_values.setdefault(post_id, {})
+            for key in ("matched_post_jsd", "matched_post_kl", "perplexity"):
+                value = _quality_series(entry, key)
+                if value is not None:
+                    values.setdefault(key, []).append(value)
             evidence.per_post_metrics[post_id] = {
-                key: value
-                for key in ("matched_post_jsd", "matched_post_kl", "perplexity")
-                if (value := _quality_series(entry, key)) is not None
+                key: sum(metric_values) / len(metric_values)
+                for key, metric_values in values.items()
+                if metric_values
             }
     return evidence
 
@@ -230,39 +245,67 @@ def collect_variant_evidence(artifacts: list[dict[str, Any]]) -> list[VariantEvi
         fallback_post_ids = [str(pid) for pid in artifact.get("selected_post_ids", [])]
         lanes = artifact.get("profile_summaries") or artifact.get("summaries") or []
         if isinstance(lanes, list):
-            variants.extend(_variant_from_lane(lane, fallback_post_ids) for lane in lanes if isinstance(lane, dict))
+            variants.extend(
+                _variant_from_lane(lane, fallback_post_ids)
+                for lane in lanes
+                if isinstance(lane, dict)
+            )
     return variants
 
 
-def _provenance_status(artifacts: list[dict[str, Any]], *, accept_historical: bool) -> dict[str, Any]:
+def _provenance_status(
+    artifacts: list[dict[str, Any]], *, accept_historical: bool
+) -> dict[str, Any]:
     if accept_historical:
-        return {"accepted": True, "clean": True, "reason": "historical evidence explicitly accepted"}
-    clean_values = []
-    commits = []
+        return {
+            "accepted": True,
+            "clean": True,
+            "reason": "historical evidence explicitly accepted",
+        }
+    artifact_states: list[tuple[bool, str]] = []
     for artifact in artifacts:
-        progress = artifact.get("_progress") if isinstance(artifact.get("_progress"), dict) else {}
-        provenance = artifact.get("provenance") if isinstance(artifact.get("provenance"), dict) else {}
+        progress = _as_mapping(artifact.get("_progress"))
+        provenance = _as_mapping(artifact.get("provenance"))
+        clean: bool | None = None
+        commit: str | None = None
         for source in (artifact, progress, provenance):
             if "git_status_clean" in source:
-                clean_values.append(bool(source.get("git_status_clean")))
+                clean = bool(source.get("git_status_clean"))
+            elif "gitDirty" in source:
+                clean = not bool(source.get("gitDirty"))
             if source.get("git_commit"):
-                commits.append(str(source.get("git_commit")))
-    if clean_values and all(clean_values) and commits:
-        return {"accepted": True, "clean": True, "git_commits": sorted(set(commits))}
-    return {"accepted": False, "clean": False, "reason": "dirty or unknown run provenance"}
+                commit = str(source.get("git_commit"))
+            elif source.get("gitCommit"):
+                commit = str(source.get("gitCommit"))
+        if clean is None or commit is None:
+            return {"accepted": False, "clean": False, "reason": "incomplete run provenance"}
+        artifact_states.append((clean, commit))
+    commits = {commit for _, commit in artifact_states}
+    if artifact_states and all(clean for clean, _ in artifact_states) and len(commits) == 1:
+        return {"accepted": True, "clean": True, "git_commits": sorted(commits)}
+    reason = "mixed git commits" if len(commits) > 1 else "dirty or unknown run provenance"
+    return {"accepted": False, "clean": False, "reason": reason}
 
 
 def _sample_gate(variants: list[VariantEvidence], min_samples: int) -> dict[str, Any]:
     too_small = [v.name for v in variants if v.successful_samples < min_samples]
-    return {"passed": not too_small and bool(variants), "min_samples": min_samples, "too_small": too_small}
+    return {
+        "passed": not too_small and bool(variants),
+        "min_samples": min_samples,
+        "too_small": too_small,
+    }
 
 
 def _same_post_gate(variants: list[VariantEvidence]) -> dict[str, Any]:
     if len(variants) < 2:
         return {"passed": True, "reason": "single variant"}
-    first = variants[0].post_ids
-    passed = bool(first) and all(v.post_ids == first for v in variants[1:])
-    return {"passed": passed, "post_count": len(first), "reason": None if passed else "post ID lists differ"}
+    first = Counter(variants[0].post_ids)
+    passed = bool(first) and all(Counter(v.post_ids) == first for v in variants[1:])
+    return {
+        "passed": passed,
+        "post_count": sum(first.values()),
+        "reason": None if passed else "post ID lists differ",
+    }
 
 
 def _status_from_min_ci(ci: dict[str, Any], threshold: float) -> str:
@@ -291,22 +334,30 @@ def _apply_gates(status: str, gates: dict[str, Any]) -> str:
     return status
 
 
-def _claim_receiver(variants: list[VariantEvidence], gates: dict[str, Any]) -> dict[str, Any]:
+def _claim_receiver(
+    variants: list[VariantEvidence], gates: dict[str, Any], threshold: float
+) -> dict[str, Any]:
     successes = sum(v.receiver_successes for v in variants)
     total = sum(v.successful_samples + v.failed_samples for v in variants)
     ci = wilson_ci(successes, total)
     return {
         "id": "receiver_recovery_reliability",
-        "status": _apply_gates(_status_from_min_ci(ci, 0.95), gates),
+        "status": _apply_gates(_status_from_min_ci(ci, threshold), gates),
         "metric": {"receiver_success_rate_ci": ci},
     }
 
 
-def _claim_no_invisible(variants: list[VariantEvidence], gates: dict[str, Any]) -> dict[str, Any]:
+def _claim_no_invisible(
+    variants: list[VariantEvidence], gates: dict[str, Any], threshold: float
+) -> dict[str, Any]:
     values = [value for variant in variants for value in variant.hidden_payload_bytes]
     zero_count = sum(1 for value in values if value == 0)
     ci = wilson_ci(zero_count, len(values))
-    raw_status = "not_supported" if any(value > 0 for value in values) else _status_from_min_ci(ci, 0.99)
+    raw_status = (
+        "not_supported"
+        if any(value > 0 for value in values)
+        else _status_from_min_ci(ci, threshold)
+    )
     return {
         "id": "no_invisible_payload_carrier",
         "status": _apply_gates(raw_status, gates),
@@ -314,21 +365,25 @@ def _claim_no_invisible(variants: list[VariantEvidence], gates: dict[str, Any]) 
     }
 
 
-def _claim_capacity(variants: list[VariantEvidence], gates: dict[str, Any]) -> dict[str, Any]:
+def _claim_capacity(
+    variants: list[VariantEvidence], gates: dict[str, Any], threshold: float
+) -> dict[str, Any]:
     values = [value for variant in variants for value in variant.bps_selection]
     ci = bootstrap_mean_ci(values)
     return {
         "id": "selection_channel_capacity_accounting",
-        "status": _apply_gates(_status_from_min_ci(ci, 0.0), gates),
+        "status": _apply_gates(_status_from_min_ci(ci, threshold), gates),
         "metric": {"bps_selection_mean_ci": ci},
     }
 
 
-def _claim_naturalness(variants: list[VariantEvidence], gates: dict[str, Any]) -> dict[str, Any]:
+def _claim_naturalness(
+    variants: list[VariantEvidence], gates: dict[str, Any], threshold: float
+) -> dict[str, Any]:
     jsd_values = [value for variant in variants for value in variant.matched_post_jsd]
     ppl_values = [value for variant in variants for value in variant.perplexity]
     jsd_ci = bootstrap_mean_ci(jsd_values)
-    status = _status_from_max_ci(jsd_ci, 0.25)
+    status = _status_from_max_ci(jsd_ci, threshold)
     return {
         "id": "naturalness_stealth",
         "status": _apply_gates(status, gates),
@@ -341,13 +396,15 @@ def _claim_naturalness(variants: list[VariantEvidence], gates: dict[str, Any]) -
     }
 
 
-def _claim_secure(variants: list[VariantEvidence], gates: dict[str, Any]) -> dict[str, Any]:
+def _claim_secure(
+    variants: list[VariantEvidence], gates: dict[str, Any], threshold: float
+) -> dict[str, Any]:
     successes = sum(v.secure_transform_successes for v in variants)
     total = sum(v.secure_transform_total for v in variants)
     ci = wilson_ci(successes, total)
     return {
         "id": "secure_payload_transform",
-        "status": _apply_gates(_status_from_min_ci(ci, 0.95), gates),
+        "status": _apply_gates(_status_from_min_ci(ci, threshold), gates),
         "metric": {"secure_receiver_success_rate_ci": ci},
     }
 
@@ -358,11 +415,20 @@ def _paired_deltas(variants: list[VariantEvidence]) -> list[dict[str, Any]]:
     baseline = variants[0]
     rows: list[dict[str, Any]] = []
     for candidate in variants[1:]:
-        shared = [pid for pid in baseline.post_ids if pid in candidate.per_post_metrics]
-        base_jsd = [baseline.per_post_metrics.get(pid, {}).get("matched_post_jsd") for pid in shared]
-        cand_jsd = [candidate.per_post_metrics.get(pid, {}).get("matched_post_jsd") for pid in shared]
-        base_clean = [value for value in base_jsd if value is not None]
-        cand_clean = [value for value in cand_jsd if value is not None]
+        shared = sorted(set(baseline.per_post_metrics) & set(candidate.per_post_metrics))
+        base_jsd = [
+            baseline.per_post_metrics.get(pid, {}).get("matched_post_jsd") for pid in shared
+        ]
+        cand_jsd = [
+            candidate.per_post_metrics.get(pid, {}).get("matched_post_jsd") for pid in shared
+        ]
+        paired = [
+            (a, b)
+            for a, b in zip(base_jsd, cand_jsd, strict=True)
+            if a is not None and b is not None
+        ]
+        base_clean = [a for a, _ in paired]
+        cand_clean = [b for _, b in paired]
         rows.append(
             {
                 "baseline": baseline.name,
@@ -403,6 +469,13 @@ def evaluate_claims(
     manifest_path: Path = DEFAULT_MANIFEST,
 ) -> dict[str, Any]:
     manifest = load_claims_manifest(manifest_path)
+    thresholds: dict[str, float] = {}
+    for row in manifest.get("claims", []):
+        if not isinstance(row, dict):
+            continue
+        value = _as_mapping(row.get("threshold")).get("value")
+        if isinstance(value, (int, float)):
+            thresholds[str(row.get("id"))] = float(value)
     variants = collect_variant_evidence(artifacts)
     gates = {
         "provenance": _provenance_status(artifacts, accept_historical=accept_historical),
@@ -410,11 +483,13 @@ def evaluate_claims(
         "same_posts": _same_post_gate(variants),
     }
     claims = [
-        _claim_receiver(variants, gates),
-        _claim_no_invisible(variants, gates),
-        _claim_capacity(variants, gates),
-        _claim_naturalness(variants, gates),
-        _claim_secure(variants, gates),
+        _claim_receiver(variants, gates, thresholds.get("receiver_recovery_reliability", 0.95)),
+        _claim_no_invisible(variants, gates, thresholds.get("no_invisible_payload_carrier", 0.99)),
+        _claim_capacity(
+            variants, gates, thresholds.get("selection_channel_capacity_accounting", 0.001)
+        ),
+        _claim_naturalness(variants, gates, thresholds.get("naturalness_stealth", 0.25)),
+        _claim_secure(variants, gates, thresholds.get("secure_payload_transform", 0.95)),
         _claim_comparisons(variants, gates),
         _claim_receiver_modes(variants, gates),
     ]
@@ -466,7 +541,15 @@ def render_claims_markdown(report: dict[str, Any]) -> str:
         if len(metric) > 220:
             metric = metric[:217] + "..."
         lines.append(f"| {claim['id']} | {claim['status']} | `{metric}` |")
-    lines.extend(["", "## Variants", "", "| Variant | Success | Failed | Pure | Audit-assisted |", "|---|---:|---:|---:|---:|"])
+    lines.extend(
+        [
+            "",
+            "## Variants",
+            "",
+            "| Variant | Success | Failed | Pure | Audit-assisted |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
     for variant in report["variants"]:
         receiver = variant["receiver"]
         lines.append(

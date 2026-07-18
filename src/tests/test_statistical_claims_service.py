@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from services.statistical_claims_service import (
     bootstrap_mean_ci,
+    collect_variant_evidence,
     evaluate_claims,
     load_summary_artifacts,
     paired_bootstrap_delta_ci,
@@ -102,6 +105,17 @@ def test_dirty_or_unknown_provenance_marks_claims_inconclusive() -> None:
     assert {claim["status"] for claim in report["claims"]} == {"inconclusive"}
 
 
+def test_missing_optional_summary_and_provenance_fields_are_safe() -> None:
+    artifact = _summary(10)
+    artifact.pop("provenance")
+    for lane in artifact["profile_summaries"]:
+        lane.pop("summary_metrics", None)
+    report = evaluate_claims([artifact])
+
+    assert report["gates"]["provenance"]["accepted"] is False
+    assert all(variant.aggregate_metrics == {} for variant in collect_variant_evidence([artifact]))
+
+
 def test_same_post_paired_comparison_produces_paired_ci() -> None:
     report = evaluate_claims([_summary(200)])
     comparison = next(c for c in report["claims"] if c["id"] == "variant_comparisons_pareto")
@@ -139,8 +153,12 @@ def test_volatile_receiver_context_drift_is_reported_separately() -> None:
         }
     )
     report = evaluate_claims([artifact])
-    claim = next(c for c in report["claims"] if c["id"] == "ephemeral_snapshot_vs_volatile_receiver")
-    volatile = next(row for row in claim["metric"]["receiver_modes"] if row["variant"] == "volatile_receiver")
+    claim = next(
+        c for c in report["claims"] if c["id"] == "ephemeral_snapshot_vs_volatile_receiver"
+    )
+    volatile = next(
+        row for row in claim["metric"]["receiver_modes"] if row["variant"] == "volatile_receiver"
+    )
 
     assert volatile["context_drift_failures"] == 1
 
@@ -156,3 +174,44 @@ def test_load_summary_artifacts_reads_progress_provenance(tmp_path: Path) -> Non
 
     artifacts = load_summary_artifacts([run_dir])
     assert artifacts[0]["_progress"]["git_commit"] == "from-progress"
+
+
+def test_declared_summary_count_cannot_inflate_observed_sample_count() -> None:
+    artifact = _summary(2)
+    artifact["profile_summaries"][0]["samples_succeeded"] = 999
+
+    variants = collect_variant_evidence([artifact])
+
+    assert variants[0].successful_samples == 2
+
+
+def test_receiver_decode_object_without_success_is_not_counted() -> None:
+    artifact = _summary(1)
+    entry = artifact["profile_summaries"][0]["entries"][0]
+    entry["sample_metrics"]["receiver_success"] = False
+    entry["receiver_decode"] = {"succeeded": False, "error": "decode_failed"}
+
+    variants = collect_variant_evidence([artifact])
+
+    assert variants[0].receiver_successes == 0
+
+
+def test_mixed_commits_fail_provenance_gate() -> None:
+    first = _summary(200)
+    second = _summary(200)
+    second["provenance"]["git_commit"] = "different"
+
+    report = evaluate_claims([first, second])
+
+    assert report["gates"]["provenance"]["accepted"] is False
+    assert report["gates"]["provenance"]["reason"] == "mixed git commits"
+
+
+def test_repeated_post_metrics_are_aggregated_instead_of_overwritten() -> None:
+    artifact = _summary(2)
+    lane = artifact["profile_summaries"][0]
+    lane["entries"] = [_entry("same", jsd=0.1), _entry("same", jsd=0.3)]
+
+    variant = collect_variant_evidence([artifact])[0]
+
+    assert variant.per_post_metrics["same"]["matched_post_jsd"] == pytest.approx(0.2)

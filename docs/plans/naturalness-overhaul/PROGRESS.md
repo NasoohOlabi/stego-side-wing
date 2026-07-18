@@ -79,6 +79,25 @@ pipeline (viewer scan roots in `recent_updates_service.py`, the ad-hoc `/posts` 
 
 ## Plan 2 — tangent-db-revamp
 
+### 2026-07-18 — Luna M1 legacy-v1 judge pass DONE, validated
+
+- Ran the 14 matched same-slot legacy-v1 pairs through the ChatGPT-backed Codex CLI
+  subscription as the Luna evaluation worker. No OpenRouter, LM Studio, search, or paid
+  external-provider call was used.
+- Kept the pass blind: deterministic SHA-256 A/B order, no lane labels in the judge payload,
+  one shared cached-thread context, structured-output validation, and exact task-ID coverage.
+- Persisted ignored isolated artifacts at the comparison root: `preference_results.jsonl`,
+  `preference_summary.json`, the private/blind task manifests, prompt, output schema, and raw
+  Luna response. Provenance pins Codex CLI 0.144.5, `gpt-5.6-sol`, worker role Luna, and the
+  evaluation-prompt hash.
+- All 14 judgments were valid: v1 won 8, legacy won 6, ties 0 (descriptive v1 score 0.5714).
+  This is only one independent post, so it does not support cross-post significance.
+
+**Next:** run M3 thread relevance on these same 28 cached comments with the Codex CLI Luna
+subscription, independently score each comment with the versioned M3 1–5 rubric, and persist
+validated cached results plus lane/post summaries. Then run M4 writing quality the same way;
+do not combine M3 and M4, expose secrets, or use OpenRouter/search/external providers.
+
 ### 2026-07-18 — Luna candidates materialized and codec-verified offline
 
 - Added `materialize-luna` to `prepare_tangent_db_comparison.py`. It deterministically

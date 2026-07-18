@@ -3,7 +3,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import dotenv
 
@@ -548,7 +548,56 @@ def get_workflow_angles_max_output() -> int:
     return _capacity_value("WORKFLOW_ANGLES_MAX_OUTPUT", low=low, mid=mid, high=high)
 
 
-def get_workflow_capacity_settings() -> dict[str, str | int | bool]:
+def get_workflow_tangent_db_builder() -> Literal["legacy", "v1"]:
+    """Tangent-DB shadow report: ``legacy`` (off) or ``v1`` (compute without selection)."""
+    raw = (_workflow_env_raw("WORKFLOW_TANGENT_DB_BUILDER") or "legacy").lower()
+    return "v1" if raw == "v1" else "legacy"
+
+
+def get_workflow_tangent_db_min_relevance() -> float:
+    """Stage-A admission threshold: min fraction of a tangent's content tokens seen in-thread."""
+    return _workflow_env_float(
+        "WORKFLOW_TANGENT_DB_MIN_RELEVANCE", 0.12, min_value=0.0, max_value=1.0
+    )
+
+
+def get_workflow_tangent_db_search_relevance_mult() -> float:
+    """Extra relevance bar (>=1.0) a search-result tangent must clear versus post/comment ones."""
+    return _workflow_env_float(
+        "WORKFLOW_TANGENT_DB_SEARCH_RELEVANCE_MULT", 1.5, min_value=1.0, max_value=10.0
+    )
+
+
+def get_workflow_tangent_db_max_similarity() -> float:
+    """Stage-B Jaccard cap: drop a tangent too similar to an already-kept one."""
+    return _workflow_env_float(
+        "WORKFLOW_TANGENT_DB_MAX_SIMILARITY", 0.7, min_value=0.0, max_value=1.0
+    )
+
+
+def get_workflow_tangent_db_min_size() -> int:
+    """Capacity floor: relax similarity (never relevance) until this many tangents survive. 0=off."""
+    return _env_non_negative_int("WORKFLOW_TANGENT_DB_MIN_SIZE") or 0
+
+
+def get_workflow_tangent_db_semantic_dedup() -> bool:
+    """Enable embedding-based paraphrase dedup (v2). Off by default; must stay deterministic."""
+    return _workflow_env_on_off("WORKFLOW_TANGENT_DB_SEMANTIC_DEDUP", default=False)
+
+
+def get_workflow_tangent_db_settings() -> dict[str, str | int | float | bool]:
+    """Effective tangent-DB knobs so runs self-describe (see method-comparison metrics)."""
+    return {
+        "builder": get_workflow_tangent_db_builder(),
+        "min_relevance": get_workflow_tangent_db_min_relevance(),
+        "search_relevance_mult": get_workflow_tangent_db_search_relevance_mult(),
+        "max_similarity": get_workflow_tangent_db_max_similarity(),
+        "min_size": get_workflow_tangent_db_min_size(),
+        "semantic_dedup": get_workflow_tangent_db_semantic_dedup(),
+    }
+
+
+def get_workflow_capacity_settings() -> dict[str, str | int | bool | dict[str, Any]]:
     """Structured capacity settings for reports and logs (effective limits after env resolution)."""
     return {
         "limits_enabled": get_workflow_capacity_limits_enabled(),
@@ -559,6 +608,7 @@ def get_workflow_capacity_settings() -> dict[str, str | int | bool]:
         "dictionary_max_comments": get_workflow_dictionary_max_comments(),
         "angles_max_input_blocks": get_workflow_angles_max_input_blocks(),
         "angles_max_output": get_workflow_angles_max_output(),
+        "tangent_db": get_workflow_tangent_db_settings(),
     }
 
 
@@ -688,10 +738,44 @@ def resolve_path(path_str: str) -> Path:
     return REPO_ROOT / normalized
 
 
+def get_workflow_dataset_root() -> Path | None:
+    """Base dir that rebases all step artifacts (``WORKFLOW_DATASET_ROOT``); None → global dirs."""
+    raw = _workflow_env_raw("WORKFLOW_DATASET_ROOT")
+    if raw is None:
+        return None
+    candidate = Path(raw)
+    return candidate if candidate.is_absolute() else resolve_path(raw)
+
+
+def get_workflow_dataset_seed_global() -> bool:
+    """Keep the ``news_cleaned`` seed corpus global even when a dataset root is set."""
+    return _workflow_env_on_off("WORKFLOW_DATASET_SEED_GLOBAL", default=True)
+
+
+def _rebase_step_dir(rel_dir: str, root: Path, *, seed_global: bool) -> Path:
+    """Map a relative step dir under ``root`` by leaf name; keep the seed corpus global."""
+    normalized = rel_dir[2:] if rel_dir.startswith("./") else rel_dir
+    if seed_global and normalized == POSTS_DIRECTORY:
+        return resolve_path(rel_dir)
+    return root / Path(normalized).name
+
+
 def get_step_dirs(step: str) -> tuple[Path, Path]:
-    """Return absolute source/destination directories for a configured step."""
+    """Return absolute source/destination directories for a configured step.
+
+    When ``WORKFLOW_DATASET_ROOT`` is set, every step's dirs are rebased under that root
+    by leaf name (so a prepared corpus is a self-contained tree); unset behaviour is
+    byte-identical to the global defaults. The ``news_cleaned`` seed corpus stays global
+    unless ``WORKFLOW_DATASET_SEED_GLOBAL`` is disabled.
+    """
     if step not in STEPS:
         raise ValueError(f"Invalid step: {step}")
-    source_dir = resolve_path(STEPS[step]["source_dir"])
-    dest_dir = resolve_path(STEPS[step]["dest_dir"])
+    source_rel = STEPS[step]["source_dir"]
+    dest_rel = STEPS[step]["dest_dir"]
+    root = get_workflow_dataset_root()
+    if root is None:
+        return resolve_path(source_rel), resolve_path(dest_rel)
+    seed_global = get_workflow_dataset_seed_global()
+    source_dir = _rebase_step_dir(source_rel, root, seed_global=seed_global)
+    dest_dir = _rebase_step_dir(dest_rel, root, seed_global=seed_global)
     return source_dir, dest_dir

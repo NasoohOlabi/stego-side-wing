@@ -247,6 +247,41 @@ def test_preview_post_extractive_zero_kld_mode_skips_backend(
     assert out["post"]["options_count"] == len(out["post"]["angles"])
 
 
+def test_tangent_db_v1_is_shadow_only_and_persists_report(monkeypatch, clear_workflow_capacity_env):
+    monkeypatch.setenv("WORKFLOW_ANGLES_GENERATION_MODE", "extractive_zero_kld")
+    monkeypatch.setenv("WORKFLOW_TANGENT_DB_BUILDER", "v1")
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+    pipeline.backend = SimpleNamespace()
+    post = {
+        "id": "p-shadow",
+        "title": "Flash flood leaves campers missing",
+        "selftext": "Rescue teams searched the river through the night.",
+        "search_results": [
+            "Competitive dynamics among coffee retailers pressured quarterly margins."
+        ],
+    }
+
+    out = pipeline.preview_post(post)
+
+    assert len(out["post"]["angles"]) == 2
+    tangent_report = out["post"]["tangent_db_report"]
+    assert tangent_report == out["report"]["tangent_db_report"]
+    assert tangent_report["input_candidate_count"] == 2
+    assert tangent_report["kept_count"] == 1
+    assert tangent_report["dropped"]["low_thread_relevance"] == 1
+
+
+def test_tangent_db_legacy_does_not_add_report(monkeypatch, clear_workflow_capacity_env):
+    monkeypatch.setenv("WORKFLOW_ANGLES_GENERATION_MODE", "extractive_zero_kld")
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+    pipeline.backend = SimpleNamespace()
+
+    out = pipeline.preview_post({"id": "p-legacy", "selftext": "A long enough source sentence."})
+
+    assert "tangent_db_report" not in out["post"]
+    assert "tangent_db_report" not in out["report"]
+
+
 def test_process_posts_uses_tagged_queue_and_saves_tagged_filename():
     saved = []
     seen = {}

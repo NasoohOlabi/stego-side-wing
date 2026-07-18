@@ -100,6 +100,11 @@ def tokenize_content_words(text: str) -> list[str]:
     ]
 
 
+def context_texts_from_post(post: dict[str, Any]) -> list[str]:
+    """Public accessor for the in-thread anchor texts (title, selftext, comment bodies)."""
+    return _context_texts_from_post(post)
+
+
 def _context_texts_from_post(post: dict[str, Any]) -> list[str]:
     texts: list[str] = []
     for key in ("title", "selftext"):

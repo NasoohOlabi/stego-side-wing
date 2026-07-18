@@ -79,6 +79,20 @@ pipeline (viewer scan roots in `recent_updates_service.py`, the ad-hoc `/posts` 
 
 ## Plan 2 — tangent-db-revamp
 
+### 2026-07-18 — First cached legacy angle artifact accepted offline
+
+- Superseded the OpenRouter retry: no OpenRouter, search, LM Studio, or external provider call
+  was made. The Codex CLI subscription was used for the Luna worker path.
+- Verified that cached legacy input `1look5n.json` matches every source field of the existing
+  reproducible accepted artifact, then copied that exact 14-angle artifact into the isolated
+  legacy lane. This avoids synthesizing a different answer for identical cached input.
+- Validated `id`, `options_count == len(angles) == 14`, required non-empty angle fields, and the
+  affected angle-generation/runner tests (46 passed).
+
+**Next:** mirror the exact `1look5n.json` cached researched input into the v1 lane, derive and
+persist the v1-selected angle artifact plus `tangent_db_report` offline from the accepted legacy
+candidates, and validate sender/receiver config-hash parity. Do not advance to stego or judges.
+
 ### 2026-07-18 — Live legacy population attempted with free-only provider
 
 - Reused cached `datasets/news_researched` input; no search provider was called.

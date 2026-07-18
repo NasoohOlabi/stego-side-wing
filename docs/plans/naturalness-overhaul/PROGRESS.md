@@ -79,6 +79,21 @@ pipeline (viewer scan roots in `recent_updates_service.py`, the ad-hoc `/posts` 
 
 ## Plan 2 — tangent-db-revamp
 
+### 2026-07-18 — Luna candidates materialized and codec-verified offline
+
+- Added `materialize-luna` to `prepare_tangent_db_comparison.py`. It deterministically
+  finds payloads whose real `augment_post` sender selects each same-index tangent, then
+  verifies every payload with `recover_payload_with_compressed_full`.
+- Materialized both ignored lanes for cached post `1look5n`: 14 legacy and 14 v1 rows,
+  28/28 sender/receiver round trips, exact lane symmetry, and M9 `1.0` in each lane.
+  Each lane now contains `paired_rows.jsonl` and `summary.json` under
+  `datasets/prep_runs/naturalness_legacy_v1_20260718/`.
+- No provider, search, LM Studio, OpenRouter, or judge call was made.
+
+**Next:** stop offline work and run M1 only with the Codex CLI Luna subscription against each
+lane's `paired_rows.jsonl`; persist `preference_results.jsonl`, pin the Luna/Codex invocation
+metadata, then score the matched lane results. Do not use OpenRouter or paid external providers.
+
 ### 2026-07-18 — Codex Luna comment candidates generated; materialization pending
 
 - Used only the ChatGPT-backed Codex CLI subscription (Luna worker role); no OpenRouter,

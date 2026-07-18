@@ -116,3 +116,36 @@ def test_materialize_cached_v1_preserves_input_and_selects_with_source_mix(
     assert artifact["tangent_db_report"]["config_hash"] == json.loads(
         (tmp_path / "v1" / "prep_run.json").read_text(encoding="utf-8")
     )["tangent_db_config_hash"]
+
+
+def test_materialize_luna_uses_real_codec_and_enforces_symmetry(tmp_path: Path) -> None:
+    module = _module()
+    for lane in ("legacy", "v1"):
+        lane_root = tmp_path / lane
+        lane_root.mkdir()
+        post = {
+            "id": "p1",
+            "title": "A title with enough words",
+            "selftext": "A body with enough words for the codec dictionary.",
+            "comments": [{"id": "c1", "body": "An existing parent comment."}],
+            "angles": [
+                {"tangent": "First distinct angle", "source_quote": "first"},
+                {"tangent": "Second distinct angle", "source_quote": "second"},
+            ],
+            "tangent_db_report": {"config_hash": "x"},
+        }
+        angles = lane_root / "news_angles"
+        angles.mkdir()
+        (angles / "p1.json").write_text(json.dumps(post), encoding="utf-8")
+    comments = tmp_path / "comments.json"
+    comments.write_text(json.dumps({"legacy": ["L one", "L two"], "v1": ["V one", "V two"]}), encoding="utf-8")
+
+    module.materialize_luna_comments(tmp_path, post_id="p1", comments_path=comments)
+
+    for lane in ("legacy", "v1"):
+        rows = [json.loads(line) for line in (tmp_path / lane / "paired_rows.jsonl").read_text(encoding="utf-8").splitlines()]
+        summary = json.loads((tmp_path / lane / "summary.json").read_text(encoding="utf-8"))
+        assert [row["selected_angle_index"] for row in rows] == [0, 1]
+        assert all(row["decode_ok"] for row in rows)
+        assert summary["round_trips_passed"] == 2
+        assert summary["diversity_guard"]["ratio"] == 1.0

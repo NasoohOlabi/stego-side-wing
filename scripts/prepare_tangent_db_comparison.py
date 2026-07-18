@@ -18,6 +18,11 @@ if str(_SRC) not in sys.path:
 from infrastructure.config import get_workflow_angles_max_output  # noqa: E402
 from infrastructure.prep_run_manifest import write_prep_run_manifest  # noqa: E402
 from workflows.pipelines.gen_angles import GenAnglesPipeline  # noqa: E402
+from workflows.utils.stego_codec import (  # noqa: E402
+    augment_post,
+    build_dictionary,
+    recover_payload_with_compressed_full,
+)
 from workflows.utils.tangent_db import (  # noqa: E402
     AngleCandidate,
     PostContext,
@@ -138,6 +143,92 @@ def materialize_cached_v1(root: Path, *, post_id: str) -> Path:
     return output
 
 
+def _payload_for_angle(post: dict[str, Any], lane: str, index: int) -> tuple[str, dict[str, Any]]:
+    """Find a reproducible ordinary payload whose real sender selects ``index``."""
+    angles = post.get("angles")
+    if not isinstance(angles, list) or not angles:
+        raise ValueError(f"{lane} lane has no angles")
+    payloads = [f"A{chr(codepoint)}" for codepoint in range(33, 127)]
+    payloads.extend(chr(codepoint) for codepoint in range(128, 512))
+    for payload in payloads:
+        encoded = augment_post(payload, post)
+        if encoded["angleEmbedding"]["selectedAngle"].get("idx") == index:
+            return payload, encoded
+    raise ValueError(f"could not select {lane} angle {index} deterministically")
+
+
+def materialize_luna_comments(root: Path, *, post_id: str, comments_path: Path) -> Path:
+    """Materialize Luna text through the real sender/receiver codec, entirely offline."""
+    root = root.resolve()
+    candidates = _read_object(comments_path.resolve())
+    lane_data: dict[str, tuple[dict[str, Any], list[str]]] = {}
+    for lane in ("legacy", "v1"):
+        post = _read_object(root / lane / "news_angles" / f"{post_id}.json")
+        comments = candidates.get(lane)
+        angles = post.get("angles")
+        if not isinstance(comments, list) or not all(isinstance(x, str) and x.strip() for x in comments):
+            raise ValueError(f"{lane} Luna candidates must be non-empty strings")
+        if not isinstance(angles, list) or len(comments) != len(angles):
+            raise ValueError(f"{lane} candidate/angle counts differ")
+        lane_data[lane] = (post, comments)
+    counts = {lane: len(data[1]) for lane, data in lane_data.items()}
+    if len(set(counts.values())) != 1:
+        raise ValueError(f"lane count symmetry failed: {counts}")
+
+    for lane, (post, comments) in lane_data.items():
+        unique_ratio = len(set(comments)) / len(comments)
+        if unique_ratio != 1.0:
+            raise ValueError(f"{lane} M9 must equal 1.0, got {unique_ratio}")
+        dictionary = build_dictionary(post)
+        angles = post["angles"]
+        rows: list[dict[str, Any]] = []
+        for index, comment in enumerate(comments):
+            payload, encoded = _payload_for_angle(post, lane, index)
+            compressed = encoded["compression"]["compressed"]
+            recovered = recover_payload_with_compressed_full(
+                compressed, dictionary, post, [angles], index
+            )
+            if recovered is None or recovered[0] != payload:
+                raise ValueError(f"{lane} row {index} failed sender/receiver round trip")
+            rows.append({
+                "pair_id": index,
+                "post_id": post_id,
+                "sample_index": index,
+                "slot": index,
+                "method": "our_method",
+                "lane": lane,
+                "stegotext": comment,
+                "payload": payload,
+                "decode_ok": True,
+                "selected_angle_index": index,
+                "selected_angle": angles[index],
+                "selection_signature": encoded["selectionSignature"],
+                "compressed_full": compressed,
+                "recovery_source": "real_codec_audit_assisted_verified",
+                "tangent_db_report": post.get("tangent_db_report"),
+            })
+        lane_root = root / lane
+        rows_path = lane_root / "paired_rows.jsonl"
+        rows_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+        summary = {
+            "lane": lane,
+            "rows": len(rows),
+            "round_trips_passed": len(rows),
+            "rows_jsonl": str(rows_path.resolve()),
+            "diversity_guard": {"passed": True, "minimum_ratio": 1.0, "ratio": unique_ratio},
+            "tangent_db_quality": {
+                "version": "tangent_db_quality_summary_v1",
+                "inference_unit": "unique_post_id",
+                "report_rows": len(rows) if isinstance(post.get("tangent_db_report"), dict) else 0,
+                "unique_posts": 1 if isinstance(post.get("tangent_db_report"), dict) else 0,
+            },
+        }
+        (lane_root / "summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    return root / "v1" / "summary.json"
+
+
 def finalize_comparison(root: Path, legacy_summary: Path, v1_summary: Path) -> Path:
     """Validate lane provenance/M9 and persist the viewer's two-lane contract."""
     contract = _read_object(root / "comparison.json")
@@ -189,11 +280,17 @@ def main() -> int:
     cached = sub.add_parser("materialize-cached-v1")
     cached.add_argument("--root", required=True, type=Path)
     cached.add_argument("--post-id", required=True)
+    luna = sub.add_parser("materialize-luna")
+    luna.add_argument("--root", required=True, type=Path)
+    luna.add_argument("--post-id", required=True)
+    luna.add_argument("--comments", required=True, type=Path)
     args = parser.parse_args()
     if args.command == "init":
         path = initialize_comparison(args.root, comparison_id=args.comparison_id, notes=args.notes)
     elif args.command == "materialize-cached-v1":
         path = materialize_cached_v1(args.root, post_id=args.post_id)
+    elif args.command == "materialize-luna":
+        path = materialize_luna_comments(args.root, post_id=args.post_id, comments_path=args.comments)
     else:
         path = finalize_comparison(args.root.resolve(), args.legacy_summary, args.v1_summary)
     sys.stdout.write(str(path) + "\n")

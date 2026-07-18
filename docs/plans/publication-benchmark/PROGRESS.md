@@ -27,12 +27,13 @@ Keep this file current. Newest status at the top of each phase section. Dates ar
 ### 2026-07-18 — Official-codec service implemented and deployed
 
 - Added a versioned FastAPI service around the official EGS hide/extract functions in the
-  official baseline repo; local commit and deployed checkout: `cf3f0f0`.
+  official baseline repo; local commit and deployed checkout: `ae520f7`.
 - Installed official llama.cpp `b10068` beside the remote Qwen3.5-9B GGUF and reused the host's
   CUDA 12 runtime.
 - Added deterministic framing, `/health`, `/hide`, `/reveal`, `/capacity_probe`, token-ID replay,
-  runtime identity, and six offline tests.
-- Frozen Gemma 3 12B judge/paraphraser download started; next gate is service round-trip.
+  runtime identity, chat-template handling, sentence completion, and eight offline tests.
+- Live local-GPU round trip passed: health operational/model loaded; secret `A` recovered exactly
+  from a natural completed sentence. Frozen Gemma 3 12B judge/paraphraser download is running.
 
 ## Phase 0 — Persist the benchmark workstream
 

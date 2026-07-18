@@ -15,6 +15,14 @@ Keep this file current. Newest status at the top of each phase section. Dates ar
 
 ## Phase 2 — Freeze the protocol
 
+### 2026-07-18 — Stage A stopped: local LM Studio unavailable
+
+- Started the authorized live preparation after committing the authorization as `2fe3ca1`.
+- Search and fetch completed for the first live candidate, but angle generation could not
+  proceed because the configured local LM Studio endpoint (`192.168.100.136:1234`) timed out.
+- Stopped the preparation process tree. Stage A did not pass; no preflight was run and no
+  later stage was started. Resume Stage A only after the frozen local backend is reachable.
+
 ### 2026-07-18 — Live-call authorization granted (staged)
 
 - User authorized the remaining chargeable work after independent verification of Phase 0–2

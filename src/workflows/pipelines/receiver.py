@@ -18,15 +18,15 @@ from workflows.pipelines.gen_angles import GenAnglesPipeline
 from workflows.pipelines.research import ResearchPipeline
 from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.stego_codec import (
-    FRAME_MAGIC,
     build_dictionary,
     build_dictionary_report,
-    frame_bit_candidates_from_observations,
+    decode_elias_gamma,
     flatten_nested_angles,
     from_binary_utf8,
-    parse_framed_payload_bits,
+    parse_multi_frame_stream,
     recover_payload_bruteforce_comment_bits,
     recover_payload_with_compressed_full,
+    recoverable_frame_bit_candidates_from_observations,
     unprotect_payload,
 )
 from workflows.utils.text_utils import flatten_comments
@@ -286,6 +286,124 @@ def _recover_protected_payload_from_bits(bits: str) -> str:
     return payload
 
 
+def _frame_observation(
+    post: dict[str, Any],
+    comment: dict[str, Any],
+    context: dict[str, Any],
+    angles: list[dict[str, Any]],
+    decoded_index: int | None,
+    post_index: int,
+) -> dict[str, Any]:
+    base = {
+        "post_index": post_index,
+        "post_id": post.get("id"),
+        "comment_id": comment.get("id"),
+        "parent_id": comment.get("parent_id"),
+        "created_utc": comment.get("created_utc", 0),
+    }
+    if decoded_index is None:
+        return {**base, "failed": True, "error": "angle_decode_failed"}
+    candidates = recoverable_frame_bit_candidates_from_observations(
+        post=context,
+        parent_id=comment.get("parent_id"),
+        decoded_angle_index=decoded_index,
+        n_angles=len(angles),
+    )
+    return {
+        **base,
+        "decoded_angle_index": decoded_index,
+        "frame_candidates": candidates,
+        "capacity": len(candidates[0]) if candidates else 0,
+        "failed": not bool(candidates),
+        "error": None if candidates else "selection_recovery_failed",
+    }
+
+
+def _recover_multi_frame_stream(frames: list[dict[str, Any]]) -> str | None:
+    streams = [""]
+    for frame in frames:
+        next_streams = [
+            prefix + candidate
+            for prefix in streams
+            for candidate in frame.get("frame_candidates", [])
+            if _compact_prefix_is_valid(prefix + candidate, len(frames))
+        ]
+        streams = list(dict.fromkeys(next_streams))[:65536]
+        if not streams:
+            return None
+    valid_streams = [
+        stream for stream in streams if parse_multi_frame_stream(stream, len(frames)) is not None
+    ]
+    payloads = {
+        parsed["payload_bits"]
+        for stream in valid_streams
+        if (parsed := parse_multi_frame_stream(stream, len(frames))) is not None
+    }
+    return valid_streams[0] if len(payloads) == 1 else None
+
+
+def _compact_prefix_is_valid(stream: str, expected_frame_count: int) -> bool:
+    """Reject candidates once their self-delimiting control prefix is known."""
+    count = decode_elias_gamma(stream)
+    if count is None:
+        return True
+    frame_count, offset = count
+    if frame_count != expected_frame_count:
+        return False
+    length = decode_elias_gamma(stream, offset)
+    if length is None:
+        return True
+    payload_bit_length, payload_start = length
+    payload_end = payload_start + payload_bit_length
+    return len(stream) <= payload_end or set(stream[payload_end:]) <= {"0"}
+
+
+def _multi_frame_failure(
+    frames: list[dict[str, Any]], valid_frames: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "succeeded": False,
+        "payload": None,
+        "message_id": None,
+        "frame_count": len(valid_frames),
+        "posts_used": len({frame.get("post_id") for frame in valid_frames}),
+        "frames": frames,
+        "recovery_meta": {
+            "decoded_frames": len(valid_frames),
+            "failed_frames": sum(bool(frame.get("failed")) for frame in frames),
+            "ordering_source": "caller_supplied_frame_order",
+            "protocol": "multi_frame_count_length_v1",
+        },
+        "error": "Could not reconstruct a valid compact multi-frame payload",
+    }
+
+
+def _multi_frame_success(
+    frames: list[dict[str, Any]],
+    valid_frames: list[dict[str, Any]],
+    protected_payload: str,
+    payload: str,
+    payload_transform: str,
+    framed_bits: str,
+) -> dict[str, Any]:
+    return {
+        "succeeded": True,
+        "payload": payload,
+        "message_id": stable_hash(protected_payload),
+        "frame_count": len(valid_frames),
+        "posts_used": len({frame.get("post_id") for frame in valid_frames}),
+        "frames": frames,
+        "recovery_meta": {
+            "decoded_frames": len(valid_frames),
+            "failed_frames": sum(bool(frame.get("failed")) for frame in frames),
+            "ordering_source": "caller_supplied_frame_order",
+            "protocol": "multi_frame_count_length_v1",
+            "payload_transform": payload_transform,
+            "framed_payload_bits": framed_bits,
+        },
+    }
+
+
 class ReceiverPipeline:
     """Orchestrates data-load, research, angles, and decode to recover a stego payload."""
 
@@ -484,141 +602,94 @@ class ReceiverPipeline:
             info["semantic_decoded_angle_index"] = semantic_decoded_idx
         return payload, info
 
+    def _collect_multi_frame_frames(
+        self,
+        posts: list[dict[str, Any]],
+        sender_user_id: str,
+        ordered_frame_refs: list[dict[str, str]],
+    ) -> list[dict[str, Any]]:
+        posts_by_id = {str(post.get("id")): (index, post) for index, post in enumerate(posts)}
+        frames: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for ref in ordered_frame_refs:
+            post_id, comment_id = str(ref.get("post_id", "")), str(ref.get("comment_id", ""))
+            key = (post_id, comment_id)
+            if key in seen or post_id not in posts_by_id:
+                frames.append(
+                    {
+                        "post_id": post_id,
+                        "comment_id": comment_id,
+                        "failed": True,
+                        "error": "invalid_frame_reference",
+                    }
+                )
+                continue
+            seen.add(key)
+            post_index, post = posts_by_id[post_id]
+            comment = next(
+                (
+                    item
+                    for item in flatten_comments(post.get("comments", []))
+                    if str(item.get("id")) == comment_id
+                ),
+                None,
+            )
+            if comment is None or not _author_matches(comment, sender_user_id):
+                frames.append(
+                    {
+                        "post_id": post_id,
+                        "comment_id": comment_id,
+                        "failed": True,
+                        "error": "invalid_frame_reference",
+                    }
+                )
+                continue
+            context = build_pre_sender_post_all(post, sender_user_id)
+            angles = flatten_nested_angles(context)
+            body = comment.get("body")
+            decoded_index = (
+                self.decode.decode(stego_text=body, angles=angles, strict_mode=False)
+                if isinstance(body, str) and body.strip()
+                else None
+            )
+            frames.append(
+                _frame_observation(post, comment, context, angles, decoded_index, post_index)
+            )
+        return frames
+
     def run_multi_frame(
         self,
         posts_or_profile_feed: list[dict[str, Any]],
         sender_user_id: str,
         *,
+        ordered_frame_refs: list[dict[str, str]],
         payload_transform: str | None = None,
         on_progress: ProgressCb = None,
     ) -> dict[str, Any]:
-        ordered_frames: list[dict[str, Any]] = []
-        for post_index, post in enumerate(posts_or_profile_feed):
-            pre_sender = build_pre_sender_post_all(post, sender_user_id)
-            nested_angles = nested_angles_from_post(pre_sender)
-            tangents_db = flatten_nested_angles(pre_sender)
-            for comment in flatten_comments(post.get("comments", [])):
-                if not _author_matches(comment, sender_user_id):
-                    continue
-                body = comment.get("body")
-                if not isinstance(body, str) or not body.strip():
-                    continue
-                decoded_idx = self.decode.decode(
-                    stego_text=body,
-                    angles=tangents_db,
-                    strict_mode=False,
-                )
-                if decoded_idx is None:
-                    ordered_frames.append(
-                        {
-                            "post_id": post.get("id"),
-                            "comment_id": comment.get("id"),
-                            "parent_id": comment.get("parent_id"),
-                            "failed": True,
-                            "error": "angle_decode_failed",
-                        }
-                    )
-                    continue
-                candidates = frame_bit_candidates_from_observations(
-                    post=pre_sender,
-                    parent_id=comment.get("parent_id"),
-                    decoded_angle_index=decoded_idx,
-                    n_angles=len(tangents_db),
-                )
-                ordered_frames.append(
-                    {
-                        "post_index": post_index,
-                        "post_id": post.get("id"),
-                        "comment_id": comment.get("id"),
-                        "parent_id": comment.get("parent_id"),
-                        "created_utc": comment.get("created_utc", 0),
-                        "decoded_angle_index": decoded_idx,
-                        "frame_candidates": candidates,
-                        "capacity": len(candidates[0]) if candidates else 0,
-                        "failed": not bool(candidates),
-                        "error": None if candidates else "selection_recovery_failed",
-                    }
-                )
-        ordered_frames.sort(
-            key=lambda item: (
-                item.get("created_utc", 0),
-                item.get("post_index", 0),
-                str(item.get("comment_id", "")),
-            )
+        del on_progress
+        ordered_frames = self._collect_multi_frame_frames(
+            posts_or_profile_feed, sender_user_id, ordered_frame_refs
         )
         valid_frames = [frame for frame in ordered_frames if not frame.get("failed")]
-        candidate_streams = [""]
-        magic_len = len(FRAME_MAGIC)
-        version_bits = format(1, "08b")
-        header_len = magic_len + len(version_bits) + 64 + 32
-        for frame in valid_frames:
-            next_streams: list[str] = []
-            for prefix in candidate_streams:
-                for candidate in frame.get("frame_candidates", []):
-                    stream = prefix + candidate
-                    if len(stream) >= magic_len and stream[:magic_len] != FRAME_MAGIC:
-                        continue
-                    if len(stream) >= magic_len + len(version_bits):
-                        if stream[magic_len : magic_len + len(version_bits)] != version_bits:
-                            continue
-                    if len(stream) >= header_len:
-                        payload_bit_length = int(
-                            stream[magic_len + len(version_bits) : magic_len + len(version_bits) + 64],
-                            2,
-                        )
-                        total_bit_length = header_len + payload_bit_length
-                        if total_bit_length <= 0:
-                            continue
-                        if len(stream) > total_bit_length + frame.get("capacity", 0):
-                            continue
-                    next_streams.append(stream)
-            candidate_streams = list(dict.fromkeys(next_streams))[:65536]
-            if not candidate_streams:
-                break
-        parsed_frame = None
-        framed_bits = None
-        for stream in candidate_streams:
-            try:
-                parsed_frame = parse_framed_payload_bits(stream)
-                framed_bits = stream
-                break
-            except ValueError:
-                continue
-        if parsed_frame is None:
-            return {
-                "succeeded": False,
-                "payload": None,
-                "message_id": None,
-                "frame_count": len(valid_frames),
-                "posts_used": len({frame.get("post_id") for frame in valid_frames}),
-                "frames": ordered_frames,
-                "recovery_meta": {
-                    "checksum_status": "failed",
-                    "decoded_frames": len(valid_frames),
-                    "failed_frames": len([f for f in ordered_frames if f.get("failed")]),
-                    "ordering_source": "created_utc_then_comment_id",
-                },
-                "error": "Could not reconstruct a valid framed payload",
-            }
-        protected_payload = _recover_protected_payload_from_bits(parsed_frame["payload_bits"])
+        if len(valid_frames) != len(ordered_frames) or not valid_frames:
+            return _multi_frame_failure(ordered_frames, valid_frames)
+        framed_bits = _recover_multi_frame_stream(valid_frames)
         resolved_transform = payload_transform or get_workflow_payload_transform()
+        if framed_bits is None:
+            return _multi_frame_failure(ordered_frames, valid_frames)
+        parsed = parse_multi_frame_stream(framed_bits, len(valid_frames))
+        if parsed is None:
+            return _multi_frame_failure(ordered_frames, valid_frames)
+        protected_payload = _recover_protected_payload_from_bits(parsed["payload_bits"])
         payload = _decode_configured_payload(protected_payload, resolved_transform)
-        return {
-            "succeeded": True,
-            "payload": payload,
-            "message_id": stable_hash(protected_payload),
-            "frame_count": len(valid_frames),
-            "posts_used": len({frame.get("post_id") for frame in valid_frames}),
-            "frames": ordered_frames,
-            "recovery_meta": {
-                "checksum_status": "passed",
-                "decoded_frames": len(valid_frames),
-                "failed_frames": len([f for f in ordered_frames if f.get("failed")]),
-                "ordering_source": "created_utc_then_comment_id",
-                "payload_transform": resolved_transform,
-                "framed_payload_bits": framed_bits,
-            },
-        }
+        return _multi_frame_success(
+            ordered_frames,
+            valid_frames,
+            protected_payload,
+            payload,
+            resolved_transform,
+            framed_bits,
+        )
 
     def run(
         self,

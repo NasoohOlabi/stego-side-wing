@@ -7,7 +7,10 @@ from workflows.pipelines.receiver import (
     nested_angles_from_post,
 )
 from workflows.pipelines.stego import StegoPipeline
-from workflows.utils.stego_codec import augment_post, extract_invisible_payload
+from workflows.utils.stego_codec import (
+    augment_post,
+    extract_invisible_payload,
+)
 
 
 def test_locate_sender_stego_comment():
@@ -343,12 +346,17 @@ def test_receiver_decode_payload_uses_sender_audit_index_when_semantic_decode_dr
 
 def test_receiver_run_multi_frame_recovers_ordered_payload():
     sender = StegoPipeline.__new__(StegoPipeline)
-    sender.encode_binary_selection_bits = lambda bits, post, tag=None, max_retries=0: {
-        "succeeded": True,
-        "stego_text": f"carrier-{bits}",
-        "angle_index": int(bits[-2:] or "0", 2) % 3,
-        "sender_audit": {"bits": bits},
-    }
+
+    def encode(bits, post, tag=None, max_retries=0):
+        full_bits = bits
+        return {
+            "succeeded": True,
+            "stego_text": f"carrier-{full_bits}",
+            "angle_index": int(full_bits[-2:] or "0", 2) % 3,
+            "sender_audit": {"bits": full_bits},
+        }
+
+    sender.encode_binary_selection_bits = encode
     posts = []
     for idx in range(40):
         posts.append(
@@ -368,13 +376,35 @@ def test_receiver_run_multi_frame_recovers_ordered_payload():
     encoded = sender.encode_payload_frames("hi", posts, max_frames_per_post=4)
 
     rp = ReceiverPipeline()
-    rp.decode.decode = lambda **kwargs: int(
-        str(kwargs["stego_text"]).split("carrier-", 1)[1][-2:] or "0",
-        2,
-    ) % 3
+    rp.decode.decode = lambda **kwargs: (
+        int(
+            str(kwargs["stego_text"]).split("carrier-", 1)[1][-2:] or "0",
+            2,
+        )
+        % 3
+    )
 
-    out = rp.run_multi_frame(encoded["posts"], "sender", payload_transform="plain")
+    out = rp.run_multi_frame(
+        encoded["posts"],
+        "sender",
+        ordered_frame_refs=encoded["ordered_frame_refs"],
+        payload_transform="plain",
+    )
 
     assert out["succeeded"] is True
     assert out["payload"] == "hi"
     assert out["frame_count"] == len(encoded["frames"])
+
+
+def test_receiver_multi_frame_rejects_invalid_ordered_reference():
+    receiver = ReceiverPipeline.__new__(ReceiverPipeline)
+    receiver._collect_multi_frame_frames = lambda *args: [
+        {"post_id": "p1", "comment_id": "c1", "failed": True, "error": "invalid_frame_reference"}
+    ]
+
+    out = receiver.run_multi_frame(
+        [], "sender", ordered_frame_refs=[{"post_id": "p1", "comment_id": "c1"}]
+    )
+
+    assert out["succeeded"] is False
+    assert out["error"] == "Could not reconstruct a valid compact multi-frame payload"

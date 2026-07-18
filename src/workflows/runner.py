@@ -920,11 +920,13 @@ class WorkflowRunner:
         posts_or_profile_feed: list[dict[str, Any]],
         sender_user_id: str,
         *,
+        ordered_frame_refs: list[dict[str, str]],
         payload_transform: str | None = None,
     ) -> dict[str, Any]:
         return self.receiver.run_multi_frame(
             posts_or_profile_feed,
             sender_user_id,
+            ordered_frame_refs=ordered_frame_refs,
             payload_transform=payload_transform,
         )
 

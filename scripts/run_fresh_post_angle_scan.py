@@ -142,7 +142,9 @@ def select_unused_post_id(
     raise ValueError(f"No unused post found in {dataset_dir}")
 
 
-def _load_post(post_id: str, dataset_dir: Path, run_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def _load_post(
+    post_id: str, dataset_dir: Path, run_dir: Path
+) -> tuple[dict[str, Any], dict[str, Any]]:
     dataset_path = dataset_dir / f"{post_id}.json"
     if not dataset_path.exists():
         raise FileNotFoundError(dataset_path)
@@ -173,7 +175,9 @@ def _alignment_report(post: dict[str, Any], research_report: dict[str, Any]) -> 
             [
                 str(post.get("title", "")),
                 str(post.get("selftext", "")),
-                " ".join(str(c.get("body", "")) for c in flatten_comments(post.get("comments", []))[:20]),
+                " ".join(
+                    str(c.get("body", "")) for c in flatten_comments(post.get("comments", []))[:20]
+                ),
             ]
         )
     )
@@ -199,7 +203,9 @@ def _alignment_report(post: dict[str, Any], research_report: dict[str, Any]) -> 
             }
         )
     mean_post = sum(item["post_overlap_ratio"] for item in angle_scores) / max(1, len(angle_scores))
-    mean_search = sum(item["search_overlap_ratio"] for item in angle_scores) / max(1, len(angle_scores))
+    mean_search = sum(item["search_overlap_ratio"] for item in angle_scores) / max(
+        1, len(angle_scores)
+    )
     return {
         "post_id": post.get("id"),
         "post_token_count": len(post_tokens),
@@ -208,7 +214,9 @@ def _alignment_report(post: dict[str, Any], research_report: dict[str, Any]) -> 
         "mean_angle_post_overlap": mean_post,
         "mean_angle_search_overlap": mean_search,
         "likely_mismatch": bool(angles and mean_post < 0.03 and mean_search < 0.03),
-        "best_angles": sorted(angle_scores, key=lambda item: item["post_overlap_ratio"], reverse=True)[:10],
+        "best_angles": sorted(
+            angle_scores, key=lambda item: item["post_overlap_ratio"], reverse=True
+        )[:10],
         "worst_angles": sorted(angle_scores, key=lambda item: item["post_overlap_ratio"])[:10],
     }
 
@@ -224,7 +232,9 @@ def _comment_bits(post: dict[str, Any], comment_index: int | None) -> str:
     return encode_int(selection_index, comment_count)
 
 
-def build_angle_scan_bits(post: dict[str, Any], angle_index: int, comment_index: int | None = None) -> str:
+def build_angle_scan_bits(
+    post: dict[str, Any], angle_index: int, comment_index: int | None = None
+) -> str:
     angles = flatten_nested_angles(post)
     return _comment_bits(post, comment_index) + angle_bits_for_index(angle_index, len(angles))
 

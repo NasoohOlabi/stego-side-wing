@@ -182,6 +182,84 @@ def test_run_comparison_recovers_partial_from_422_best_candidate(monkeypatch) ->
     assert result["remaining_bits"] == 16
 
 
+def test_dynamic_frames_aggregate_verified_payload(monkeypatch) -> None:
+    def _fake_single(sample: svc.ComparisonInput) -> dict:
+        return {
+            "accepted": True,
+            "payload_bytes_actual": len(sample.target_payload.encode("utf-8")),
+            "encoded_bits": 72,
+            "stegotext": "A concise verified carrier.",
+            "decode_ok": True,
+        }
+
+    monkeypatch.setattr(svc, "run_comparison_sample", _fake_single)
+    result = svc.run_comparison_frames(
+        svc.ComparisonInput(
+            target_payload="12345678",
+            server_url="http://127.0.0.1:9000",
+            cover_texts=["One real comment.", "Another real comment."],
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["carrier_count"] == 1
+    assert result["payload_bits_encoded"] == 64
+    assert result["protocol_overhead_bits"] == 8
+
+
+def test_dynamic_frames_reject_unverified_partial_payload(monkeypatch) -> None:
+    monkeypatch.setattr(
+        svc,
+        "run_comparison_sample",
+        lambda sample: {
+            "accepted": True,
+            "partial": True,
+            "payload_bytes_actual": 0,
+            "encoded_bits": 16,
+            "stegotext": "partial",
+            "decode_ok": None,
+        },
+    )
+
+    result = svc.run_comparison_frames(
+        svc.ComparisonInput(
+            target_payload="12345678",
+            server_url="http://127.0.0.1:9000",
+            cover_texts=["One real comment.", "Another real comment."],
+        )
+    )
+
+    assert result["accepted"] is False
+    assert result["payload_bits_encoded"] == 0
+    assert result["remaining_payload"] == "12345678"
+
+
+def test_dynamic_frames_count_carrier_that_exceeds_word_budget(monkeypatch) -> None:
+    monkeypatch.setattr(
+        svc,
+        "run_comparison_sample",
+        lambda sample: {
+            "accepted": True,
+            "payload_bytes_actual": len(sample.target_payload.encode("utf-8")),
+            "encoded_bits": 72,
+            "stegotext": "Four word generated carrier.",
+            "decode_ok": True,
+        },
+    )
+
+    result = svc.run_comparison_frames(
+        svc.ComparisonInput(
+            target_payload="12345678",
+            server_url="http://127.0.0.1:9000",
+            cover_texts=["One real comment.", "Another real comment."],
+        ),
+        max_total_words=1,
+    )
+
+    assert result["accepted"] is False
+    assert result["word_count"] == 4
+
+
 def test_append_jsonl_writes_record(tmp_path: Path) -> None:
     out = tmp_path / "logs" / "x.jsonl"
     svc.append_jsonl(out, {"accepted": True})

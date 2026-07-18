@@ -38,6 +38,9 @@ from workflows.utils.stego_codec import (
     augment_post as codec_augment_post,
 )
 from workflows.utils.stego_codec import (
+    augment_post_with_recoverable_selection_bits as codec_augment_post_with_recoverable_selection_bits,
+)
+from workflows.utils.stego_codec import (
     augment_post_with_selection_bits as codec_augment_post_with_selection_bits,
 )
 from workflows.utils.stego_codec import (
@@ -47,21 +50,21 @@ from workflows.utils.stego_codec import (
     build_dictionary_report as codec_build_dictionary_report,
 )
 from workflows.utils.stego_codec import (
-    compress_payload as codec_compress_payload,
+    build_multi_frame_stream,
     comment_selection_index,
+    flatten_comments,
+    from_binary_utf8,
+    protect_payload,
+    selection_channel_capacity_report,
+)
+from workflows.utils.stego_codec import (
+    compress_payload as codec_compress_payload,
 )
 from workflows.utils.stego_codec import (
     embed_in_angle_selection as codec_embed_in_angle_selection,
 )
 from workflows.utils.stego_codec import (
     embed_in_comment_selection as codec_embed_in_comment_selection,
-)
-from workflows.utils.stego_codec import (
-    frame_payload_bits,
-    from_binary_utf8,
-    flatten_comments,
-    protect_payload,
-    selection_channel_capacity,
 )
 from workflows.utils.workflow_llm_prompts import stego_encode_prompts_for_style
 
@@ -408,6 +411,12 @@ def _with_selected_angle_anchor_variants(
     return texts
 
 
+def _is_synthetic_anchor_text(text: str) -> bool:
+    """Identify the deterministic decode-assistance fallback, not a model reply."""
+    normalized = " ".join(text.split()).lower()
+    return "i can see why people keep coming back to" in normalized
+
+
 def _extractive_candidate_texts(post: dict[str, Any]) -> list[str]:
     bodies = []
     for comment in flatten_comments(post.get("comments", [])):
@@ -498,8 +507,6 @@ def _append_comment_to_tree_with_flag(
     out: list[dict[str, Any]] = []
     inserted = False
     for raw in comments:
-        if not isinstance(raw, dict):
-            continue
         node = dict(raw)
         replies = list(node.get("replies", []) or [])
         current_id = str(node.get("id", ""))
@@ -648,55 +655,63 @@ class StegoPipeline:
             "protected_payload": protected_payload,
             "compression": compressed,
             "payload_bits": compressed_bits,
-            "framed_bits": frame_payload_bits(compressed_bits),
         }
 
-    def _frame_plan_for_post(
+    def _multi_frame_slots(
         self,
-        *,
-        post: dict[str, Any],
-        post_index: int,
-        framed_bits: str,
-        start_offset: int,
+        posts: list[dict[str, Any]],
         max_frames_per_post: int,
-    ) -> tuple[list[dict[str, Any]], int]:
-        capacity = selection_channel_capacity(post)
-        if capacity <= 0 or max_frames_per_post <= 0:
-            return [], start_offset
-        frames: list[dict[str, Any]] = []
-        cursor = start_offset
-        for frame_offset in range(max_frames_per_post):
-            if cursor >= len(framed_bits):
-                break
-            frame_bits = framed_bits[cursor : cursor + capacity]
-            augmentation = codec_augment_post_with_selection_bits(frame_bits, post)
-            parent_id = _planned_parent_id(augmentation)
-            comment_idx = comment_selection_index(post, parent_id)
-            frame_end = min(cursor + capacity, len(framed_bits))
-            frames.append(
+    ) -> list[dict[str, Any]]:
+        if max_frames_per_post <= 0:
+            return []
+        slots: list[dict[str, Any]] = []
+        for post_index, post in enumerate(posts):
+            capacity_report = selection_channel_capacity_report(post)
+            capacity = int(capacity_report["recoverable_capacity_bits"])
+            if capacity <= 0:
+                continue
+            slots.extend(
                 {
+                    "post": post,
                     "post_index": post_index,
-                    "frame_index": len(frames),
-                    "frame_bits": frame_bits,
-                    "bit_start": cursor,
-                    "bit_end": frame_end,
                     "capacity": capacity,
-                    "padding_bits": max(0, capacity - (frame_end - cursor)),
-                    "post_id": post.get("id"),
-                    "parent_id": parent_id,
-                    "comment_selection_index": comment_idx,
-                    "selected_angle_index": augmentation.get("angleEmbedding", {})
-                    .get("selectedAngle", {})
-                    .get("idx"),
-                    "selection_bits": {
-                        "comment_bits": augmentation.get("commentBits", ""),
-                        "angle_bits": augmentation.get("angleBits", ""),
-                    },
-                    "embedding_plan": augmentation,
+                    "capacity_report": capacity_report,
                 }
+                for _ in range(max_frames_per_post)
             )
-            cursor += capacity
-        return frames, cursor
+        return slots
+
+    def _planned_frame(
+        self, slot: dict[str, Any], frame_index: int, stream_bits: str, cursor: int
+    ) -> dict[str, Any]:
+        post = slot["post"]
+        capacity = slot["capacity"]
+        frame_bits = stream_bits[cursor : cursor + capacity]
+        augmentation = codec_augment_post_with_recoverable_selection_bits(frame_bits, post)
+        parent_id = _planned_parent_id(augmentation)
+        frame_end = min(cursor + capacity, len(stream_bits))
+        return {
+            "post_index": slot["post_index"],
+            "frame_index": frame_index,
+            "frame_bits": frame_bits,
+            "bit_start": cursor,
+            "bit_end": frame_end,
+            "capacity": capacity,
+            "capacity_report": slot["capacity_report"],
+            "bits_used": frame_end - cursor,
+            "padding_bits": max(0, capacity - (frame_end - cursor)),
+            "post_id": post.get("id"),
+            "parent_id": parent_id,
+            "comment_selection_index": comment_selection_index(post, parent_id),
+            "selected_angle_index": augmentation.get("angleEmbedding", {})
+            .get("selectedAngle", {})
+            .get("idx"),
+            "selection_bits": {
+                "comment_bits": augmentation.get("commentBits", ""),
+                "angle_bits": augmentation.get("angleBits", ""),
+            },
+            "embedding_plan": augmentation,
+        }
 
     def plan_payload_frames(
         self,
@@ -705,26 +720,44 @@ class StegoPipeline:
         max_frames_per_post: int = 3,
     ) -> dict[str, Any]:
         prepared = self._prepare_multi_frame_payload_bits(payload)
-        framed_bits = prepared["framed_bits"]
-        frames: list[dict[str, Any]] = []
-        posts_used = 0
-        cursor = 0
-        for post_index, post in enumerate(posts):
-            post_frames, cursor = self._frame_plan_for_post(
-                post=post,
-                post_index=post_index,
-                framed_bits=framed_bits,
-                start_offset=cursor,
-                max_frames_per_post=max_frames_per_post,
-            )
-            if post_frames:
-                posts_used += 1
-                frames.extend(post_frames)
-            if cursor >= len(framed_bits):
+        payload_bits = prepared["payload_bits"]
+        slots = self._multi_frame_slots(posts, max_frames_per_post)
+        available_capacity = sum(int(slot["capacity"]) for slot in slots)
+        selected: dict[str, Any] | None = None
+        selected_count = 0
+        capacity = 0
+        for count, slot in enumerate(slots, start=1):
+            capacity += int(slot["capacity"])
+            candidate = build_multi_frame_stream(payload_bits, count)
+            if capacity >= len(candidate["stream_bits"]):
+                selected, selected_count = candidate, count
                 break
-        remaining_bits = framed_bits[cursor:]
+        if selected is None:
+            required = len(
+                build_multi_frame_stream(payload_bits, max(1, len(slots)))["stream_bits"]
+            )
+            return {
+                "succeeded": False,
+                "payload": payload,
+                "message_id": stable_hash(prepared["protected_payload"]),
+                "frame_count": 0,
+                "posts_used": 0,
+                "frames": [],
+                "prepared_payload": prepared,
+                "remaining_bits": payload_bits,
+                "available_capacity_bits": available_capacity,
+                "required_capacity_bits": required,
+                "error": "Insufficient multi-frame capacity for compact payload stream",
+            }
+        stream_bits = selected["stream_bits"]
+        frames: list[dict[str, Any]] = []
+        cursor = 0
+        for frame_index, slot in enumerate(slots[:selected_count]):
+            frames.append(self._planned_frame(slot, frame_index, stream_bits, cursor))
+            cursor += int(slot["capacity"])
+        posts_used = len({frame["post_id"] for frame in frames})
         return {
-            "succeeded": not remaining_bits,
+            "succeeded": True,
             "payload": payload,
             "message_id": stable_hash(prepared["protected_payload"]),
             "frame_count": len(frames),
@@ -732,16 +765,16 @@ class StegoPipeline:
             "frames": frames,
             "recovery_meta": {
                 "payload_transform": prepared["payload_transform"],
-                "ordering_source": "planned_post_order_then_frame_order",
-                "framed_bit_length": len(framed_bits),
-                "payload_bit_length": len(prepared["payload_bits"]),
-                "payload_bits_crc32": stable_hash(prepared["payload_bits"]),
+                "protocol": "multi_frame_count_length_v1",
+                "ordering_source": "sender_frame_order",
+                "stream_bit_length": len(stream_bits),
+                "control_bit_length": len(selected["control_bits"]),
+                "payload_bit_length": len(payload_bits),
+                "available_capacity_bits": available_capacity,
             },
             "prepared_payload": prepared,
-            "remaining_bits": remaining_bits,
-            "error": None
-            if not remaining_bits
-            else "Insufficient multi-frame capacity for framed payload bitstream",
+            "remaining_bits": "",
+            "error": None,
         }
 
     def encode_payload_frames(
@@ -750,6 +783,7 @@ class StegoPipeline:
         posts: list[dict[str, Any]],
         max_frames_per_post: int = 3,
         tag: str | None = None,
+        max_retries: int = 0,
     ) -> dict[str, Any]:
         plan = self.plan_payload_frames(payload, posts, max_frames_per_post=max_frames_per_post)
         if not plan.get("succeeded"):
@@ -759,11 +793,13 @@ class StegoPipeline:
         created_utc_base = int(time.time())
         for global_frame_index, frame in enumerate(plan["frames"]):
             post = posts[frame["post_index"]]
+            embedding_plan = frame.get("embedding_plan", {})
+            selection_bits = embedding_plan.get("fullEncodedBits", frame["frame_bits"])
             result = self.encode_binary_selection_bits(
-                bits=frame["frame_bits"],
+                bits=selection_bits,
                 post=post,
                 tag=tag,
-                max_retries=0,
+                max_retries=max_retries,
             )
             frame_result = dict(frame)
             frame_result["succeeded"] = bool(result.get("succeeded"))
@@ -806,6 +842,10 @@ class StegoPipeline:
             **plan,
             "succeeded": True,
             "frames": encoded_frames,
+            "ordered_frame_refs": [
+                {"post_id": frame["post_id"], "comment_id": frame["comment_id"]}
+                for frame in encoded_frames
+            ],
             "posts": posts_out,
             "sender_user_id": "sender",
             "payload_transform": plan["prepared_payload"]["payload_transform"],
@@ -1178,6 +1218,10 @@ class StegoPipeline:
             key=lambda item: (
                 0 if item["accepted"] else 1,
                 0 if item["context_gate"]["passes"] else 1,
+                # The deterministic anchor is useful only when no natural
+                # candidate decodes. Prefer an equally decodable model reply
+                # even if its vocabulary is richer than the copied phrase.
+                1 if _is_synthetic_anchor_text(str(item["text"])) else 0,
                 0
                 if item["distance_bucket"] == "exact"
                 else (1 if item["distance_bucket"] == "adjacent" else 2),
@@ -1224,6 +1268,9 @@ class StegoPipeline:
                         "accepted": item["accepted"],
                         "rejection_reasons": item["rejection_reasons"],
                         "text_preview": item["text_preview"],
+                        "is_synthetic_anchor": _is_synthetic_anchor_text(
+                            str(item["text"])
+                        ),
                         "context_gate": item["context_gate"],
                     }
                     for item in evaluations
@@ -1315,6 +1362,62 @@ class StegoPipeline:
             llm_adapter_ms,
         )
         return str(revised).strip()
+
+    def _replace_synthetic_anchor_for_naturalness_gate(
+        self,
+        *,
+        validation: dict[str, Any],
+        encoded_results: list[dict[str, Any]],
+        tangents_db: list[dict[str, Any]],
+        selected_angle: dict[str, Any],
+        post_augmentation: dict[str, Any],
+        encode_run_id: str,
+        llm_timings: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Require a contextual revision when the gate selected an anchor fallback."""
+        if not naturalness_gate_enabled() or not validation.get("succeeded"):
+            return validation
+        accepted = validation.get("accepted_candidate") or {}
+        if not _is_synthetic_anchor_text(str(accepted.get("text", ""))):
+            return validation
+        group_index = int(accepted.get("group_index", -1))
+        if group_index < 0 or group_index >= len(encoded_results):
+            return validation
+        source_group = encoded_results[group_index]
+        revised_text = self._revise_candidate_text_contextually(
+            candidate_text=str(accepted.get("text", "")),
+            sample=source_group,
+            comment_embedding=post_augmentation["commentEmbedding"],
+            encode_run_id=encode_run_id,
+            sample_index=group_index,
+            llm_timings=llm_timings,
+        )
+        revised_validation = self._evaluate_candidate_groups(
+            encoded_results=[
+                {
+                    "category": source_group.get("category"),
+                    "source_quote": source_group.get("source_quote"),
+                    "tangent": source_group.get("tangent"),
+                    "prompt_style": "natural_sharpened",
+                    "texts": [revised_text],
+                    "generation_mode": "context_sharpen",
+                }
+            ],
+            tangents_db=tangents_db,
+            selected_angle=selected_angle,
+            post_augmentation=post_augmentation,
+            encode_run_id=encode_run_id,
+        )
+        revised_candidate = revised_validation.get("accepted_candidate") or {}
+        if revised_validation.get("succeeded") and not _is_synthetic_anchor_text(
+            str(revised_candidate.get("text", ""))
+        ):
+            return revised_validation
+        return {
+            **revised_validation,
+            "succeeded": False,
+            "synthetic_anchor_replacement_failed": True,
+        }
 
     def _cross_validate(
         self,
@@ -1600,6 +1703,15 @@ class StegoPipeline:
                     selected_angle=selected_angle,
                     post_augmentation=post_augmentation,
                     encode_run_id=encode_run_id,
+                )
+                validation = self._replace_synthetic_anchor_for_naturalness_gate(
+                    validation=validation,
+                    encoded_results=encoded_results,
+                    tangents_db=tangents_db,
+                    selected_angle=selected_angle,
+                    post_augmentation=post_augmentation,
+                    encode_run_id=encode_run_id,
+                    llm_timings=llm_timings,
                 )
                 validate_ms = _elapsed_ms_since(t_val)
                 attempt_ms = _elapsed_ms_since(t_attempt)
@@ -1962,6 +2074,15 @@ class StegoPipeline:
                     selected_angle=selected_angle,
                     post_augmentation=post_augmentation,
                     encode_run_id=encode_run_id,
+                )
+                validation = self._replace_synthetic_anchor_for_naturalness_gate(
+                    validation=validation,
+                    encoded_results=encoded_results,
+                    tangents_db=tangents_db,
+                    selected_angle=selected_angle,
+                    post_augmentation=post_augmentation,
+                    encode_run_id=encode_run_id,
+                    llm_timings=llm_timings,
                 )
                 if validation.get("succeeded"):
                     accepted_candidate = validation.get("accepted_candidate") or {}

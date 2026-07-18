@@ -59,3 +59,14 @@ def test_load_existing_counts(tmp_path: Path) -> None:
     assert processed == 3
     assert accepted == 1
     assert failed == 2
+
+
+def test_capacity_matched_mode_uses_one_explicit_payload_target() -> None:
+    mod = _load_module()
+
+    assert mod._payload_candidates_for_mode("capacity_matched", 21, ()) == (21,)
+    assert (
+        mod._payload_candidates_for_mode("max_capacity", 21, ())
+        == mod.ComparisonInput.payload_bits_candidates
+    )
+    assert mod._payload_candidates_for_mode("capacity_matched", 21, (8, 16)) == (8, 16)

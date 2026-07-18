@@ -1,27 +1,36 @@
 """Tests for shared stego codec (compress / embed / recover)."""
 
+import pytest
+
 from workflows.utils.stego_codec import (
     angle_selection_bit_width,
     augment_post,
     augment_post_with_selection_bits,
     build_dictionary,
+    build_multi_frame_stream,
     comment_selection_bit_width,
     compress_payload,
+    decode_elias_gamma,
     decompress_after_embed_prefix,
     embed_invisible_payload,
+    encode_elias_gamma,
     encode_int,
     extract_invisible_payload,
-    get_bit_width,
-    protect_payload,
-    recover_payload_bruteforce_comment_bits,
-    recover_payload_with_compressed_full,
-    strip_invisible_payload,
-    unprotect_payload,
     frame_bits_across_posts,
     frame_payload_bits,
+    get_bit_width,
     parse_framed_payload_bits,
+    parse_multi_frame_stream,
+    protect_payload,
     recover_bits_from_post_frames,
+    recover_payload_bruteforce_comment_bits,
+    recover_payload_with_compressed_full,
+    recoverable_frame_bit_candidates_from_observations,
+    recoverable_selection_channel_capacity,
     selection_channel_capacity,
+    selection_channel_capacity_report,
+    strip_invisible_payload,
+    unprotect_payload,
 )
 
 
@@ -159,22 +168,35 @@ def test_frame_payload_bits_round_trip_and_padding_trim():
     assert parsed["padding_bits"] == "0000"
 
 
+def test_compact_multi_frame_stream_round_trip_and_padding_trim():
+    payload_bits = "101010100"
+    stream = build_multi_frame_stream(payload_bits, frame_count=7)
+
+    parsed = parse_multi_frame_stream(stream["stream_bits"] + "000", expected_frame_count=7)
+
+    assert parsed is not None
+    assert parsed["payload_bits"] == payload_bits
+    assert parsed["padding_bits"] == "000"
+    assert decode_elias_gamma(encode_elias_gamma(7)) == (7, 5)
+
+
+def test_compact_multi_frame_stream_rejects_wrong_count_and_nonzero_padding():
+    stream = build_multi_frame_stream("101", frame_count=2)["stream_bits"]
+
+    assert parse_multi_frame_stream(stream, expected_frame_count=3) is None
+    assert parse_multi_frame_stream(stream + "1", expected_frame_count=2) is None
+
+
 def test_parse_framed_payload_bits_rejects_bad_magic_and_checksum():
     framed = frame_payload_bits("10101010")
     with_bad_magic = "0" + framed[1:]
     with_bad_checksum = framed[:-1] + ("1" if framed[-1] == "0" else "0")
 
-    try:
+    with pytest.raises(ValueError, match="magic"):
         parse_framed_payload_bits(with_bad_magic)
-        assert False, "expected bad magic failure"
-    except ValueError as exc:
-        assert "magic" in str(exc)
 
-    try:
+    with pytest.raises(ValueError, match="checksum"):
         parse_framed_payload_bits(with_bad_checksum)
-        assert False, "expected checksum failure"
-    except ValueError as exc:
-        assert "checksum" in str(exc)
 
 
 def test_selection_channel_capacity_matches_selected_embedding_width():
@@ -192,6 +214,53 @@ def test_selection_channel_capacity_matches_selected_embedding_width():
     }
 
     assert selection_channel_capacity(post) == 4
+
+
+def test_recoverable_selection_capacity_excludes_modulo_aliases():
+    post = {
+        "id": "p-safe-cap",
+        "comments": [
+            {"id": "c1", "author": "a", "body": "one", "replies": []},
+            {"id": "c2", "author": "b", "body": "two", "replies": []},
+        ],
+        "angles": [
+            {"source_quote": "q1", "tangent": "t1", "category": "c1"},
+            {"source_quote": "q2", "tangent": "t2", "category": "c2"},
+            {"source_quote": "q3", "tangent": "t3", "category": "c3"},
+        ],
+    }
+
+    assert recoverable_selection_channel_capacity(post) == 2
+    assert recoverable_frame_bit_candidates_from_observations(
+        post=post, parent_id="c1", decoded_angle_index=1, n_angles=3
+    ) == ["11"]
+
+
+@pytest.mark.parametrize(
+    ("comment_count", "tangent_count", "expected"),
+    [(0, 0, 0), (1, 1, 1), (2, 3, 2), (3, 4, 4), (7, 9, 6)],
+)
+def test_capacity_report_tracks_dynamic_comment_and_tangent_counts(
+    comment_count: int, tangent_count: int, expected: int
+) -> None:
+    post = {
+        "id": "dynamic",
+        "comments": [
+            {"id": f"c{i}", "author": "a", "body": "body", "replies": []}
+            for i in range(comment_count)
+        ],
+        "angles": [
+            {"source_quote": f"q{i}", "tangent": f"t{i}", "category": "c"}
+            for i in range(tangent_count)
+        ],
+    }
+
+    report = selection_channel_capacity_report(post)
+
+    assert report["comment_choices"] == comment_count + 1
+    assert report["tangent_choices"] == tangent_count
+    assert report["recoverable_capacity_bits"] == expected
+    assert recoverable_selection_channel_capacity(post) == expected
 
 
 def test_recover_with_compressed_full_accepts_modulo_angle_bits():

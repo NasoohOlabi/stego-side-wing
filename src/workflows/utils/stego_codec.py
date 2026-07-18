@@ -44,6 +44,74 @@ FRAME_HEADER_BITS = (
 
 
 @validate_call
+def encode_elias_gamma(value: int) -> str:
+    """Encode a positive integer as a self-delimiting Elias-gamma code."""
+    if value <= 0:
+        raise ValueError("Elias-gamma values must be positive")
+    binary = format(value, "b")
+    return ("0" * (len(binary) - 1)) + binary
+
+
+@validate_call
+def decode_elias_gamma(bits: str, offset: int = 0) -> tuple[int, int] | None:
+    """Decode one Elias-gamma integer and return its value and end offset."""
+    if offset < 0 or offset >= len(bits):
+        return None
+    first_one = bits.find("1", offset)
+    if first_one < 0:
+        return None
+    zero_count = first_one - offset
+    end = first_one + zero_count + 1
+    if end > len(bits):
+        return None
+    return int(bits[first_one:end], 2), end
+
+
+@validate_call
+def build_multi_frame_stream(payload_bits: str, frame_count: int) -> dict[str, Any]:
+    """Build the compact count-and-length stream used by the multi-frame PoC."""
+    if set(payload_bits) - {"0", "1"}:
+        raise ValueError("Payload bits must contain only '0' and '1'")
+    if not payload_bits:
+        raise ValueError("Multi-frame payload bits must not be empty")
+    count_bits = encode_elias_gamma(frame_count)
+    length_bits = encode_elias_gamma(len(payload_bits))
+    control_bits = count_bits + length_bits
+    return {
+        "stream_bits": control_bits + payload_bits,
+        "control_bits": control_bits,
+        "frame_count": frame_count,
+        "payload_bit_length": len(payload_bits),
+    }
+
+
+@validate_call
+def parse_multi_frame_stream(bits: str, expected_frame_count: int) -> dict[str, Any] | None:
+    """Parse a compact PoC stream, requiring declared count and zero padding."""
+    count = decode_elias_gamma(bits)
+    if count is None:
+        return None
+    frame_count, offset = count
+    length = decode_elias_gamma(bits, offset)
+    if length is None:
+        return None
+    payload_bit_length, payload_start = length
+    payload_end = payload_start + payload_bit_length
+    if frame_count != expected_frame_count or payload_end > len(bits):
+        return None
+    padding_bits = bits[payload_end:]
+    if set(padding_bits) - {"0"}:
+        return None
+    return {
+        "frame_count": frame_count,
+        "payload_bit_length": payload_bit_length,
+        "payload_bits": bits[payload_start:payload_end],
+        "control_bits": bits[:payload_start],
+        "padding_bits": padding_bits,
+    }
+
+
+@validate_call
 def is_non_empty_string(value: Any) -> bool:
     return isinstance(value, str) and len(value) > 0
 
@@ -735,9 +803,73 @@ def selection_channel_capacity(post: dict[str, Any]) -> int:
     return comment_bits + angle_bits
 
 
-def frame_bits_across_posts(
-    bits: str, posts: list[dict[str, Any]]
-) -> dict[str, Any]:
+def _recoverable_width(choice_count: int) -> int:
+    return int(math.log2(choice_count)) if choice_count > 1 else 0
+
+
+def recoverable_selection_channel_capacity(post: dict[str, Any]) -> int:
+    """Lossless capacity that excludes modulo-alias selection bit patterns."""
+    return int(selection_channel_capacity_report(post)["recoverable_capacity_bits"])
+
+
+@validate_call
+def selection_channel_capacity_report(post: dict[str, Any]) -> dict[str, int]:
+    """Describe physical and lossless capacity for one dynamic frame."""
+    comment_choices = comment_selection_choice_count(post)
+    tangent_choices = len(flatten_angle_groups(_nested_angle_groups(post.get("angles", []))))
+    comment_safe_width = _recoverable_width(comment_choices)
+    tangent_safe_width = _recoverable_width(tangent_choices)
+    return {
+        "comment_choices": comment_choices,
+        "tangent_choices": tangent_choices,
+        "comment_physical_width": comment_selection_bit_width(post),
+        "tangent_physical_width": angle_selection_bit_width(tangent_choices),
+        "comment_recoverable_bits": comment_safe_width,
+        "tangent_recoverable_bits": tangent_safe_width,
+        "recoverable_capacity_bits": comment_safe_width + tangent_safe_width,
+    }
+
+
+def _canonical_channel_bits(bits: str, safe_width: int, physical_width: int) -> tuple[str, str]:
+    selected, remaining, _ = take_bits(bits, safe_width)
+    value = int(selected or "0", 2)
+    return format(value, f"0{physical_width}b") if physical_width else "", remaining
+
+
+def augment_post_with_recoverable_selection_bits(bits: str, post: dict[str, Any]) -> dict[str, Any]:
+    """Embed bits through only one-to-one comment and angle selection states."""
+    comment_safe_width = _recoverable_width(comment_selection_choice_count(post))
+    nested_angles = _nested_angle_groups(post.get("angles", []))
+    angle_count = len(flatten_angle_groups(nested_angles))
+    angle_safe_width = _recoverable_width(angle_count)
+    comment_bits, remaining = _canonical_channel_bits(
+        bits, comment_safe_width, comment_selection_bit_width(post)
+    )
+    angle_bits, _ = _canonical_channel_bits(
+        remaining, angle_safe_width, angle_selection_bit_width(angle_count)
+    )
+    result = augment_post_with_selection_bits(comment_bits + angle_bits, post)
+    result["recoverableBits"] = bits[: comment_safe_width + angle_safe_width]
+    return result
+
+
+def recoverable_frame_bit_candidates_from_observations(
+    *, post: dict[str, Any], parent_id: Any, decoded_angle_index: int, n_angles: int
+) -> list[str]:
+    """Recover the unique lossless selection representation for one frame."""
+    comment_safe_width = _recoverable_width(comment_selection_choice_count(post))
+    angle_safe_width = _recoverable_width(n_angles)
+    comment_index = comment_selection_index(post, parent_id)
+    if comment_index >= (1 << comment_safe_width):
+        return []
+    if decoded_angle_index < 0 or decoded_angle_index >= (1 << angle_safe_width):
+        return []
+    comment_bits = format(comment_index, f"0{comment_safe_width}b") if comment_safe_width else ""
+    angle_bits = format(decoded_angle_index, f"0{angle_safe_width}b") if angle_safe_width else ""
+    return [comment_bits + angle_bits]
+
+
+def frame_bits_across_posts(bits: str, posts: list[dict[str, Any]]) -> dict[str, Any]:
     """Split an arbitrary bitstring across a sequence of posts.
 
     Each frame uses the existing single-post selection channel, so the caller can

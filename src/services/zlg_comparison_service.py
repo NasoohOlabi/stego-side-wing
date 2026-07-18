@@ -8,7 +8,7 @@ import random
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +25,30 @@ DEFAULT_MAX_BPW = 2
 DEFAULT_MAX_NEW_TOKENS = 48
 DEFAULT_QUALITY_MAX_WORDS = 40
 DEFAULT_QUALITY_MAX_RETRIES = 6
-DEFAULT_CAPACITY_CANDIDATES = (1, 4, 8, 11, 12, 13, 14, 16, 20, 24, 28, 32, 40, 48, 64, 80, 96, 128)
+DEFAULT_CAPACITY_CANDIDATES = (
+    1,
+    4,
+    8,
+    11,
+    12,
+    13,
+    14,
+    16,
+    20,
+    24,
+    28,
+    32,
+    40,
+    48,
+    64,
+    80,
+    96,
+    128,
+    160,
+    192,
+    224,
+    256,
+)
 DEFAULT_LOCAL_STEGO_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 FRAMING_HEADER_BITS = 16
 _LOCAL_MODEL_CACHE: dict[str, Any] = {}
@@ -453,6 +476,7 @@ class ComparisonInput:
     quality_max_words: int = DEFAULT_QUALITY_MAX_WORDS
     quality_max_retries: int = DEFAULT_QUALITY_MAX_RETRIES
     payload_bits_candidates: tuple[int, ...] = DEFAULT_CAPACITY_CANDIDATES
+    use_capacity_probe: bool = False
 
 
 def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -508,7 +532,7 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
     reveal_url = f"{base}/reveal"
 
     failure_reason: str | None = None
-    if not sample.server_url.startswith("local://"):
+    if sample.use_capacity_probe and not sample.server_url.startswith("local://"):
         started = time.perf_counter()
         try:
             probe_resp = _post_json(
@@ -761,6 +785,15 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
             "params_used": params_used if isinstance(params_used, dict) else None,
             "latency_ms": latency_ms,
             "attempt": attempt,
+            "reveal_context": {
+                "prompt": prompt,
+                "context_seed": context_seed,
+                "effective_prompt_hash": effective_prompt_hash,
+                "threshold": sample.threshold,
+                "temperature": sample.temperature,
+                "temperature_alpha": sample.temperature_alpha,
+                "max_bpw": sample.max_bpw,
+            },
         }
 
     return {
@@ -774,6 +807,89 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
         "params_used": None,
         "latency_ms": 0,
         "attempt": sample.max_retries,
+    }
+
+
+def _word_count(text: str) -> int:
+    return len(re.findall(r"\b[\w'-]+\b", text, flags=re.UNICODE))
+
+
+def _utf8_prefix(text: str, max_bytes: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _verified_capacity_fields(result: dict[str, Any]) -> dict[str, int]:
+    useful_bits = max(0, int(result.get("payload_bytes_actual") or 0) * 8)
+    total_bits = max(useful_bits, int(result.get("encoded_bits") or useful_bits))
+    return {
+        "payload_bits_encoded": useful_bits,
+        "protocol_overhead_bits": total_bits - useful_bits,
+        "total_embedded_bits": total_bits,
+    }
+
+
+def _verified_frame(sample: ComparisonInput) -> tuple[dict[str, Any], str]:
+    result = run_comparison_sample(replace(sample, use_capacity_probe=False))
+    if result.get("accepted") and not result.get("partial") and result.get("decode_ok") is True:
+        return result, sample.target_payload
+    if not result.get("partial"):
+        return result, ""
+    actual_bytes = int(result.get("payload_bytes_actual") or 0)
+    prefix = _utf8_prefix(sample.target_payload, actual_bytes)
+    if not prefix or prefix == sample.target_payload:
+        return result, ""
+    retry = run_comparison_sample(
+        replace(sample, target_payload=prefix, use_capacity_probe=False, seed=sample.seed + 1)
+    )
+    if retry.get("accepted") and not retry.get("partial") and retry.get("decode_ok") is True:
+        return retry, prefix
+    return retry, ""
+
+
+def run_comparison_frames(
+    sample: ComparisonInput, *, max_carriers: int = 8, max_total_words: int = 320
+) -> dict[str, Any]:
+    """Hide one payload across dynamically sized, independently verified ZLG carriers."""
+    remaining = sample.target_payload
+    frames: list[dict[str, Any]] = []
+    total_words = 0
+    for carrier_index in range(max(0, max_carriers)):
+        if not remaining:
+            break
+        frame, consumed = _verified_frame(
+            replace(sample, target_payload=remaining, seed=sample.seed + carrier_index * 2)
+        )
+        stegotext = str(frame.get("stegotext") or "")
+        words = _word_count(stegotext)
+        frame = {**frame, **_verified_capacity_fields(frame), "word_count": words}
+        frame["payload_segment"] = consumed
+        frames.append(frame)
+        total_words += words
+        if not consumed or total_words > max_total_words:
+            break
+        remaining = remaining[len(consumed) :]
+    target_bits = len(sample.target_payload.encode("utf-8")) * 8
+    useful_bits = (
+        len(sample.target_payload.encode("utf-8")) - len(remaining.encode("utf-8"))
+    ) * 8
+    total_bits = sum(int(frame["total_embedded_bits"]) for frame in frames)
+    succeeded = not remaining and all(frame.get("decode_ok") is True for frame in frames)
+    return {
+        "accepted": succeeded,
+        "reason": None if succeeded else "dynamic_carrier_budget_exhausted",
+        "frames": frames,
+        "carrier_count": len(frames),
+        "word_count": total_words,
+        "payload_bits_target": target_bits,
+        "payload_bits_encoded": useful_bits,
+        "protocol_overhead_bits": max(0, total_bits - useful_bits),
+        "total_embedded_bits": total_bits,
+        "remaining_payload": remaining,
+        "target_payload": sample.target_payload,
+        "decode_ok": succeeded,
     }
 
 

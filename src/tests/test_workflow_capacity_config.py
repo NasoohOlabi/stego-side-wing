@@ -76,6 +76,14 @@ def test_workflow_capacity_explicit_overrides(
         "dictionary_max_comments": 7,
         "angles_max_input_blocks": 11,
         "angles_max_output": 13,
+        "tangent_db": {
+            "builder": "legacy",
+            "min_relevance": 0.12,
+            "search_relevance_mult": 1.5,
+            "max_similarity": 0.7,
+            "min_size": 0,
+            "semantic_dedup": False,
+        },
     }
 
 

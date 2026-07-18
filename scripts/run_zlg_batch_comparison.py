@@ -4,12 +4,11 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-import sys
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC = _REPO_ROOT / "src"
@@ -85,12 +84,16 @@ def _build_cover_texts(
     title = str(context.get("title") or "").strip()
     selftext = str(context.get("selftext") or "")
     comment_lines = [
-        _clip(str(item.get("body") or ""), max_chain_chars) for item in picked if str(item.get("body") or "").strip()
+        _clip(str(item.get("body") or ""), max_chain_chars)
+        for item in picked
+        if str(item.get("body") or "").strip()
     ]
     comment_candidates: list[str] = []
     for line in comment_lines:
         comment_candidates.extend(_split_sentences(line))
-    comment_candidates = [sentence for sentence in comment_candidates if 4 <= len(_tokens_for_prompt(sentence)) <= 60]
+    comment_candidates = [
+        sentence for sentence in comment_candidates if 4 <= len(_tokens_for_prompt(sentence)) <= 60
+    ]
     if comment_candidates:
         return _dedupe_sentences(comment_candidates)[:32]
 
@@ -185,6 +188,18 @@ def _utf8_prefix_by_bytes(text: str, max_bytes: int) -> str:
     return "".join(out)
 
 
+def _payload_candidates_for_mode(
+    mode: str, our_embedded_bits: int, configured: tuple[int, ...]
+) -> tuple[int, ...]:
+    if configured:
+        return configured
+    if mode == "capacity_matched":
+        return (max(1, int(our_embedded_bits)),)
+    if mode == "max_capacity":
+        return ComparisonInput.payload_bits_candidates
+    raise ValueError(f"Unknown comparison mode: {mode}")
+
+
 def _extract_sample(
     entry: dict[str, Any], max_selftext_chars: int, max_chain_chars: int
 ) -> tuple[list[str], str, int]:
@@ -241,7 +256,17 @@ def main() -> int:
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--max-selftext-chars", type=int, default=2500)
     parser.add_argument("--max-chain-chars", type=int, default=1400)
-    parser.add_argument("--match-our-embedded-bits", action="store_true", default=True)
+    parser.add_argument(
+        "--comparison-mode",
+        choices=("capacity_matched", "max_capacity"),
+        default="capacity_matched",
+        help="Match useful payload bits, or independently probe ZLG's maximum capacity.",
+    )
+    parser.add_argument(
+        "--match-our-embedded-bits",
+        action="store_true",
+        help="Deprecated alias for --comparison-mode capacity_matched.",
+    )
     parser.add_argument("--zlg-max-new-tokens", type=int, default=48)
     parser.add_argument("--zlg-quality-max-words", type=int, default=40)
     parser.add_argument(
@@ -278,6 +303,7 @@ def main() -> int:
         for part in str(args.zlg_payload_bit_candidates).split(",")
         if part.strip()
     )
+    comparison_mode = "capacity_matched" if args.match_our_embedded_bits else args.comparison_mode
 
     for idx, entry in enumerate(entries):
         key = _entry_key(entry)
@@ -290,8 +316,8 @@ def main() -> int:
                 max(0, args.max_chain_chars),
             )
             target_payload = full_target_payload
-            if args.match_our_embedded_bits:
-                fair_payload_bytes = max(1, our_embedded_bits // 8)
+            if comparison_mode == "capacity_matched":
+                fair_payload_bytes = max(1, (our_embedded_bits + 7) // 8)
                 target_payload = _utf8_prefix_by_bytes(full_target_payload, fair_payload_bytes)
                 if not target_payload:
                     target_payload = "A"
@@ -307,7 +333,10 @@ def main() -> int:
                     n_cover=4,
                     max_new_tokens=max(1, args.zlg_max_new_tokens),
                     quality_max_words=max(1, args.zlg_quality_max_words),
-                    payload_bits_candidates=payload_bit_candidates or ComparisonInput.payload_bits_candidates,
+                    payload_bits_candidates=_payload_candidates_for_mode(
+                        comparison_mode, our_embedded_bits, payload_bit_candidates
+                    ),
+                    use_capacity_probe=comparison_mode == "max_capacity",
                 )
             )
             row = {
@@ -321,6 +350,12 @@ def main() -> int:
                 "full_payload": full_target_payload,
                 "our_embedded_bits_budget": our_embedded_bits,
                 "matched_payload_bytes_target": len(target_payload.encode("utf-8")),
+                "comparison_mode": comparison_mode,
+                "payload_bits_candidates": list(
+                    _payload_candidates_for_mode(
+                        comparison_mode, our_embedded_bits, payload_bit_candidates
+                    )
+                ),
                 **result,
             }
         except Exception as exc:
@@ -358,7 +393,9 @@ def main() -> int:
             "last_index": idx,
             "updated_at_utc": datetime.now(UTC).isoformat(),
         }
-        progress_path.write_text(json.dumps(progress, ensure_ascii=True, indent=2), encoding="utf-8")
+        progress_path.write_text(
+            json.dumps(progress, ensure_ascii=True, indent=2), encoding="utf-8"
+        )
         if args.sleep_seconds > 0:
             time.sleep(args.sleep_seconds)
 
@@ -369,6 +406,7 @@ def main() -> int:
         "processed_entries": len(done.intersection({_entry_key(e) for e in entries})),
         "accepted": accepted,
         "failed": failed,
+        "comparison_mode": comparison_mode,
         "results_jsonl": str(results_jsonl),
         "updated_at_utc": datetime.now(UTC).isoformat(),
     }

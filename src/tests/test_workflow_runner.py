@@ -39,11 +39,14 @@ def test_run_multi_frame_stego_and_receiver_delegate_to_pipelines():
             return {"kind": "stego", **kwargs}
 
     class _DummyReceiver:
-        def run_multi_frame(self, posts_or_profile_feed, sender_user_id, payload_transform=None):
+        def run_multi_frame(
+            self, posts_or_profile_feed, sender_user_id, ordered_frame_refs, payload_transform=None
+        ):
             return {
                 "kind": "receiver",
                 "posts": posts_or_profile_feed,
                 "sender_user_id": sender_user_id,
+                "ordered_frame_refs": ordered_frame_refs,
                 "payload_transform": payload_transform,
             }
 
@@ -51,7 +54,9 @@ def test_run_multi_frame_stego_and_receiver_delegate_to_pipelines():
     runner.receiver = _DummyReceiver()
 
     stego_out = runner.run_multi_frame_stego("payload", [{"id": "p1"}], max_frames_per_post=2)
-    recv_out = runner.run_multi_frame_receiver([{"id": "p1"}], "sender", payload_transform="plain")
+    recv_out = runner.run_multi_frame_receiver(
+        [{"id": "p1"}], "sender", ordered_frame_refs=[], payload_transform="plain"
+    )
 
     assert stego_out["kind"] == "stego"
     assert stego_out["max_frames_per_post"] == 2

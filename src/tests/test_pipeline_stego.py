@@ -16,8 +16,11 @@ def assert_no_invisible_carrier(text: str) -> None:
 
 def test_n8n_save_object_body_legacy_shape():
     body = n8n_save_object_body({"stego_text": "x", "embedding": {"a": 1}, "post": {"id": "1"}})
-    assert body == [{"stegoText": "x", "embedding": {"a": 1}, "post": {"id": "1"}}]
-    assert n8n_save_object_body({}) == [{"stegoText": "", "embedding": None, "post": None}]
+    assert body[0]["stegoText"] == "x"
+    assert body[0]["embedding"]["a"] == 1
+    assert "generationMeta" in body[0]["embedding"]
+    assert set(body[0]) == {"stegoText", "embedding", "post"}
+    assert n8n_save_object_body({})[0]["embedding"]["generationMeta"]["schemaVersion"] == 1
 
 
 def test_stego_helpers_cover_edge_cases():
@@ -208,6 +211,12 @@ def test_plan_payload_frames_is_deterministic_and_skips_zero_capacity_posts():
     assert plan1["succeeded"] is True
     assert plan1["frames"] == plan2["frames"]
     assert all(frame["post_id"] != "p0" for frame in plan1["frames"])
+    assert all(frame["capacity_report"]["comment_choices"] == 3 for frame in plan1["frames"])
+    assert all(frame["capacity_report"]["tangent_choices"] == 3 for frame in plan1["frames"])
+    assert sum(frame["bits_used"] for frame in plan1["frames"]) == plan1["recovery_meta"][
+        "stream_bit_length"
+    ]
+    assert all(frame["padding_bits"] == 0 for frame in plan1["frames"][:-1])
 
 
 def test_encode_payload_frames_builds_local_artifact_feed():
@@ -240,6 +249,7 @@ def test_encode_payload_frames_builds_local_artifact_feed():
     assert out["succeeded"] is True
     assert out["frames"]
     assert out["posts"]
+    assert out["ordered_frame_refs"]
     assert any(
         comment["author"] == "sender"
         for post in out["posts"]
@@ -608,6 +618,44 @@ def test_evaluate_candidate_groups_prefers_context_safe_exact_match():
 
     assert result["succeeded"] is True
     assert result["accepted_candidate"]["group_index"] == 1
+
+
+def test_evaluate_candidate_groups_prefers_model_reply_over_synthetic_anchor():
+    pipeline = StegoPipeline.__new__(StegoPipeline)
+    selected_angle = {
+        "idx": 0,
+        "category": "Work",
+        "tangent": "ending the work day",
+        "source_quote": "Putting the laptop away helps end the work day.",
+    }
+    post_augmentation = {
+        "commentEmbedding": {
+            "context": {"title": "Working from home", "selftext": "Need a routine."},
+            "pickedCommentChain": [{"name": "u1", "body": "I put my laptop away at five."}],
+        }
+    }
+    pipeline._decode_candidate = lambda **kwargs: (0, 1)
+    result = pipeline._evaluate_candidate_groups(
+        encoded_results=[
+            {
+                "category": "Work",
+                "source_quote": selected_angle["source_quote"],
+                "tangent": selected_angle["tangent"],
+                "prompt_style": "natural",
+                "texts": [
+                    "Packing the laptop away at five has made the evening feel separate from work.",
+                    "Putting the laptop away helps end the work day. I can see why people keep coming back to that point.",
+                ],
+            }
+        ],
+        tangents_db=[selected_angle],
+        selected_angle=selected_angle,
+        post_augmentation=post_augmentation,
+    )
+
+    assert result["succeeded"] is True
+    assert result["accepted_candidate"]["candidate_index"] == 0
+    assert result["validationDetails"]["candidates"][0]["is_synthetic_anchor"] is False
 
 
 def test_decode_rerank_promotes_lexically_grounded_candidate():

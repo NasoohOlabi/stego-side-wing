@@ -51,7 +51,7 @@ def test_build_angle_scan_bits_forces_one_payload_per_angle():
 
     payloads = [module.build_angle_scan_bits(post, idx) for idx in range(3)]
 
-    assert payloads == ["000", "001", "010"]
+    assert payloads == ["00", "01", "10"]
     assert len(set(payloads)) == 3
 
 

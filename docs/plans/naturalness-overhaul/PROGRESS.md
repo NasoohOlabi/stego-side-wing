@@ -105,6 +105,19 @@ preparing a corpus under the isolated dataset root; do not overwrite the reprodu
 
 ## Plan 3 — method-comparison-metrics-v2
 
+### 2026-07-18 — Phase 1 offline M1 scoring DONE, validated
+
+- Added deterministic M1 scoring with ties worth 0.5, post-clustered win rate, bootstrap CI,
+  sign test, invalid-response accounting, and judge provenance.
+- The scorer can write a standalone result and ingest it under
+  `human_likeness_preference` in the comparison `summary.json`.
+- No live judge calls or dataset regeneration were performed.
+
+Validation: M1 runner/scorer tests passed; Ruff, Pyright, and `git diff --check` passed.
+
+**Next:** expose M1 and sus-detection as the viewer headline, including clustered inference and
+provenance. Then proceed to offline M3/M4 judge scaffolding.
+
 ### 2026-07-18 — Phase 1 offline M1 judge runner DONE, validated
 
 - Added deterministic, position-randomized pairwise human-likeness tasks and a cached JSONL

@@ -105,6 +105,25 @@ preparing a corpus under the isolated dataset root; do not overwrite the reprodu
 
 ## Plan 3 — method-comparison-metrics-v2
 
+### 2026-07-18 — Viewer M7 tangent DB comparison panel DONE, validated
+
+- Added a legacy/v1 toggle to the ZLG comparison dashboard, backed by the persisted
+  `tangent_db_quality` object whose contract version is `tangent_db_quality_summary_v1`.
+- The v1 panel exposes post-clustered kept relevance, pairwise Jaccard, search share, kept
+  capacity, deduplication rate, and capacity-floor relaxation outcomes.
+- Absent or zero-post sides are explicitly labeled `Not run`; the panel is ready to accept
+  separate legacy/v1 summaries after a future comparison. No live comparison was performed.
+
+Validation: targeted Biome and `git diff --check` passed. Repo-wide TypeScript checking remains
+blocked only by the previously recorded stego-process/admin and Recharts errors; no diagnostic
+was introduced by this change. Viewer commit: `0fb5771`.
+
+**Next:** prepare a new isolated corpus using the Plan 1 dataset-root/manifest tooling, then run
+the explicit legacy-vs-v1 tangent DB comparison only when the live run is authorized. Persist
+the two summaries under `tangent_db_quality_summaries.legacy` and `.v1` so the completed viewer
+toggle can display both. Do not reuse or overwrite the reproducible corpus, and preserve the M9
+requirement that each payload produce a distinct our-method comment.
+
 ### 2026-07-18 — Phase 3 M7 offline summary contract DONE, validated
 
 - Extended `tangent_db_report.relevance` with the exact kept-score distribution and mean; its

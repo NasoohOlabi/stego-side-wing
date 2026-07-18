@@ -105,6 +105,23 @@ preparing a corpus under the isolated dataset root; do not overwrite the reprodu
 
 ## Plan 3 — method-comparison-metrics-v2
 
+### 2026-07-18 — Legacy/v1 offline comparison harness DONE, validated
+
+- Added `scripts/prepare_tangent_db_comparison.py` with an offline `init` command that creates
+  separate legacy and v1 dataset roots/manifests without making provider calls.
+- Added deterministic `finalize` validation: each manifest must match its lane, each summary
+  must retain the M9 `1.0` distinct-comment guard, and both must provide the M7 quality contract.
+  It writes the viewer-ready `tangent_db_quality_summaries.legacy` and `.v1` object.
+- Initialized `datasets/prep_runs/naturalness_legacy_v1_20260718/`; its comparison contract
+  records that no live provider call has started. The generated run root is intentionally ignored.
+
+Validation: 13 targeted tests passed; Ruff, Pyright, and `git diff --check` passed.
+
+**Next/blocker:** populate both initialized lanes and generate distinct comments per payload.
+That requires live workflow/provider calls and was not inferred from the broad continuation
+request. Once both lane summaries exist, run the harness `finalize` command; it will refuse any
+lane that weakens/fails M9 before producing the viewer-ready combined summary.
+
 ### 2026-07-18 — Viewer M7 tangent DB comparison panel DONE, validated
 
 - Added a legacy/v1 toggle to the ZLG comparison dashboard, backed by the persisted

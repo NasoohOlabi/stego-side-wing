@@ -216,6 +216,32 @@ def _context_drift_mismatches(
     ]
 
 
+def _tangent_db_parity_mismatch(
+    pre_sender_post: dict[str, Any], gen_angles_report: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Compare the sender's persisted tangent-DB recipe against the receiver's effective one.
+
+    Warn-only parity check (tangent-db-revamp plan section 5): the persisted post's stored DB
+    still governs decoding; a mismatch only diagnoses a config drift between prepare and decode.
+    Returns None when the post carries no report or when the config hashes agree.
+    """
+    sender_report = pre_sender_post.get("tangent_db_report")
+    if not isinstance(sender_report, dict):
+        return None
+    receiver_report = gen_angles_report.get("tangent_db_report")
+    receiver_hash = (
+        receiver_report.get("config_hash") if isinstance(receiver_report, dict) else None
+    )
+    sender_hash = sender_report.get("config_hash")
+    if sender_hash == receiver_hash:
+        return None
+    return {
+        "sender_config_hash": sender_hash,
+        "receiver_config_hash": receiver_hash,
+        "sender_config": sender_report.get("config"),
+    }
+
+
 def _payload_transform_from_audit(sender_audit: dict[str, Any] | None) -> str:
     if not isinstance(sender_audit, dict):
         return get_workflow_payload_transform()
@@ -341,6 +367,12 @@ class ReceiverPipeline:
             "dictionary_truncated_sources": dictionary_report["truncated_sources"],
             "dictionary_capacity_applied": dictionary_report["capacity_applied"],
         }
+        parity_mismatch = _tangent_db_parity_mismatch(pre_sender_post, ga["report"])
+        if parity_mismatch is not None:
+            self._log.warning(
+                "tangent_db_config_mismatch", post_id=post_id, **parity_mismatch
+            )
+            summary["tangent_db_config_mismatch"] = parity_mismatch
         reports = {"data_load": dl_report, "research": rs["report"], "gen_angles": ga["report"]}
         return rebuilt, {"summary": summary, "reports": reports}
 

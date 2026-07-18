@@ -436,6 +436,12 @@ def _extractive_angle_matches(candidate_text: str, selected_angle: dict[str, Any
     return False
 
 
+def _tangent_db_report_field(post: dict[str, Any]) -> dict[str, Any]:
+    """Echo the persisted v1 tangent-DB build report into the audit when the post carries one."""
+    report = post.get("tangent_db_report")
+    return {"tangent_db_report": report} if isinstance(report, dict) else {}
+
+
 def _sender_audit_from_post(
     post: dict[str, Any], post_augmentation: dict[str, Any]
 ) -> dict[str, Any]:
@@ -465,6 +471,7 @@ def _sender_audit_from_post(
         "selection_signature": post_augmentation.get("selectionSignature"),
         "comment_bits": post_augmentation.get("commentBits"),
         "angle_bits": post_augmentation.get("angleBits"),
+        **_tangent_db_report_field(post),
     }
 
 

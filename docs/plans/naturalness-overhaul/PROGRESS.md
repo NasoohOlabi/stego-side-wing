@@ -79,6 +79,58 @@ pipeline (viewer scan roots in `recent_updates_service.py`, the ad-hoc `/posts` 
 
 ## Plan 2 — tangent-db-revamp
 
+### 2026-07-18 — Luna M4 writing-quality pass DONE, validated
+
+- Used only the ChatGPT-backed Codex CLI subscription (`gpt-5.6-sol`, Luna worker role) for a
+  fresh lane-blind pass over the same 28 cached comments with the versioned M4
+  `writing_quality_v1` rubric. No OpenRouter, search, LM Studio, or external provider was used.
+- Strict structured-output validation confirmed 28 unique expected task IDs in order, integer
+  1–5 scores, and no missing/extra judgments. Persisted ignored root/per-lane JSONL results,
+  root/per-lane summaries with post summaries, private/blind tasks, prompt, schema, and raw output.
+- Legacy and v1 both averaged 5.0; the descriptive v1-minus-legacy difference is 0.0. All 28
+  scores hit the rubric ceiling, so this pass distinguishes neither lane and should be reported
+  with that ceiling-effect caveat. There is only one independent post.
+
+**Next:** run the M2 suspiciousness stage on these same 28 comments using a fresh lane-blind
+Codex CLI Luna pass. Persist tasks, raw judgments, scored root/per-lane outputs, post-clustered
+summaries, and provenance; keep the one-post and M4 ceiling-effect caveats. Do not use
+OpenRouter, search, LM Studio, or external providers.
+
+### 2026-07-18 — Luna M3 thread-relevance pass DONE, validated
+
+- Used only the ChatGPT-backed Codex CLI subscription (`gpt-5.6-sol`, Luna worker role) to
+  independently score all 28 cached legacy/v1 comments with the versioned 1–5 M3 relevance
+  rubric. No OpenRouter, search, LM Studio, or external provider was used.
+- The pass was lane-blind and comment-independent. Its shared context came only from the
+  accepted cached `1look5n` researched artifact; strict structured-output validation confirmed
+  28 unique expected task IDs, 28 integer scores in range, and no missing/extra judgments.
+- Persisted ignored root and per-lane JSONL results, root/per-lane summaries, private/blind task
+  manifests, cached context, prompt, schema, and raw Luna response. Legacy and v1 both averaged
+  3.0; the descriptive v1-minus-legacy difference is 0.0. There is only one independent post.
+
+**Next:** run M4 writing quality on the same 28 cached comments with a fresh lane-blind Codex
+CLI Luna pass and `config/evaluation_prompts/writing_quality_v1.txt`. Keep M3 and M4 separate;
+validate exact 28/28 unique task coverage and 1–5 scores, then persist root/per-lane results and
+post summaries. Do not use OpenRouter, search, LM Studio, or external providers.
+
+### 2026-07-18 — Audit follow-up: §5 receiver parity warning + sender_audit echo DONE, validated
+
+- Closed the two open plan-§5 integration items found by the naturalness-overhaul audit
+  (Claude session, concurrent with Luna's comparison work; working-tree only, not committed):
+  `_sender_audit_from_post` now echoes the post's persisted `tangent_db_report` into
+  `sender_audit`, and `ReceiverPipeline.rebuild_context` warns (`tangent_db_config_mismatch`,
+  warn-only — the stored DB still governs) when the sender's persisted `config_hash` differs
+  from the receiver's effective one, recording the mismatch in the rebuild summary.
+- Both changes are additive metadata/diagnostics: no bit contract, decode logic, tangent
+  ordering, or `config_hash` computation changed. Samples generated before the change simply
+  lack the audit field; existing lane artifacts and hash parity (`ee3a9048...`) stay valid.
+- New `src/tests/test_tangent_db_parity.py` (6 tests): audit echo present/absent, parity None
+  without a report or on hash agreement, mismatch payload on differing hash and on a
+  legacy-builder receiver.
+
+Validation: parity + tangent + receiver + stego + codec suites passed (74); Pyright 0 errors
+and Ruff clean on the touched files.
+
 ### 2026-07-18 — Luna M1 legacy-v1 judge pass DONE, validated
 
 - Ran the 14 matched same-slot legacy-v1 pairs through the ChatGPT-backed Codex CLI

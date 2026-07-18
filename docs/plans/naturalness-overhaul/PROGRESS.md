@@ -105,6 +105,27 @@ preparing a corpus under the isolated dataset root; do not overwrite the reprodu
 
 ## Plan 3 — method-comparison-metrics-v2
 
+### 2026-07-18 — Viewer Phase 2 M6 relabeling DONE, validated
+
+- Relabeled perplexity as a model-predictability/fluency proxy and KL/JSD as
+  word-distribution topical-fit proxies across the ZLG dashboard, histogram, metric cards,
+  and standalone perplexity/divergence report renderers.
+- Every affected surface now explicitly says these metrics do not measure reader-facing
+  naturalness or human authorship; the perplexity copy also notes that unusually low values
+  can characterize AI text.
+- Removed the remaining comparison-summary framing that called the distributional metrics
+  naturalness proxies. No metric computation or stored result changed.
+
+Validation: Biome and `git diff --check` passed for all five edited viewer files. Repo-wide
+TypeScript checking remains blocked by the previously recorded stego-process/admin and Recharts
+formatter errors; no new M6 diagnostic was introduced. Viewer commit: `1f39a14`.
+
+**Next:** begin Phase 3 M7 offline by defining and computing tangent-DB quality summaries from
+persisted `tangent_db_report` data (relevance distribution, source composition/search share,
+deduplication, and capacity-floor relaxation), with deterministic post-clustered reporting and
+tests. Do not run a live legacy-vs-v1 corpus comparison yet; expose the viewer toggle only after
+the summary contract exists.
+
 ### 2026-07-18 — Viewer M3/M4/M5 two-axis panel DONE, validated
 
 - Added a dedicated dashboard panel that separates M3 thread relevance from M4 judged writing

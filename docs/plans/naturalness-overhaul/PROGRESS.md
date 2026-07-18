@@ -79,6 +79,24 @@ pipeline (viewer scan roots in `recent_updates_service.py`, the ad-hoc `/posts` 
 
 ## Plan 2 — tangent-db-revamp
 
+### 2026-07-18 — Codex Luna comment candidates generated; materialization pending
+
+- Used only the ChatGPT-backed Codex CLI subscription (Luna worker role); no OpenRouter,
+  search, LM Studio, external provider, or judge call was made.
+- Generated and persisted 14 legacy plus 14 v1 ordinary-visible comment candidates for the
+  matched cached `1look5n` angle artifacts. Each lane has 14/14 unique strings (candidate M9
+  ratio `1.0`) and exact lane-count symmetry.
+- The broad and implementation Luna worker passes stalled before touching files, so these are
+  deliberately **not yet claimed as sender/receiver-validated benchmark rows**. Candidate data
+  is stored in the ignored isolated run root as `luna_comments.json` for the next agent.
+
+**Next:** add the deterministic materializer to `prepare_tangent_db_comparison.py`; map each
+candidate to its same-index angle/payload through the real codec sender primitive, verify it
+with the receiver primitive, write per-lane rows, and fail unless round trips pass and M9 remains
+exactly `1.0`. Then build lane summaries. Stop before judges; the first judge step afterward is
+M1 via `uv run python scripts/run_human_likeness_judge.py --input <lane>/paired_rows.jsonl
+--output <lane>/preference_results.jsonl --provider <approved-provider> --model <pinned-model>`.
+
 ### 2026-07-18 — Cached v1 angle artifact materialized and validated offline
 
 - Added `materialize-cached-v1` to the comparison harness. It copies the accepted lane's

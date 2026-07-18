@@ -79,6 +79,20 @@ pipeline (viewer scan roots in `recent_updates_service.py`, the ad-hoc `/posts` 
 
 ## Plan 2 — tangent-db-revamp
 
+### 2026-07-18 — Live legacy population attempted with free-only provider
+
+- Reused cached `datasets/news_researched` input; no search provider was called.
+- Routed `LLMAdapter`'s OpenAI-compatible `lm_studio` backend to OpenRouter and pinned
+  `nvidia/nemotron-nano-9b-v2:free`. A smoke call succeeded.
+- The first legacy angle-generation item failed closed: the model returned malformed JSON and
+  its repair response was also invalid. No angle/output artifact was accepted (`count=0`).
+- The supplied key stayed process-only and was not written to the repository.
+
+**Next:** retry the same cached legacy item with a stronger listed free model (prefer
+`nvidia/nemotron-3-super-120b-a12b:free`), validate its persisted angles, then mirror the exact
+cached input into the v1 lane. Keep search disabled/offline and do not advance to stego/judges
+until both angle lanes have accepted artifacts.
+
 ### 2026-07-18 — Phase 1 v1 emitted-angle selection DONE, offline validated
 
 - `WORKFLOW_TANGENT_DB_BUILDER=v1` now emits the deterministic builder's selected angles on

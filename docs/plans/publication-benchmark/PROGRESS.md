@@ -35,7 +35,9 @@ Keep this file current. Newest status at the top of each phase section. Dates ar
 - Added deterministic framing, `/health`, `/hide`, `/reveal`, `/capacity_probe`, token-ID replay,
   runtime identity, chat-template handling, sentence completion, and eight offline tests.
 - Live local-GPU round trip passed: health operational/model loaded; secret `A` recovered exactly
-  from a natural completed sentence. Frozen Gemma 3 12B judge/paraphraser download is running.
+  from a natural completed sentence. A real `/capacity_probe` trial also passed with exact decode,
+  quality acceptance, and framing accounting. Frozen Gemma 3 12B judge/paraphraser download is
+  running.
 
 ## Phase 0 — Persist the benchmark workstream
 

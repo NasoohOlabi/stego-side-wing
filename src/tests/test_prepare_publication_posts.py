@@ -21,3 +21,22 @@ def test_select_candidates_is_sorted_and_excludes_prior_posts(tmp_path: Path) ->
     selected = module.select_candidates(tmp_path, {"b"})
 
     assert [path.stem for path in selected] == ["a", "c"]
+
+
+def test_reuse_prepared_angle_requires_multiple_angles(tmp_path: Path) -> None:
+    module = _load_module()
+    source = tmp_path / "source.json"
+    destination = tmp_path / "destination.json"
+    source.write_text('{"angles": [{"angle": "a"}, {"angle": "b"}]}', encoding="utf-8")
+
+    assert module._reuse_prepared_angle(source, destination) is True
+    assert destination.read_bytes() == source.read_bytes()
+
+
+def test_used_ids_skips_non_json_lines(tmp_path: Path) -> None:
+    module = _load_module()
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "results.jsonl").write_text('---\n{"post_id": "used"}\n', encoding="utf-8")
+
+    assert module._used_zlg_post_ids(tmp_path) == {"used"}

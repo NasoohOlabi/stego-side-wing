@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,10 @@ def _used_zlg_post_ids(root: Path) -> set[str]:
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
-            row = json.loads(line)
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
             if isinstance(row, dict) and row.get("post_id"):
                 used.add(str(row["post_id"]))
     return used
@@ -58,6 +62,14 @@ def _prepare(post: dict[str, Any]) -> dict[str, Any]:
     return angled
 
 
+def _reuse_prepared_angle(source: Path, destination: Path) -> bool:
+    angled = _read_json(source)
+    if len(flatten_nested_angles(angled)) < 2:
+        return False
+    shutil.copyfile(source, destination)
+    return True
+
+
 def _write_ids(path: Path, post_ids: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(post_ids) + "\n", encoding="utf-8")
@@ -67,10 +79,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--count", type=int, default=100)
     parser.add_argument("--dataset-dir", default="datasets/news_cleaned")
+    parser.add_argument("--reuse-angles-dir", default="datasets/news_angles")
     parser.add_argument("--output-dir", default="metrics/benchmark/prepared_angles")
     parser.add_argument("--post-ids-output", default="metrics/benchmark/post_ids.txt")
+    parser.add_argument("--allow-live", action="store_true")
     args = parser.parse_args()
     dataset_dir = (ROOT / args.dataset_dir).resolve()
+    reuse_dir = (ROOT / args.reuse_angles_dir).resolve()
     output_dir = (ROOT / args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     excluded = _used_zlg_post_ids(ROOT / "metrics" / "zlg_comparison_runs")
@@ -80,10 +95,16 @@ def main() -> int:
             break
         trace = uuid4().hex
         try:
-            angled = _prepare(_read_json(path))
-            (output_dir / path.name).write_text(
-                json.dumps(angled, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            reused = reuse_dir / path.name
+            if reused.exists() and _reuse_prepared_angle(reused, output_dir / path.name):
+                LOG.bind(trace_id=trace, post_id=path.stem).info("benchmark_post_reused")
+            elif args.allow_live:
+                angled = _prepare(_read_json(path))
+                (output_dir / path.name).write_text(
+                    json.dumps(angled, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            else:
+                continue
             prepared.append(path.stem)
             _write_ids((ROOT / args.post_ids_output).resolve(), prepared)
             LOG.bind(trace_id=trace, post_id=path.stem).info("benchmark_post_prepared")

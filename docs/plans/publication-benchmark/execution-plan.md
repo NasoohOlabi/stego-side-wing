@@ -39,8 +39,9 @@ hide→reveal round trip succeeds; judge model reachable.
 
 ## Phase 2 — Freeze the protocol (cheap, deterministic)
 
-1. `uv run python scripts/prepare_publication_posts.py --count 100` — real-source posts,
-   excluding legacy ZLG demo post IDs.
+1. `uv run python scripts/prepare_publication_posts.py --count 100` — reuse eligible frozen
+   angle artifacts offline first. Add `--allow-live` only after explicit authorization to generate
+   missing real-source posts; legacy ZLG demo post IDs remain excluded.
 2. `uv run python scripts/benchmark_preflight.py ...` — freeze the manifest (post IDs +
    hashes, model manifest, protocol, deterministic 64-bit payloads).
 

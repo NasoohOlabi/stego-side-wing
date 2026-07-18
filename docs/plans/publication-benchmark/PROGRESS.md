@@ -7,11 +7,32 @@ Keep this file current. Newest status at the top of each phase section. Dates ar
 | Phase | State | Notes |
 |---|---|---|
 | 0. Persist benchmark workstream | ✅ complete | Focused commits; full quality gate green |
-| 1. Live infrastructure | 🔄 in progress | Implementing official-codec ZLG service |
-| 2. Freeze protocol | ⬜ blocked on 1 | |
+| 1. Live infrastructure | 🔄 in progress | ZLG service deployed; Gemma download running |
+| 2. Freeze protocol | 🔄 partial | 46/100 reused offline; 54 need authorized live preparation |
 | 3. Staged paired run | ⬜ needs authorization | Chargeable live calls |
 | 4. Post-hoc evaluation | ⬜ blocked on 3 | Includes multi-post legacy/v1 lanes |
 | 5. Report + paper | ⬜ blocked on 4 | |
+
+## Phase 2 — Freeze the protocol
+
+### 2026-07-18 — Offline preparation exhausted safely
+
+- Hardened malformed historical JSONL handling and made live preparation require `--allow-live`.
+- Reused all **46** eligible existing real-source angle artifacts without provider calls.
+- The remaining **54** posts require authorized search and angle-generation calls before the
+  100-post manifest can be frozen.
+
+## Phase 1 — Live infrastructure
+
+### 2026-07-18 — Official-codec service implemented and deployed
+
+- Added a versioned FastAPI service around the official EGS hide/extract functions in the
+  official baseline repo; local commit and deployed checkout: `cf3f0f0`.
+- Installed official llama.cpp `b10068` beside the remote Qwen3.5-9B GGUF and reused the host's
+  CUDA 12 runtime.
+- Added deterministic framing, `/health`, `/hide`, `/reveal`, `/capacity_probe`, token-ID replay,
+  runtime identity, and six offline tests.
+- Frozen Gemma 3 12B judge/paraphraser download started; next gate is service round-trip.
 
 ## Phase 0 — Persist the benchmark workstream
 

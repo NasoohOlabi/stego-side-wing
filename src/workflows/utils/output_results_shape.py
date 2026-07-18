@@ -7,6 +7,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
+from infrastructure.sample_provenance import attach_sample_provenance
+
 MigrateOutcome = Literal["ok", "would_migrate", "migrated", "other", "error"]
 
 N8N_ARTIFACT_KEYS = frozenset({"stegoText", "embedding", "post"})
@@ -33,13 +35,14 @@ def n8n_save_object_body(result: dict[str, Any]) -> list[dict[str, Any]]:
     """Same shape as n8n Save node: one-element array, camelCase keys."""
     stego = result.get("stego_text")
     stego_str = stego if isinstance(stego, str) else ""
-    return [
+    artifact = [
         {
             "stegoText": stego_str,
             "embedding": result.get("embedding"),
             "post": result.get("post"),
         }
     ]
+    return attach_sample_provenance(artifact)  # type: ignore[return-value]
 
 
 def assert_valid_n8n_stego_artifact(data: Any) -> None:

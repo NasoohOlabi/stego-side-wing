@@ -136,8 +136,12 @@ def save_json():
         # Write JSON to file with pretty formatting
         import json
 
+        from infrastructure.sample_provenance import attach_sample_provenance
+
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False, sort_keys=True)
+            json.dump(
+                attach_sample_provenance(data), f, indent=2, ensure_ascii=False, sort_keys=True
+            )
 
         return jsonify(
             {

@@ -5,12 +5,14 @@ Run from repo root::
     uv run python scripts/migrate_output_results_n8n_shape.py
     uv run python scripts/migrate_output_results_n8n_shape.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
 import sys
 from fnmatch import fnmatch
 from pathlib import Path
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:

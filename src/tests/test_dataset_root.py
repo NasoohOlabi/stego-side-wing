@@ -9,6 +9,7 @@ from infrastructure.prep_run_manifest import (
     build_prep_run_manifest,
     write_prep_run_manifest,
 )
+from services.posts_service import list_posts
 
 ALL_STEPS = [
     "filter-url-unresolved",
@@ -48,6 +49,18 @@ def test_root_rebases_every_step_dir_by_leaf_name(monkeypatch):
         root / "news_url_fetched",
         root / "news_researched",
     )
+
+
+def test_posts_listing_uses_rebased_step_dirs(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("WORKFLOW_DATASET_ROOT", str(tmp_path))
+    source = tmp_path / "news_researched"
+    (tmp_path / "news_angles").mkdir()
+    source.mkdir()
+    (source / "isolated.json").write_text("{}", encoding="utf-8")
+
+    assert list_posts(count=1, step="angles-step") == {
+        "fileNames": ["isolated.json"]
+    }
 
 
 def test_seed_corpus_stays_global_by_default(monkeypatch):

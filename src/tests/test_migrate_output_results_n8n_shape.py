@@ -41,7 +41,10 @@ def test_migrate_file_dry_run_and_apply(tmp_path: Path) -> None:
 
     assert migrate_output_results_file(p, apply=True) == "migrated"
     loaded = json.loads(p.read_text(encoding="utf-8"))
-    assert loaded == n8n_save_object_body(flat)
+    expected = n8n_save_object_body(flat)
+    loaded[0]["embedding"]["generationMeta"].pop("generatedAtUtc", None)
+    expected[0]["embedding"]["generationMeta"].pop("generatedAtUtc", None)
+    assert loaded == expected
 
     assert migrate_output_results_file(p, apply=False) == "ok"
 

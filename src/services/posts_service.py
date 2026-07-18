@@ -5,7 +5,8 @@ import logging
 import os
 from typing import Any
 
-from infrastructure.config import STEPS
+from infrastructure.config import STEPS, get_step_dirs
+from infrastructure.sample_provenance import attach_sample_provenance
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +81,9 @@ def list_posts(
     if step not in STEPS:
         raise ValueError(f"Invalid step: {step}")
 
-    src_dir = STEPS[step]["source_dir"]
-    dest_dir = STEPS[step]["dest_dir"]
+    src_path, dest_path = get_step_dirs(step)
+    src_dir = str(src_path)
+    dest_dir = str(dest_path)
 
     if not os.path.isdir(src_dir):
         raise FileNotFoundError(
@@ -166,7 +168,7 @@ def get_post(post: str, step: str) -> dict[str, Any]:
     if step not in STEPS:
         raise ValueError(f"Invalid step: {step}")
 
-    src_dir = STEPS[step]["source_dir"]
+    src_dir = str(get_step_dirs(step)[0])
     file_path = os.path.join(src_dir, post)
 
     if not os.path.exists(file_path):
@@ -202,7 +204,7 @@ def save_post(post_data: dict[str, Any], step: str) -> dict[str, Any]:
     if not post_id:
         raise ValueError("Post must include 'id' field")
 
-    dest_dir = STEPS[step]["dest_dir"]
+    dest_dir = str(get_step_dirs(step)[1])
     os.makedirs(dest_dir, exist_ok=True)
     dest_file_path = os.path.join(dest_dir, f"{post_id}.json")
 
@@ -241,12 +243,13 @@ def save_object(data: Any, step: str, filename: str) -> dict[str, Any]:
     if os.path.basename(filename) != filename:
         raise ValueError("'filename' must not contain directory separators")
 
-    dest_dir = STEPS[step]["dest_dir"]
+    dest_dir = str(get_step_dirs(step)[1])
     os.makedirs(dest_dir, exist_ok=True)
     dest_file_path = os.path.join(dest_dir, filename)
 
+    output = attach_sample_provenance(data) if step == "final-step" else data
     with open(dest_file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        json.dump(output, f, indent=2, ensure_ascii=False)
 
     logger.info(
         "save_object",

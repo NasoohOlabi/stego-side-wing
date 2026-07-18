@@ -18,11 +18,12 @@ if str(_SRC) not in sys.path:
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from infrastructure.json_logging import configure_api_logging  # noqa: E402
-from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 from loguru import logger  # noqa: E402
 from run_actual_workload_e2e import DEFAULT_VARIANTS, run_actual_workload_e2e  # noqa: E402
 from run_encoding_config_e2e import run_encoding_config_e2e  # noqa: E402
+
+from infrastructure.json_logging import configure_api_logging  # noqa: E402
+from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 
 RUNS_ROOT = _REPO_ROOT / "metrics" / "pareto_runs"
 _PARETO_LOG = logger.bind(component="ParetoSearch")
@@ -40,7 +41,9 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _summary_rows(stage: str, result: dict[str, Any], *, payload_bytes: int | None) -> list[dict[str, Any]]:
+def _summary_rows(
+    stage: str, result: dict[str, Any], *, payload_bytes: int | None
+) -> list[dict[str, Any]]:
     summaries = result.get("summaries") or result.get("profile_summaries") or []
     rows: list[dict[str, Any]] = []
     summary_list = summaries if isinstance(summaries, list) else []
@@ -245,7 +248,9 @@ def run_pareto_search(
             compute_perplexity=compute_perplexity,
             resume=resume,
         )
-        rows.extend(_summary_rows(f"synthetic_{payload_bytes}b", result, payload_bytes=payload_bytes))
+        rows.extend(
+            _summary_rows(f"synthetic_{payload_bytes}b", result, payload_bytes=payload_bytes)
+        )
         _write_rollups(resolved_run_dir, rows, next_batch="real_screen")
     real = _run_or_load_real(
         run_dir=resolved_run_dir,

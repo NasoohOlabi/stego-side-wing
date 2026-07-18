@@ -9,6 +9,7 @@ Usage (from repo root):
 Exits 0 on HTTP 200 with content; non-zero on failure. Helps reproduce
 RemoteDisconnected vs 4xx/5xx vs timeouts without running the full pipeline.
 """
+
 from __future__ import annotations
 
 import argparse

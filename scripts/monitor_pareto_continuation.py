@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -149,18 +149,20 @@ def _start_new_run(reason: str) -> None:
     ]
     for v in VARIANTS:
         args.extend(["--variant", v])
-    args.extend([
-        "--samples-per-profile",
-        "50",
-        "--max-retries",
-        "1",
-        "--run-dir",
-        str(run_dir),
-        "--progress-log",
-        str(progress),
-        "--log-level",
-        "INFO",
-    ])
+    args.extend(
+        [
+            "--samples-per-profile",
+            "50",
+            "--max-retries",
+            "1",
+            "--run-dir",
+            str(run_dir),
+            "--progress-log",
+            str(progress),
+            "--log-level",
+            "INFO",
+        ]
+    )
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     out = progress.open("a", encoding="utf-8")
     err = stderr.open("a", encoding="utf-8")
@@ -176,7 +178,13 @@ def _start_new_run(reason: str) -> None:
         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
-    _event("restart", reason=reason, run_dir=str(run_dir), progress_log=str(progress), stderr_log=str(stderr))
+    _event(
+        "restart",
+        reason=reason,
+        run_dir=str(run_dir),
+        progress_log=str(progress),
+        stderr_log=str(stderr),
+    )
 
 
 def main() -> None:

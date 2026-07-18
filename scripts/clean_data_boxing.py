@@ -1,7 +1,7 @@
 import json
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC = _REPO_ROOT / "src"
@@ -18,16 +18,12 @@ for file in os.listdir("datasets/news_angles"):
         continue
     file_path = os.path.join("datasets/news_angles", file)
     file_content = None
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(file_path, encoding="utf-8") as f:
         file_content = json.load(f)
     if file_content is None:
         continue
     # if the content is an object with only one key "data"
-    if (
-        isinstance(file_content, dict)
-        and len(file_content) == 1
-        and "data" in file_content
-    ):
+    if isinstance(file_content, dict) and len(file_content) == 1 and "data" in file_content:
         file_content = file_content["data"]
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(file_content, f, indent=4)
@@ -39,14 +35,11 @@ for file in os.listdir("datasets/news_angles"):
         files_to_delete.append(file_path)
         print(f"File {file} will be deleted")
     elif isinstance(file_content["search_results"], dict) and all(
-        (isinstance(v, str) and len(v) == 0)
-        for v in file_content["search_results"].values()
+        (isinstance(v, str) and len(v) == 0) for v in file_content["search_results"].values()
     ):
         # convert it to a list
         file_content["search_results"] = [
-            item
-            for sublist in file_content["search_results"].values()
-            for item in sublist
+            item for sublist in file_content["search_results"].values() for item in sublist
         ]
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(file_content, f, indent=4)
@@ -55,11 +48,7 @@ for file in os.listdir("datasets/news_angles"):
         not isinstance(x, str) for x in file_content["search_results"]
     ):
         file_content["search_results"] = [
-            (
-                item.get(
-                    "content_analysis", item.get("snippet", item.get("fetched_content"))
-                )
-            )
+            (item.get("content_analysis", item.get("snippet", item.get("fetched_content"))))
             for item in file_content["search_results"]
         ]
         with open(file_path, "w", encoding="utf-8") as f:

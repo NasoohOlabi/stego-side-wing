@@ -61,6 +61,20 @@ uv run python scripts/run_actual_workload_e2e.py \
 - Keep post IDs fixed for cross-variant comparability.
 - Use `metrics/e2e_runs/latest_actual_workload_e2e.json` as the first status check after each run.
 
+## Multi-frame stego benchmark
+
+- Command: `uv run python scripts/run_multi_frame_stego_e2e.py`
+- Minimal local harness for encoding a payload across multiple frames per post (`StegoPipeline.encode_payload_frames`) and decoding it back (`ReceiverPipeline.run_multi_frame`). The PoC sends only Elias-gamma frame-count and payload-bit-length fields once at the start; all following bits are payload, with zero padding only in the final carrier.
+- The receiver is intentionally order-driven: it uses the sender-produced `ordered_frame_refs` list unchanged and does not scan or timestamp-sort comments.
+- Flags: `--mode synthetic|saved-posts` (default `synthetic`; `saved-posts` requires `--post-file <path>`), `--payload-bits` (default `256`), `--max-frames-per-post` (default `3`), `--samples` (parsed but currently unused — each invocation runs once).
+- Writes `{encoded, decoded}` to `metrics/e2e_runs/multi_frame_<timestamp>/result.json`.
+
+Example:
+
+```bash
+uv run python scripts/run_multi_frame_stego_e2e.py --mode synthetic --max-frames-per-post 3
+```
+
 ## Storage map
 
 - `metrics/e2e_runs/` - sample runs, profile summaries, and per-run summaries.

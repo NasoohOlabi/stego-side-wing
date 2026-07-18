@@ -1,7 +1,7 @@
 import json
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC = _REPO_ROOT / "src"
@@ -24,7 +24,7 @@ for file in os.listdir("datasets/news_researched"):
         continue
     file_path = os.path.join("datasets/news_researched", file)
     post = None
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(file_path, encoding="utf-8") as f:
         post = json.load(f)
     if post is None:
         continue
@@ -41,10 +41,7 @@ for file in os.listdir("datasets/news_researched"):
         isinstance(item, list) for item in search_results.values()
     ):
         search_results = [
-            item
-            for sublist in search_results.values()
-            for item in sublist
-            if item != ""
+            item for sublist in search_results.values() for item in sublist if item != ""
         ]
     else:
         files_to_delete.append(file_path)

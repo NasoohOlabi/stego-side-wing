@@ -55,6 +55,12 @@ def clear_workflow_capacity_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "WORKFLOW_DECODE_STRICT_DEFAULT",
         "WORKFLOW_NATURALNESS_GATE_ENABLED",
         "WORKFLOW_NATURALNESS_GATE_MODE",
+        "WORKFLOW_TANGENT_DB_BUILDER",
+        "WORKFLOW_TANGENT_DB_MIN_RELEVANCE",
+        "WORKFLOW_TANGENT_DB_SEARCH_RELEVANCE_MULT",
+        "WORKFLOW_TANGENT_DB_MAX_SIMILARITY",
+        "WORKFLOW_TANGENT_DB_MIN_SIZE",
+        "WORKFLOW_TANGENT_DB_SEMANTIC_DEDUP",
     )
     for key in strip_keys:
         monkeypatch.delenv(key, raising=False)

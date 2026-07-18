@@ -58,7 +58,7 @@ One switch chooses how most workflow and pipeline code talks to an LLM:
 
 ## Layout (high level)
 
-- `docs/` â€” API and operator-facing spec ([`docs/reference/api-spec.md`](docs/reference/api-spec.md)); workflow LLM copy lives in `config/workflow_llm_prompts.json` (see API spec / prompts routes)
+- `docs/` â€” API and operator-facing spec ([`docs/reference/api-spec.md`](docs/reference/api-spec.md)); workflow LLM copy lives in `config/workflow_llm_prompts.json` (see API spec / prompts routes). Sample-generation scripts (incl. multi-frame e2e) are documented in [`docs/results/workload-runs-and-artifacts.md`](docs/results/workload-runs-and-artifacts.md).
 - `scripts/` â€” **repo-root** standalone scripts (e.g. `avg_perplexity.py`, `avg_kld.py`; run as `uv run python scripts/<name>.py`)
 - `metrics/` â€” default output for metrics JSON reports (created on first run)
 - `src/app/` â€” Flask app factory, routes (e.g. `routes/api_v1_routes.py`), schemas

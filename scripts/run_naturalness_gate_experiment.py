@@ -13,8 +13,6 @@ _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from infrastructure.json_logging import configure_api_logging  # noqa: E402
-from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 from loguru import logger  # noqa: E402
 from run_actual_workload_e2e import (  # noqa: E402
     NATURALNESS_EXPERIMENT_ROOT,
@@ -22,6 +20,9 @@ from run_actual_workload_e2e import (  # noqa: E402
     _read_json,
     run_actual_workload_e2e,
 )
+
+from infrastructure.json_logging import configure_api_logging  # noqa: E402
+from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
 
 
 def _select_random_post_ids(

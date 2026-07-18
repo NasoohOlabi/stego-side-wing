@@ -15,7 +15,9 @@ def _read_text(value: str) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run one ZLG comparison sample against /hide + /reveal")
+    parser = argparse.ArgumentParser(
+        description="Run one ZLG comparison sample against /hide + /reveal"
+    )
     parser.add_argument("--domain", required=True, help="Domain text or path to a UTF-8 text file")
     parser.add_argument(
         "--comment-chain",

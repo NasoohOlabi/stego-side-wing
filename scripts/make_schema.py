@@ -1,6 +1,6 @@
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from genson import SchemaBuilder
 
@@ -42,7 +42,7 @@ input_path = "output-results/1look5n_v3.json"
 output_path = "schema.json"
 
 builder = SchemaBuilder()
-with open(input_path, "r", encoding="utf-8") as f:
+with open(input_path, encoding="utf-8") as f:
     builder.add_object(json.load(f))
 
 schema = builder.to_schema()

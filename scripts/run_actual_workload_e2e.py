@@ -24,13 +24,14 @@ _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from loguru import logger  # noqa: E402
+
 from infrastructure.config import (  # noqa: E402
     get_workflow_encoding_secret,
     get_workflow_encoding_settings,
 )
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
 from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
-from loguru import logger  # noqa: E402
 from services.stego_benchmark_service import (  # noqa: E402
     build_experiment_summary_metrics,
     build_sample_experiment_metrics,
@@ -91,9 +92,7 @@ TRANSIENT_SAMPLE_ERROR_MARKERS = (
     "SSLError",
     "ProtocolError",
 )
-RETRYABLE_STEGO_OUTPUT_ERROR_MARKERS = (
-    "Stego LLM output must be valid JSON",
-)
+RETRYABLE_STEGO_OUTPUT_ERROR_MARKERS = ("Stego LLM output must be valid JSON",)
 DEFAULT_MAX_TRANSIENT_SAMPLE_RETRIES = 3
 DEFAULT_TRANSIENT_SAMPLE_RETRY_BASE_DELAY_SECONDS = 30.0
 DEFAULT_MAX_ADAPTIVE_SAMPLE_RETRIES = 2
@@ -200,6 +199,7 @@ def _aggregate_angle_gate_reports(items: Sequence[dict[str, Any]]) -> dict[str, 
         for key, value in raw_counts.items():
             if isinstance(value, int):
                 reason_counts[str(key)] = reason_counts.get(str(key), 0) + value
+
     def _sum_int(key: str) -> int:
         total = 0
         for report in reports:
@@ -281,9 +281,7 @@ def _is_retryable_stego_output_error(exc: BaseException) -> bool:
     return any(marker.lower() in normalized for marker in RETRYABLE_STEGO_OUTPUT_ERROR_MARKERS)
 
 
-def _transient_sample_retry_delay_seconds(
-    retry_index: int, *, base_delay_seconds: float
-) -> float:
+def _transient_sample_retry_delay_seconds(retry_index: int, *, base_delay_seconds: float) -> float:
     if base_delay_seconds <= 0:
         return 0.0
     return base_delay_seconds * (2**retry_index)
@@ -514,9 +512,7 @@ def _run_sample(
                     transient_retry_count=attempt_index,
                     wait_seconds=wait_seconds,
                     retryable_failure_kind=(
-                        "stego_output"
-                        if _is_retryable_stego_output_error(exc)
-                        else "transient"
+                        "stego_output" if _is_retryable_stego_output_error(exc) else "transient"
                     ),
                     error=f"{type(exc).__name__}: {exc}",
                 )
@@ -524,7 +520,7 @@ def _run_sample(
                     time.sleep(wait_seconds)
                 attempt_index += 1
                 continue
-            setattr(exc, "feedback_envelope", envelope)
+            exc.feedback_envelope = envelope
             raise
 
 
@@ -729,7 +725,9 @@ def _build_progress_payload(
         for failure in failures_list:
             if not isinstance(failure, dict):
                 continue
-            failure_class = str(failure.get("failure_code") or _classify_failure(str(failure.get("error") or "")))
+            failure_class = str(
+                failure.get("failure_code") or _classify_failure(str(failure.get("error") or ""))
+            )
             classified.setdefault(failure_class, 0)
             total_failures.setdefault(failure_class, 0)
             classified[failure_class] += 1
@@ -752,8 +750,12 @@ def _build_progress_payload(
                 "receiver_success_rate": (
                     quality.get("receiver_success_rate") if isinstance(quality, dict) else None
                 ),
-                "matched_post_kl": quality.get("matched_post_kl") if isinstance(quality, dict) else None,
-                "matched_post_jsd": quality.get("matched_post_jsd") if isinstance(quality, dict) else None,
+                "matched_post_kl": quality.get("matched_post_kl")
+                if isinstance(quality, dict)
+                else None,
+                "matched_post_jsd": quality.get("matched_post_jsd")
+                if isinstance(quality, dict)
+                else None,
                 "perplexity": quality.get("perplexity") if isinstance(quality, dict) else None,
                 "judge_naturalness_mean": None,
                 "last_updated_utc": datetime.now(UTC).isoformat(),
@@ -937,9 +939,7 @@ def run_actual_workload_e2e(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=(
-            "Run actual model-backed stego/receiver/metrics e2e on real prepared posts."
-        )
+        description=("Run actual model-backed stego/receiver/metrics e2e on real prepared posts.")
     )
     parser.add_argument(
         "--profile",
@@ -1030,9 +1030,7 @@ def main() -> None:
         allow_post_reuse=bool(args.allow_post_reuse),
         fail_fast=bool(args.fail_fast),
         max_transient_sample_retries=args.max_transient_sample_retries,
-        transient_sample_retry_base_delay_seconds=(
-            args.transient_sample_retry_base_delay_seconds
-        ),
+        transient_sample_retry_base_delay_seconds=(args.transient_sample_retry_base_delay_seconds),
         feedback_run_dir=Path(args.feedback_run_dir) if args.feedback_run_dir else None,
         adaptive_feedback=bool(args.adaptive_feedback),
         max_adaptive_sample_retries=args.max_adaptive_sample_retries,

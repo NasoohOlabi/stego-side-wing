@@ -29,7 +29,9 @@ def _read_post(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _run_one(receiver: ReceiverPipeline, post: dict[str, Any], sender: str, *, volatile: bool) -> dict[str, Any]:
+def _run_one(
+    receiver: ReceiverPipeline, post: dict[str, Any], sender: str, *, volatile: bool
+) -> dict[str, Any]:
     return receiver.run(
         post,
         sender,

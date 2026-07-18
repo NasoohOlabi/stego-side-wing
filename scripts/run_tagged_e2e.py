@@ -12,9 +12,10 @@ _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from loguru import logger  # noqa: E402
+
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
 from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
-from loguru import logger  # noqa: E402
 from services.stego_metrics_service import run_divergence_metrics  # noqa: E402
 from workflows.adapters.backend_api import BackendAPIAdapter  # noqa: E402
 from workflows.pipelines.data_load import DataLoadPipeline  # noqa: E402
@@ -26,7 +27,6 @@ from workflows.utils.stego_codec import (  # noqa: E402
     extract_invisible_payload,
     strip_invisible_payload,
 )
-
 
 RUNS_ROOT = _REPO_ROOT / "metrics" / "e2e_runs"
 
@@ -407,9 +407,7 @@ def main() -> None:
         metrics_report_path=result["metrics_report_path"],
         posts_succeeded=result["posts_succeeded"],
         posts_failed=result["posts_failed"],
-        primary_kl=metrics["primary_baseline_matched_post"][
-            "average_kl_stego_vs_matched_post"
-        ],
+        primary_kl=metrics["primary_baseline_matched_post"]["average_kl_stego_vs_matched_post"],
         secondary_kl=metrics["secondary_baseline_global_corpus"][
             "average_kl_stego_vs_global_corpus"
         ],

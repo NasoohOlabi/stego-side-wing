@@ -14,16 +14,17 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from infrastructure.process_tracking import append_current_pid_to_log
 from langdetect import DetectorFactory, detect
+
+from infrastructure.process_tracking import append_current_pid_to_log
 
 DetectorFactory.seed = 0
 
@@ -76,9 +77,7 @@ def _is_english_text(text: str) -> bool:
     except Exception:
         # If langdetect fails, check if text is mostly ASCII
         # (English text is typically mostly ASCII)
-        ascii_ratio = (
-            sum(1 for ch in sample if ord(ch) < 128) / len(sample) if sample else 0
-        )
+        ascii_ratio = sum(1 for ch in sample if ord(ch) < 128) / len(sample) if sample else 0
         return ascii_ratio > 0.8  # More than 80% ASCII suggests English
 
 

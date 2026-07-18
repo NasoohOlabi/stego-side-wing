@@ -81,7 +81,11 @@ def _method_cards(summary: dict[str, Any]) -> str:
 def _metric_notes(summary: dict[str, Any], progress: dict[str, Any]) -> str:
     our = _method_block(summary, "our_method")
     zlg = _method_block(summary, "zlg")
-    paired = summary.get("paired_statistics") if isinstance(summary.get("paired_statistics"), dict) else {}
+    paired = (
+        summary.get("paired_statistics")
+        if isinstance(summary.get("paired_statistics"), dict)
+        else {}
+    )
     paired_n = paired.get("paired_n")
     zlg_payload = _num(zlg.get("payload_bits_encoded_mean"))
     our_payload = _num(our.get("payload_bits_encoded_mean"))
@@ -91,7 +95,9 @@ def _metric_notes(summary: dict[str, Any], progress: dict[str, Any]) -> str:
     our_ppl = _num(our.get("perplexity_gpt2_mean"))
     zlg_kld = _num(zlg.get("kl_global_corpus_mean"))
     our_kld = _num(our.get("kl_global_corpus_mean"))
-    payload_delta = None if zlg_payload is None or our_payload is None else zlg_payload - our_payload
+    payload_delta = (
+        None if zlg_payload is None or our_payload is None else zlg_payload - our_payload
+    )
     word_delta = None if zlg_words is None or our_words is None else zlg_words - our_words
     ppl_note = "Lower PPL usually means the text is easier for GPT-2 to predict, so it is a rough fluency check."
     if zlg_ppl is not None and our_ppl is not None:
@@ -126,7 +132,11 @@ _DELTA_LABELS = {
 
 
 def _paired_table(summary: dict[str, Any]) -> str:
-    stats = summary.get("paired_statistics") if isinstance(summary.get("paired_statistics"), dict) else {}
+    stats = (
+        summary.get("paired_statistics")
+        if isinstance(summary.get("paired_statistics"), dict)
+        else {}
+    )
     rows = []
     for key in _DELTA_LABELS:
         block = stats.get(key)
@@ -287,10 +297,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Render ZLG comparison HTML report.")
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--output", default="")
-    parser.add_argument("--limit", type=int, default=0, help="Number of paired sample groups to show. 0 means all.")
+    parser.add_argument(
+        "--limit", type=int, default=0, help="Number of paired sample groups to show. 0 means all."
+    )
     args = parser.parse_args()
     run_dir = Path(args.run_dir).resolve()
-    output = Path(args.output).resolve() if args.output else run_dir / "comparison_dataset" / "index.html"
+    output = (
+        Path(args.output).resolve()
+        if args.output
+        else run_dir / "comparison_dataset" / "index.html"
+    )
     print(render(run_dir, output, args.limit))
     return 0
 

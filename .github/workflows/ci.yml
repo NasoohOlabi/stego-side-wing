@@ -15,17 +15,13 @@ jobs:
           version: "latest"
       - name: Sync
         run: uv sync --all-groups
-      - name: Ruff check (Pyright-aligned roots)
-        run: >-
-          uv run ruff check
-          src/app src/services src/content_acquisition
-          src/integrations src/infrastructure src/workflows
+      - name: Compile Python sources
+        run: uv run python -m compileall -q src scripts
+      - name: Ruff check
+        run: uv run python -m ruff check src scripts
       - name: Ruff format
-        run: >-
-          uv run ruff format --check
-          src/app src/services src/content_acquisition
-          src/integrations src/infrastructure src/workflows
+        run: uv run python -m ruff format --check src scripts
       - name: Pyright
-        run: uv run pyright
+        run: uv run python -m pyright
       - name: Pytest
-        run: uv run pytest
+        run: uv run python -m pytest -q

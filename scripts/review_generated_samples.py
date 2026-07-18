@@ -13,9 +13,10 @@ _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from loguru import logger  # noqa: E402
+
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
 from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
-from loguru import logger  # noqa: E402
 
 PREFIX = "pareto_security_retry_rating_cont_"
 RUNS_ROOT = _REPO_ROOT / "metrics" / "e2e_runs"
@@ -86,9 +87,7 @@ def _score_review(record: dict[str, Any]) -> dict[str, Any]:
 
     context = record.get("embedding", {}).get("commentEmbedding", {}).get("pickedCommentChain", [])
     selected_angle = record.get("embedding", {}).get("angleEmbedding", {}).get("selectedAngle", {})
-    context_text = " ".join(
-        str(item.get("body", "")) for item in context if isinstance(item, dict)
-    )
+    context_text = " ".join(str(item.get("body", "")) for item in context if isinstance(item, dict))
     context_text = f"{context_text} {selected_angle.get('tangent', '')} {selected_angle.get('source_quote', '')}".lower()
     overlap_terms = {
         token

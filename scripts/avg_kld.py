@@ -76,21 +76,31 @@ def main() -> None:
     print(f"Skipped (missing stegoText): {ds['skipped_missing_stegoText']}")
     print(f"Skipped (empty stegoText tokens): {ds['skipped_empty_stego_tokens']}")
     print(f"Skipped (missing primary post file): {ds['skipped_missing_primary_post_file']}")
-    print(f"Skipped (primary post has no non-empty comment bodies): {ds['skipped_empty_primary_comment_bodies']}")
+    print(
+        f"Skipped (primary post has no non-empty comment bodies): {ds['skipped_empty_primary_comment_bodies']}"
+    )
     print()
     print("=== Primary Baseline (matched-post comments) ===")
     print(f"Comparisons: {primary['comparisons']}")
     print(f"Posts represented: {primary['stego_posts_represented']}")
-    print(f"Average KL(stego || matched_post): {_fmt_metric(primary['average_kl_stego_vs_matched_post'])}")
-    print(f"Average JSD(stego, matched_post): {_fmt_metric(primary['average_jsd_stego_vs_matched_post'])}")
+    print(
+        f"Average KL(stego || matched_post): {_fmt_metric(primary['average_kl_stego_vs_matched_post'])}"
+    )
+    print(
+        f"Average JSD(stego, matched_post): {_fmt_metric(primary['average_jsd_stego_vs_matched_post'])}"
+    )
     print()
     print("=== Secondary Baseline (global comments corpus) ===")
     print(f"Global source post files: {ds['global_source_post_files']}")
     print(f"Global non-empty comment bodies: {ds['global_nonempty_comment_bodies']}")
     print(f"Comparisons: {secondary['comparisons']}")
     print(f"Stego posts represented: {secondary['stego_posts_represented']}")
-    print(f"Average KL(stego || global_corpus): {_fmt_metric(secondary['average_kl_stego_vs_global_corpus'])}")
-    print(f"Average JSD(stego, global_corpus): {_fmt_metric(secondary['average_jsd_stego_vs_global_corpus'])}")
+    print(
+        f"Average KL(stego || global_corpus): {_fmt_metric(secondary['average_kl_stego_vs_global_corpus'])}"
+    )
+    print(
+        f"Average JSD(stego, global_corpus): {_fmt_metric(secondary['average_jsd_stego_vs_global_corpus'])}"
+    )
     print()
     print(f"Saved metrics JSON: {result['report_path']}")
 

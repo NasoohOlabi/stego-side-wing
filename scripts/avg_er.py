@@ -1,7 +1,7 @@
 import json
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC = _REPO_ROOT / "src"
@@ -20,7 +20,7 @@ for file in os.listdir("output-results"):
     file_path = os.path.join("output-results", file)
     if file.startswith("2025"):
         continue
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(file_path, encoding="utf-8") as f:
         data = json.load(f)
         print(data)
         if "stegoText" not in data:

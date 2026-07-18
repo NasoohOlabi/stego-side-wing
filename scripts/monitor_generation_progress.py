@@ -83,7 +83,9 @@ def main() -> None:
         return
     progress = _read_json(progress_path)
     lanes = progress.get("lanes")
-    lane_list = [lane for lane in lanes if isinstance(lane, dict)] if isinstance(lanes, list) else []
+    lane_list = (
+        [lane for lane in lanes if isinstance(lane, dict)] if isinstance(lanes, list) else []
+    )
     infra = _sum_lanes(lane_list, "infrastructure_failures")
     generation = _sum_lanes(lane_list, "generation_failures")
     decode = _sum_lanes(lane_list, "decode_failures")

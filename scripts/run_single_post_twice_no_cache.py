@@ -76,7 +76,9 @@ def run_single_post_twice_no_cache(
     overwrite: bool,
 ) -> dict[str, Any]:
     resolved_post_id = _resolve_post(post_id, dataset_dir)
-    resolved_run_dir = (run_dir or RUNS_ROOT / f"single_post_{resolved_post_id}_{uuid4().hex}").resolve()
+    resolved_run_dir = (
+        run_dir or RUNS_ROOT / f"single_post_{resolved_post_id}_{uuid4().hex}"
+    ).resolve()
     if resolved_run_dir.exists():
         if not overwrite:
             raise FileExistsError(f"Run directory already exists: {resolved_run_dir}")

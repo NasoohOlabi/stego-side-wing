@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,15 @@ _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from infrastructure.config import get_workflow_angles_max_output  # noqa: E402
 from infrastructure.prep_run_manifest import write_prep_run_manifest  # noqa: E402
+from workflows.pipelines.gen_angles import GenAnglesPipeline  # noqa: E402
+from workflows.utils.tangent_db import (  # noqa: E402
+    AngleCandidate,
+    PostContext,
+    build_tangent_db,
+    tangent_db_config_from_env,
+)
 
 CONTRACT_VERSION = "tangent_db_comparison_v1"
 
@@ -61,6 +70,72 @@ def _restore_env(name: str, value: str | None) -> None:
         os.environ.pop(name, None)
     else:
         os.environ[name] = value
+
+
+def _quote_words(value: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
+
+
+def _candidate_with_source(
+    angle: dict[str, Any], entries: list[dict[str, Any]]
+) -> AngleCandidate:
+    """Recover source provenance from the cached quote without changing its wording."""
+    quote = _quote_words(str(angle.get("source_quote", "")))
+    matches: list[tuple[int, str]] = []
+    for index, entry in enumerate(entries):
+        words = _quote_words(str(entry.get("text", "")))
+        if quote and any(words[offset : offset + len(quote)] == quote for offset in range(len(words))):
+            matches.append((index, str(entry.get("source", ""))))
+    sources = {source for _, source in matches}
+    if len(sources) != 1:
+        raise ValueError(f"cached angle quote has ambiguous/missing source: {angle.get('source_quote')!r}")
+    index, source = matches[0]
+    return AngleCandidate.from_angle(angle).model_copy(
+        update={"source_document": index, "source": source}
+    )
+
+
+def materialize_cached_v1(root: Path, *, post_id: str) -> Path:
+    """Build a v1 lane offline from an accepted legacy candidate pool."""
+    root = root.resolve()
+    legacy_manifest = _read_object(root / "legacy" / "prep_run.json")
+    v1_manifest = _read_object(root / "v1" / "prep_run.json")
+    if legacy_manifest.get("tangent_db_config_hash") != v1_manifest.get(
+        "tangent_db_config_hash"
+    ):
+        raise ValueError("legacy/v1 manifest config hashes differ")
+
+    researched_source = root / "legacy" / "news_researched" / f"{post_id}.json"
+    legacy_angle_path = root / "legacy" / "news_angles" / f"{post_id}.json"
+    researched = _read_object(researched_source)
+    legacy_angles = _read_object(legacy_angle_path)
+    if researched.get("id") != post_id or legacy_angles.get("id") != post_id:
+        raise ValueError("cached post id mismatch")
+    angles = legacy_angles.get("angles")
+    if not isinstance(angles, list) or legacy_angles.get("options_count") != len(angles):
+        raise ValueError("legacy angle artifact has an invalid candidate count")
+
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+    entries = list(pipeline.build_dictionary_bundle_for_post(researched)["entries"])
+    candidates = [_candidate_with_source(angle, entries) for angle in angles]
+    config = tangent_db_config_from_env(get_workflow_angles_max_output())
+    result = build_tangent_db(candidates, PostContext.from_post(researched), config)
+    if result.report.config_hash != v1_manifest.get("tangent_db_config_hash"):
+        raise ValueError("effective v1 config does not match the persisted manifest")
+
+    researched_dest = root / "v1" / "news_researched" / f"{post_id}.json"
+    researched_dest.parent.mkdir(parents=True, exist_ok=True)
+    researched_dest.write_bytes(researched_source.read_bytes())
+    output = root / "v1" / "news_angles" / f"{post_id}.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    artifact = dict(
+        researched,
+        angles=result.angles,
+        options_count=len(result.angles),
+        tangent_db_report=result.report.model_dump(mode="json"),
+    )
+    output.write_text(json.dumps(artifact, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return output
 
 
 def finalize_comparison(root: Path, legacy_summary: Path, v1_summary: Path) -> Path:
@@ -111,12 +186,16 @@ def main() -> int:
     final.add_argument("--root", required=True, type=Path)
     final.add_argument("--legacy-summary", required=True, type=Path)
     final.add_argument("--v1-summary", required=True, type=Path)
+    cached = sub.add_parser("materialize-cached-v1")
+    cached.add_argument("--root", required=True, type=Path)
+    cached.add_argument("--post-id", required=True)
     args = parser.parse_args()
-    path = (
-        initialize_comparison(args.root, comparison_id=args.comparison_id, notes=args.notes)
-        if args.command == "init"
-        else finalize_comparison(args.root.resolve(), args.legacy_summary, args.v1_summary)
-    )
+    if args.command == "init":
+        path = initialize_comparison(args.root, comparison_id=args.comparison_id, notes=args.notes)
+    elif args.command == "materialize-cached-v1":
+        path = materialize_cached_v1(args.root, post_id=args.post_id)
+    else:
+        path = finalize_comparison(args.root.resolve(), args.legacy_summary, args.v1_summary)
     sys.stdout.write(str(path) + "\n")
     return 0
 

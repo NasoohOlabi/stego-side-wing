@@ -79,6 +79,26 @@ pipeline (viewer scan roots in `recent_updates_service.py`, the ad-hoc `/posts` 
 
 ## Plan 2 — tangent-db-revamp
 
+### 2026-07-18 — Cached v1 angle artifact materialized and validated offline
+
+- Added `materialize-cached-v1` to the comparison harness. It copies the accepted lane's
+  researched input byte-for-byte, recovers each cached candidate's source from its quote, and
+  runs the real deterministic v1 builder without an LLM, search, stego, or judge call.
+- Materialized `v1/news_angles/1look5n.json` from the same 14 accepted legacy candidates. The
+  v1 report retains all 14, records the true source mix (6 comments, 8 search results), and its
+  config hash matches both lane manifests (`ee3a9048...`). Repeated builds are deterministic.
+- Lane symmetry is validated by the researched-input SHA-256 equality. The v1 lane has no
+  `output-results`; M9 remains mandatory at comment-generation/finalization and was not
+  weakened or falsely claimed at this angle-only stage.
+
+Validation: comparison harness tests passed (4); affected angle/runner tests, Pyright, Ruff,
+and `git diff --check` passed. Generated lane artifacts remain under the intentionally ignored
+isolated run root and were not added to git.
+
+**Next:** materialize additional accepted cached post candidate pools in both lanes, if any;
+then use Codex CLI Luna to generate one distinct stego comment per payload for `1look5n` in each
+lane, enforce M9 at `1.0`, and stop before M1/M3/M4/M2 judging.
+
 ### 2026-07-18 — First cached legacy angle artifact accepted offline
 
 - Superseded the OpenRouter retry: no OpenRouter, search, LM Studio, or external provider call

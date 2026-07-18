@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+from _pytest.monkeypatch import MonkeyPatch
+
 
 def _module():
     path = Path(__file__).resolve().parents[2] / "scripts/prepare_tangent_db_comparison.py"
@@ -63,3 +65,54 @@ def test_finalize_rejects_lane_that_fails_m9(tmp_path: Path) -> None:
         assert "M9" in str(exc)
     else:
         raise AssertionError("expected M9 validation failure")
+
+
+def test_materialize_cached_v1_preserves_input_and_selects_with_source_mix(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    module = _module()
+    monkeypatch.setenv("WORKFLOW_CAPACITY_PROFILE", "mid")
+    module.initialize_comparison(tmp_path, comparison_id="cmp")
+    researched = {
+        "id": "post-1",
+        "title": "Flood rescue",
+        "selftext": "Rescue teams searched the river.",
+        "comments": [{"body": "Campers waited for rescue teams."}],
+        "search_results": ["River rescue planning requires boats."],
+    }
+    legacy = dict(
+        researched,
+        angles=[
+            {
+                "source_quote": "Campers waited for rescue teams.",
+                "tangent": "Campers waited for rescue teams.",
+                "category": "Community Discussion",
+            },
+            {
+                "source_quote": "River rescue planning requires boats.",
+                "tangent": "River rescue planning requires boats.",
+                "category": "Reference Material",
+            },
+        ],
+        options_count=2,
+    )
+    source = tmp_path / "legacy" / "news_researched" / "post-1.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(json.dumps(researched), encoding="utf-8")
+    angles = tmp_path / "legacy" / "news_angles" / "post-1.json"
+    angles.parent.mkdir(parents=True)
+    angles.write_text(json.dumps(legacy), encoding="utf-8")
+
+    output = module.materialize_cached_v1(tmp_path, post_id="post-1")
+    artifact = json.loads(output.read_text(encoding="utf-8"))
+
+    assert (tmp_path / "v1" / "news_researched" / "post-1.json").read_bytes() == source.read_bytes()
+    assert artifact["options_count"] == len(artifact["angles"]) == 2
+    assert artifact["tangent_db_report"]["source_mix_kept"] == {
+        "post": 0,
+        "comments": 1,
+        "search_results": 1,
+    }
+    assert artifact["tangent_db_report"]["config_hash"] == json.loads(
+        (tmp_path / "v1" / "prep_run.json").read_text(encoding="utf-8")
+    )["tangent_db_config_hash"]

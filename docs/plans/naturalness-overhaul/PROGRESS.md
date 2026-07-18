@@ -105,6 +105,25 @@ preparing a corpus under the isolated dataset root; do not overwrite the reprodu
 
 ## Plan 3 — method-comparison-metrics-v2
 
+### 2026-07-18 — Phase 3 M8 offline drift-attribution analyzer DONE, validated
+
+- Added `scripts/analyze_tangent_drift_attribution.py`, which joins cached our-method
+  synthetic-detection outcomes to persisted tangent reports by `post_id`.
+- It reports detected vs non-detected post-clustered search share and relevance, plus a
+  deterministic coarse taxonomy of the detected-case judge reasons. Missing groups remain
+  `null`; the analyzer does not invent measurements or call a provider.
+- The current reproducible comparison predates tangent reports, so no M8 conclusion was drawn.
+  Run the analyzer only after the authorized legacy/v1 population and judge passes:
+  `uv run python scripts/analyze_tangent_drift_attribution.py --paired-rows <lane>/paired_rows.jsonl --sus-results <lane>/sus_detection_results.jsonl --output <lane>/tangent_drift_attribution.json`.
+
+Validation: targeted tests passed; Ruff and Pyright passed.
+
+**Remaining blocker:** all deterministic/offline milestones M5–M10 are implemented. Population
+of both initialized lanes, distinct-comment generation, and M1/M3/M4/M2 judge passes require
+live provider calls/credentials and can incur generation, search, and judge-token charges.
+Do not run them without explicit authorization. Then finalize with
+`uv run python scripts/prepare_tangent_db_comparison.py finalize --root datasets/prep_runs/naturalness_legacy_v1_20260718 --legacy-summary <legacy-summary.json> --v1-summary <v1-summary.json>`.
+
 ### 2026-07-18 — Legacy/v1 offline comparison harness DONE, validated
 
 - Added `scripts/prepare_tangent_db_comparison.py` with an offline `init` command that creates

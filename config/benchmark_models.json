@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "judge_policy": "cross_model_rotated",
+  "models": [
+    {
+      "family": "qwen",
+      "id": "qwen/qwen3.5-9b",
+      "role": "generator",
+      "required": true
+    },
+    {
+      "family": "gemma",
+      "id": "google/gemma-3-12b",
+      "role": "judge_paraphraser",
+      "required": true
+    },
+    {
+      "family": "gpt_oss",
+      "id": "openai/gpt-oss-20b",
+      "role": "future_cross_model_validation",
+      "required": false
+    }
+  ],
+  "generation": {
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "seeds": [11, 23, 47, 71, 103],
+    "single_model_at_a_time": true
+  }
+}

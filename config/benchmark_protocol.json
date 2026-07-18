@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "objective": "publication",
+  "dataset": {
+    "development": 50,
+    "pilot": 50,
+    "confirmatory": 300,
+    "validation": 100,
+    "fixed_post_ids_required": true
+  },
+  "payload_bits": [32, 64, 128, 256],
+  "primary_payload_bits": 64,
+  "dynamic_carrier_budget": {
+    "max_carriers": 8,
+    "max_total_words": 320,
+    "frame_capacity": "floor(log2(comment_choices)) + floor(log2(tangent_choices))"
+  },
+  "primary_lanes": ["balanced", "security_legacy", "sec_v2_anchored", "sec_v2_natural_then_anchor_retry"],
+  "baselines": ["plain_llm", "official_zgls"],
+  "confidence": 0.95,
+  "inference": {
+    "independent_unit": "post_id",
+    "cluster_bootstrap_iterations": 10000,
+    "paired_tests_clustered": true,
+    "multiple_comparison_correction": "holm",
+    "report_intention_to_treat_failures": true,
+    "successful_output_metrics_reported_separately": true
+  },
+  "capacity_comparison_modes": [
+    "capacity_matched",
+    "max_capacity"
+  ],
+  "primary_metrics": [
+    "receiver_success_rate",
+    "effective_recovered_bits_per_word",
+    "matched_post_jsd",
+    "passive_detector_roc_auc",
+    "judge_suspiciousness",
+    "medium_paraphrase_recovery_rate"
+  ],
+  "attacks": [
+    {"name": "word_deletion", "severity": [0.05, 0.10, 0.20]},
+    {"name": "synonym_substitution", "severity": [0.05, 0.10, 0.20]},
+    {"name": "sentence_deletion", "severity": [1]},
+    {"name": "sentence_reorder", "severity": [1]},
+    {"name": "llm_paraphrase", "severity": ["low", "medium", "high"]},
+    {"name": "context_mutation", "severity": [1]}
+  ]
+}

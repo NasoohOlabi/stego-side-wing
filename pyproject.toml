@@ -28,6 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 metrics = [
+    "nltk>=3.9.1",
     "torch>=2.6.0",
     "transformers>=4.50.0",
 ]
@@ -55,6 +56,18 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/avg_er.py" = ["E402"]
+"scripts/clean_data_boxing.py" = ["E402"]
+"scripts/clean_news_researched.py" = ["E402"]
+"scripts/clean_non_english.py" = ["E402"]
+"scripts/make_schema.py" = ["E402"]
+"scripts/monitor_generation_progress.py" = ["E402"]
+"scripts/monitor_pareto_continuation.py" = ["E402"]
+"scripts/run_zlg_batch_comparison.py" = ["E402"]
+"scripts/strip_invisible_stego_payloads.py" = ["E402"]
+"scripts/sync_missing_search_results.py" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"

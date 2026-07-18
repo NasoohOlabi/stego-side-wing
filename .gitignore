@@ -7,6 +7,8 @@ wheels/
 *.egg-info
 *.json
 !config/claims_manifest.json
+!config/benchmark_models.json
+!config/benchmark_protocol.json
 *.csv
 *.tsv
 *.db
@@ -34,6 +36,14 @@ debug-*.log
 tmp_*
 metrics
 .tmp
+
+# Local pytest/audit scratch paths
+.pytest-tmp/
+audit_pytest_tmp/
+luna_pytest_temp_*/
+pytest_tmp*/
+test_tmp*/
+tmp/pytest-*/
 
 # dev runs and download logs
 pid.log

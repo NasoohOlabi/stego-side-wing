@@ -83,21 +83,44 @@ Get-ChildItem metrics/e2e_runs -Directory |
   Select-Object -First 1 FullName, LastWriteTimeUtc
 ```
 
+### Publication benchmark preflight
+
+Freeze one post ID per line, then create a provenance manifest before any
+confirmatory run:
+
+```powershell
+uv run python scripts/benchmark_preflight.py `
+  --post-ids metrics/benchmark/post_ids.txt `
+  --output metrics/benchmark/manifest.json
+```
+
+The command records the commit, dirty-tree state, model/protocol hashes, and
+payload conditions. Dirty trees are refused by default; use
+`--allow-dirty` only for exploratory runs.
+
 ## Lint and format
 
-Same roots as `pyrightconfig.json` `include` (matches CI):
+Ruff checks every maintained Python source file, including operational scripts:
 
 ```bash
-uv run ruff check src/app src/services src/content_acquisition src/integrations src/infrastructure src/workflows
-uv run ruff format --check src/app src/services src/content_acquisition src/integrations src/infrastructure src/workflows
+uv run python -m ruff check src scripts
+uv run python -m ruff format --check src scripts
 ```
 
 To apply formatting: repeat the last command without `--check`.
 
+Before opening a change, run the same checks as CI:
+
+```bash
+uv run python -m compileall -q src scripts
+uv run python -m pyright
+uv run python -m pytest -q
+```
+
 ## Strict type checking
 
 ```bash
-uv run pyright
+uv run python -m pyright
 ```
 
 Current strict pyright config is in `pyrightconfig.json`.

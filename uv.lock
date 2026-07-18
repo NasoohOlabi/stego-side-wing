@@ -2640,6 +2640,7 @@ dependencies = [
 
 [package.optional-dependencies]
 metrics = [
+    { name = "nltk" },
     { name = "torch" },
     { name = "transformers" },
 ]
@@ -2665,6 +2666,7 @@ requires-dist = [
     { name = "icecream", specifier = ">=2.1.10" },
     { name = "langdetect", specifier = ">=1.0.9" },
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "nltk", marker = "extra == 'metrics'", specifier = ">=3.9.1" },
     { name = "ollama", specifier = ">=0.6.1" },
     { name = "openai", specifier = ">=2.26.0" },
     { name = "pydantic", specifier = ">=2.12.5" },

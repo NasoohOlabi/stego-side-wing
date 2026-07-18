@@ -8,12 +8,22 @@ Keep this file current. Newest status at the top of each phase section. Dates ar
 |---|---|---|
 | 0. Persist benchmark workstream | ✅ complete | Focused commits; full quality gate green |
 | 1. Live infrastructure | 🔄 in progress | ZLG service deployed; Gemma download running |
-| 2. Freeze protocol | 🔄 partial | 46/100 reused offline; 54 need authorized live preparation |
-| 3. Staged paired run | ⬜ needs authorization | Chargeable live calls |
+| 2. Freeze protocol | 🔄 partial | 46/100 reused offline; 54 live preparations authorized (Stage A) |
+| 3. Staged paired run | ✅ authorized, not started | Staged per `live-run-authorization.md` |
 | 4. Post-hoc evaluation | ⬜ blocked on 3 | Includes multi-post legacy/v1 lanes |
 | 5. Report + paper | ⬜ blocked on 4 | |
 
 ## Phase 2 — Freeze the protocol
+
+### 2026-07-18 — Live-call authorization granted (staged)
+
+- User authorized the remaining chargeable work after independent verification of Phase 0–2
+  claims. Scope, constraints, gates, and stop conditions are in
+  `live-run-authorization.md` — stages A (54 live preparations + 100-post freeze),
+  B (5-post smoke), C (25-post pilot), D (100-post full + max_capacity).
+- Key constraints: `WORKFLOW_LLM_BACKEND=lm_studio` stays; switching to a paid per-token
+  backend needs new authorization; report search-API usage after Stage A; stop on any
+  failed gate.
 
 ### 2026-07-18 — Offline preparation exhausted safely
 

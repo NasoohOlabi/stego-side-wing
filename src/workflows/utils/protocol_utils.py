@@ -28,8 +28,28 @@ def stable_hash(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def angle_signature(angle: dict[str, Any]) -> tuple[str, str, str]:
+    """Identity of an angle for sender/receiver comparison.
+
+    Sender and receiver must agree on which angle a decode refers to, so both sides
+    compare this tuple rather than dict equality (angles pick up extra keys such as
+    ``idx`` along the way).
+    """
+    return (
+        str(angle.get("category", "")),
+        str(angle.get("source_quote", "")),
+        str(angle.get("tangent", "")),
+    )
+
+
 def text_preview(text: str | None, limit: int = 160) -> str:
-    """Return a compact single-line preview for logs and APIs."""
+    """Return a compact single-line preview for logs and APIs.
+
+    Note this is *not* interchangeable with ``stego._text_preview``: that one defaults to
+    180 chars and appends "..." after the cut (so the result can exceed the limit), while
+    this one reserves room for the ellipsis inside ``limit``. Both feed different output
+    fields, so they are deliberately kept separate.
+    """
     normalized = " ".join((text or "").split())
     if len(normalized) <= limit:
         return normalized

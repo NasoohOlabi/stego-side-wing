@@ -16,6 +16,9 @@ from workflows.pipelines.data_load import DataLoadPipeline
 from workflows.pipelines.decode import DecodePipeline
 from workflows.pipelines.gen_angles import GenAnglesPipeline
 from workflows.pipelines.research import ResearchPipeline
+from workflows.utils.protocol_utils import (
+    angle_signature as _angle_signature,
+)
 from workflows.utils.protocol_utils import stable_hash, text_preview
 from workflows.utils.stego_codec import (
     build_dictionary,
@@ -136,14 +139,6 @@ def nested_angles_from_post(post: dict[str, Any]) -> list[list[dict[str, Any]]]:
     if not isinstance(raw, list):
         return []
     return [x if isinstance(x, list) else [x] for x in raw if x is not None]
-
-
-def _angle_signature(angle: dict[str, Any]) -> tuple[str, str, str]:
-    return (
-        str(angle.get("category", "")),
-        str(angle.get("source_quote", "")),
-        str(angle.get("tangent", "")),
-    )
 
 
 def _canonicalize_decoded_angle_index(

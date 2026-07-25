@@ -9,6 +9,12 @@ from typing import Any
 
 from pydantic import validate_call
 
+from workflows.utils.text_utils import flatten_comments
+
+# Intentionally distinct from ``stego._STOPWORDS``. That set is ~2x larger (it also strips
+# pronouns and common verbs) and the two feed different decisions: this one drives the
+# naturalness/relevance gate, that one drives contextuality scoring. Unifying them changes
+# tokenization -- and therefore gate outcomes -- so they are kept apart on purpose.
 _STOPWORDS = {
     "a",
     "about",
@@ -111,27 +117,11 @@ def _context_texts_from_post(post: dict[str, Any]) -> list[str]:
         value = post.get(key)
         if isinstance(value, str) and value.strip():
             texts.append(value)
-    for comment in _flatten_comments(post.get("comments", [])):
+    for comment in flatten_comments(post.get("comments", [])):
         body = comment.get("body")
         if isinstance(body, str) and body.strip():
             texts.append(body)
     return texts
-
-
-def _flatten_comments(comments: Any) -> list[dict[str, Any]]:
-    if not isinstance(comments, list):
-        return []
-    out: list[dict[str, Any]] = []
-    stack = list(reversed(comments))
-    while stack:
-        item = stack.pop()
-        if not isinstance(item, dict):
-            continue
-        out.append(item)
-        replies = item.get("replies")
-        if isinstance(replies, list):
-            stack.extend(reversed(replies))
-    return out
 
 
 def _angle_text(angle: dict[str, Any]) -> str:

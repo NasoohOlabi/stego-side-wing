@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import validate_call
 
+from workflows.utils.protocol_utils import angle_signature as _angle_signature
 from workflows.utils.protocol_utils import stable_hash
 
 FAILURE_CODES = {
@@ -69,15 +70,12 @@ def _safe_len(value: Any) -> int:
     return len(value) if isinstance(value, list | str | dict) else 0
 
 
-def _angle_signature(angle: dict[str, Any]) -> tuple[str, str, str]:
-    return (
-        str(angle.get("category", "")),
-        str(angle.get("source_quote", "")),
-        str(angle.get("tangent", "")),
-    )
-
-
 def _flatten_angles(raw: Any) -> list[dict[str, Any]]:
+    """Flatten one level of angle nesting, preserving each angle dict as-is.
+
+    Deliberately *not* ``stego_codec.flatten_angle_groups``: that one injects a positional
+    ``idx`` key into every angle, which would change what this service reports.
+    """
     if not isinstance(raw, list):
         return []
     out: list[dict[str, Any]] = []

@@ -19,6 +19,7 @@ from infrastructure.config import (
 )
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter, strip_redacted_thinking
+from workflows.utils.protocol_utils import angle_signature as _angle_signature
 from workflows.utils.workflow_llm_prompts import get_prompts
 
 # Must match sender stego encoder model (``stego.STEGO_LLM_MODEL``).
@@ -126,14 +127,6 @@ def _rerank_decode_candidates(
         scored.append((combined, -position, enriched))
     scored.sort(reverse=True, key=lambda item: (item[0], item[1]))
     return [item[2] for item in scored[:limit]]
-
-
-def _angle_signature(angle: dict[str, Any]) -> tuple[str, str, str]:
-    return (
-        str(angle.get("category", "")),
-        str(angle.get("source_quote", "")),
-        str(angle.get("tangent", "")),
-    )
 
 
 def _labeled_angle_candidates(

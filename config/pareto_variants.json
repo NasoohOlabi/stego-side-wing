@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "variants": [
+    {
+      "name": "balanced",
+      "base_profile": "balanced",
+      "description": "Frozen natural/model baseline."
+    },
+    {
+      "name": "balanced_naturalness_gate",
+      "base_profile": "balanced",
+      "description": "Balanced baseline with angle relevance and comment plausibility gates enabled.",
+      "env_overrides": {
+        "WORKFLOW_NATURALNESS_GATE_ENABLED": "1"
+      }
+    },
+    {
+      "name": "capacity",
+      "base_profile": "capacity",
+      "description": "Frozen high-capacity baseline."
+    },
+    {
+      "name": "security_legacy",
+      "base_profile": "security",
+      "description": "Current security baseline with legacy payload transform.",
+      "env_overrides": {
+        "WORKFLOW_PAYLOAD_TRANSFORM": "hmac_xor_v1",
+        "WORKFLOW_STEGO_PROMPT_STYLE": "anchored"
+      },
+      "real_force_model_generation": true
+    },
+    {
+      "name": "sec_v2_anchored",
+      "base_profile": "security",
+      "description": "Compact secure payload with anchored prompting.",
+      "env_overrides": {
+        "WORKFLOW_PAYLOAD_TRANSFORM": "secure_compact_v2",
+        "WORKFLOW_STEGO_PROMPT_STYLE": "anchored"
+      },
+      "real_force_model_generation": true
+    },
+    {
+      "name": "sec_v2_guided_natural",
+      "base_profile": "security",
+      "description": "Compact secure payload with guided-natural prompting.",
+      "env_overrides": {
+        "WORKFLOW_PAYLOAD_TRANSFORM": "secure_compact_v2",
+        "WORKFLOW_STEGO_PROMPT_STYLE": "guided_natural"
+      },
+      "real_force_model_generation": true
+    },
+    {
+      "name": "sec_v2_natural_then_anchor_retry",
+      "base_profile": "security",
+      "description": "Guided-natural first pass, anchored retries after decode misses.",
+      "env_overrides": {
+        "WORKFLOW_PAYLOAD_TRANSFORM": "secure_compact_v2",
+        "WORKFLOW_STEGO_PROMPT_STYLE": "natural_then_anchor_retry"
+      },
+      "real_force_model_generation": true
+    },
+    {
+      "name": "sec_v2_guided_natural_hybrid_extract",
+      "base_profile": "security",
+      "description": "Guided-natural prompting with hybrid extractive/model carrier selection.",
+      "env_overrides": {
+        "WORKFLOW_PAYLOAD_TRANSFORM": "secure_compact_v2",
+        "WORKFLOW_STEGO_PROMPT_STYLE": "guided_natural",
+        "WORKFLOW_STEGO_GENERATION_MODE": "hybrid_extract"
+      },
+      "real_force_model_generation": false
+    },
+    {
+      "name": "sec_v2_natural_then_anchor_retry_hybrid_extract",
+      "base_profile": "security",
+      "description": "Retry-aware guided-natural prompting with hybrid extractive/model carrier selection.",
+      "env_overrides": {
+        "WORKFLOW_PAYLOAD_TRANSFORM": "secure_compact_v2",
+        "WORKFLOW_STEGO_PROMPT_STYLE": "natural_then_anchor_retry",
+        "WORKFLOW_STEGO_GENERATION_MODE": "hybrid_extract"
+      },
+      "real_force_model_generation": false
+    }
+  ]
+}

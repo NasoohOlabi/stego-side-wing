@@ -25,11 +25,7 @@
   "exclude": [
     "src/util",
     "src/angles",
-    "src/**/__pycache__",
-    "src/ai_analyze.py",
-    "src/headless_browser_analyzer.py",
-    "src/scraper.py",
-    "src/nest.py"
+    "src/**/__pycache__"
   ],
   "executionEnvironments": [
     {

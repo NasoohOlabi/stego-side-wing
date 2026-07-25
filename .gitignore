@@ -5,10 +5,14 @@ build/
 dist/
 wheels/
 *.egg-info
+# Run artifacts and datasets are JSON, so JSON is ignored by default. Checked-in
+# configuration and test fixtures must be un-ignored by directory -- an allowlist of
+# individual filenames silently drops any new file (that is how
+# config/pareto_variants.json ended up untracked while the code required it).
 *.json
-!config/claims_manifest.json
-!config/benchmark_models.json
-!config/benchmark_protocol.json
+!config/**/*.json
+!src/tests/**/*.json
+!.vscode/*.json
 *.csv
 *.tsv
 *.db
@@ -36,6 +40,12 @@ debug-*.log
 tmp_*
 metrics
 .tmp
+
+# Coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
 
 # Local pytest/audit scratch paths
 .pytest-tmp/

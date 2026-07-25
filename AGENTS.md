@@ -54,7 +54,15 @@ One switch chooses how most workflow and pipeline code talks to an LLM:
 
 **Strict:** `src/app`, `src/services`, `src/content_acquisition`, `src/integrations`, `src/infrastructure`, `src/workflows`.
 
-**Excluded (non-strict):** `src/util`, `src/angles`, `src/**/__pycache__`, and these **top-level modules under `src/`:** `ai_analyze.py`, `headless_browser_analyzer.py`, `scraper.py`, `nest.py`.
+**Excluded (non-strict):** `src/util`, `src/angles`, `src/**/__pycache__`.
+
+**Unchecked (in neither `include` nor `exclude`):** `src/tests`, `scripts/`, `src/API.py`. Because
+`pyrightconfig.json` sets an explicit `include` list, anything outside it is never type-checked —
+even though CI does run `ruff` over `scripts`.
+
+> `ai_analyze.py`, `headless_browser_analyzer.py` and `scraper.py` used to be excluded top-level
+> modules. They now live under `src/content_acquisition/` and `nest.py` under `src/scripts/`, so
+> the first three are strict-checked like the rest of that package.
 
 ## Layout (high level)
 

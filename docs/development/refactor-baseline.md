@@ -110,6 +110,24 @@ around it.
 | 0 — safety nets | 530 | 67% | golden characterization test, offline network guard, shared fakes |
 | 1 — dead code & dupes | 530 | 68% | 307 statements removed; `src/util` forks, dead stego seams, the invisible-carrier write helper, and the f0bcc9 debug scaffold all deleted |
 | 2 — layering & DI | 548 | 68% | `workflows -> services` crossings 12 → 3; ports + constructor injection added; `lint-imports` now gated in CI |
+| 3 — god objects (in progress) | 555 | 69% | `encode` 444 → 396 lines, `encode_binary_selection_bits` 244 → 204; characterization tests added around `encode` first |
+
+### Phase 3 — where it stands
+
+Done: a characterization suite around `StegoPipeline.encode` that fakes only the LLM,
+backend and decode edges and lets the rest run, then two deduplication increments
+(`_generate_candidate_groups`, `_decoded_indices`, `_encode_success_result`,
+`_candidate_validation_audit`, `_diagnostic_bits_fields`).
+
+Next: the retry loop itself, still written twice. Parameterise it on the three real
+differences the diagnostic path has — it skips context sharpening entirely, reports
+`timing_outcome="diagnostic_success"`, and adds `_diagnostic_bits_fields` to its results.
+Before attempting it, add characterization coverage for the three paths the current tests
+do not reach: context-sharpen success, the exception handler, and the no-samples early
+return.
+
+Not started: splitting `stego.py` and `runner.py` into packages (plan steps 3.2–3.4), the
+LLM provider strategy split (3.5), and the `wf_run` command registry (3.6).
 
 ### Gate added in phase 2
 

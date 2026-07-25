@@ -21,6 +21,10 @@ jobs:
         run: uv run python -m ruff check src scripts
       - name: Ruff format
         run: uv run python -m ruff format --check src scripts
+      - name: Import layering
+        run: uv run lint-imports
+        env:
+          PYTHONPATH: src
       - name: Pyright
         run: uv run python -m pyright
       - name: Pytest

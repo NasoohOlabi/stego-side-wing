@@ -11,7 +11,7 @@ from uuid import uuid4
 from loguru import logger
 
 from infrastructure.json_logging import get_trace_id
-from services.workflow_run_tracker import has_active_run_for_command
+from infrastructure.workflow_run_tracker import has_active_run_for_command
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.config import isolated_workflow_config
 from workflows.pipelines.data_load import DataLoadPipeline

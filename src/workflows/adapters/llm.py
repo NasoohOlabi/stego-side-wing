@@ -30,7 +30,7 @@ from infrastructure.retry_policy import (
     RETRYABLE_TRANSPORT_MESSAGE_TOKENS,
     RETRYABLE_TRANSPORT_NAME_TOKENS,
 )
-from services.workflow_run_tracker import get_run_id
+from infrastructure.workflow_run_tracker import get_run_id
 from workflows.utils.protocol_utils import stable_hash
 
 PROMPTS_LOG_TIMESTAMP = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
@@ -389,7 +389,7 @@ _THINKING_HEADER_PREFIX_RE = re.compile(
     r"^\s*(?:\*\*)?(?:thinking\s+process|chain[-\s]of[-\s]thought)(?:\*\*)?\s*:?",
     re.IGNORECASE,
 )
-# JSON / decode one-liner / fenced payload — start of model "answer" after prose thinking.
+# JSON / decode one-liner / fenced payload â€” start of model "answer" after prose thinking.
 _PAYLOAD_START_LINE_RE = re.compile(
     r"^\s*(?:[\[{]|idx\s*:)",
     re.IGNORECASE,

@@ -15,7 +15,7 @@ from flask import Response, request, stream_with_context
 
 from app.routes.api_v1.constants import TRUE_VALUES
 from infrastructure.json_logging import bind_trace_id, reset_trace_id
-from services.workflow_run_tracker import (
+from infrastructure.workflow_run_tracker import (
     bind_run_id,
     end_run,
     register_run,

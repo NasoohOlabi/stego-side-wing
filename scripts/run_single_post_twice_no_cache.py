@@ -18,7 +18,7 @@ if str(_SRC) not in sys.path:
 
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
 from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
-from services.workflow_run_tracker import get_run_id  # noqa: E402
+from infrastructure.workflow_run_tracker import get_run_id  # noqa: E402
 from workflows.adapters.backend_api import BackendAPIAdapter  # noqa: E402
 from workflows.runner_orchestration_utils import run_stego_receiver_live_sim_once  # noqa: E402
 from workflows.utils.protocol_utils import stable_hash  # noqa: E402

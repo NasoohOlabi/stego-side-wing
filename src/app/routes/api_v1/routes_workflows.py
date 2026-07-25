@@ -34,9 +34,9 @@ from app.schemas.workflow_requests import (
     ValidatePostWorkflowRequest,
 )
 from infrastructure.json_logging import get_trace_id
+from infrastructure.workflow_run_tracker import has_active_run_for_command, iter_snapshot
 from services.double_process_history import list_double_process_runs
-from services.workflow_run_tracker import has_active_run_for_command, iter_snapshot
-from workflows.runner_orchestration_utils import (
+from services.workflow_facade import (
     reconcile_stale_double_process_claim_vs_explicit,
     try_read_double_process_claim,
 )

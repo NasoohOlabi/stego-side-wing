@@ -18,8 +18,8 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from infrastructure.config import get_workflow_angles_max_output  # noqa: E402
-from infrastructure.prep_run_manifest import write_prep_run_manifest  # noqa: E402
 from workflows.pipelines.gen_angles import GenAnglesPipeline  # noqa: E402
+from workflows.utils.prep_run_manifest import write_prep_run_manifest  # noqa: E402
 from workflows.utils.stego_codec import (  # noqa: E402
     angle_bits_decode_to_index,
     angle_bits_for_index,

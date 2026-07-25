@@ -3,7 +3,7 @@
 import pytest
 
 from app.app_factory import create_app
-from services import workflow_run_tracker as tracker
+from infrastructure import workflow_run_tracker as tracker
 
 
 @pytest.fixture

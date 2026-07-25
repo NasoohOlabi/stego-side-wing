@@ -1,4 +1,10 @@
-"""In-process registry of workflow runs (API process only)."""
+"""In-process registry of workflow runs (API process only).
+
+Infrastructure rather than a service: this is a thread-safe registry plus a ContextVar
+with no domain logic and no dependencies beyond the standard library -- the same shape as
+the trace-id handling in ``json_logging``. Keeping it here lets ``workflows`` read the
+current run id without importing ``services``, which the layering rules forbid.
+"""
 
 from __future__ import annotations
 

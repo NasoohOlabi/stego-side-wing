@@ -35,6 +35,7 @@ metrics = [
 
 [dependency-groups]
 dev = [
+    "import-linter>=2.0",
     "pyright>=1.1.408",
     "pytest>=9.0.2",
     "pytest-cov>=6.0.0",

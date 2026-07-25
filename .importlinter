@@ -1,0 +1,58 @@
+# Enforces docs/development/architecture-layers.md.
+#
+# Run locally with:  uv run lint-imports
+#
+# The `ignore_imports` entries below are the known, documented exceptions. They are listed
+# individually on purpose: a new violation fails the build instead of blending in.
+
+[importlinter]
+root_packages =
+    app
+    services
+    workflows
+    content_acquisition
+    integrations
+    infrastructure
+
+[importlinter:contract:layers]
+name = Layered architecture
+type = layers
+layers =
+    app
+    services
+    workflows
+    integrations
+    infrastructure
+containers =
+exhaustive = False
+ignore_imports =
+    # Deferred composition point: a zero-argument BackendAPIAdapter() still needs a
+    # concrete local client. Everything else goes through workflows.ports.LocalBackendPort.
+    workflows.adapters.backend_api -> services.workflow_backend_client
+    # crawl4ai is a heavy optional dependency, imported only when actually used.
+    workflows.adapters.content -> services.analysis_service
+    # Resolved per call so tests can monkeypatch services.search_service.search_bing.
+    workflows.pipelines.research -> services.search_service
+
+[importlinter:contract:app-goes-through-services]
+name = app must not import workflows directly
+type = forbidden
+# Indirect paths are fine and expected -- app -> services -> workflows is the documented
+# direction. This contract is only about app reaching past the service layer itself.
+allow_indirect_imports = True
+source_modules =
+    app
+forbidden_modules =
+    workflows
+
+[importlinter:contract:workflows-never-imports-app]
+name = workflows must not import app
+type = forbidden
+allow_indirect_imports = True
+source_modules =
+    workflows
+    services
+    integrations
+    infrastructure
+forbidden_modules =
+    app

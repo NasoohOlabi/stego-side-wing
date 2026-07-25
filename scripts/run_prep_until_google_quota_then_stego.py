@@ -15,10 +15,10 @@ if str(_SRC) not in sys.path:
 from loguru import logger  # noqa: E402
 
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
-from infrastructure.prep_run_manifest import write_prep_run_manifest  # noqa: E402
 from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
-from services.workflow_run_tracker import track_workflow  # noqa: E402
+from infrastructure.workflow_run_tracker import track_workflow  # noqa: E402
 from workflows.runner import WorkflowRunner  # noqa: E402
+from workflows.utils.prep_run_manifest import write_prep_run_manifest  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:

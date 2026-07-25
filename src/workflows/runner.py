@@ -11,7 +11,7 @@ from uuid import uuid4
 from loguru import logger
 
 from infrastructure.json_logging import get_trace_id
-from services.workflow_run_tracker import get_run_id, has_active_run_for_command
+from services.workflow_run_tracker import has_active_run_for_command
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.config import isolated_workflow_config
 from workflows.pipelines.data_load import DataLoadPipeline
@@ -41,7 +41,6 @@ from workflows.runner_validate_post import (
     validation_outcome_from_report,
 )
 from workflows.utils.capacity_observability import log_workflow_capacity_observation
-from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.protocol_utils import stable_hash
 
 _LOG = logger.bind(component="WorkflowRunner")
@@ -1620,15 +1619,6 @@ class WorkflowRunner:
                 "allow_angles_fallback": allow_angles_fallback,
             },
         )
-        # region agent log
-        write_debug_probe(
-            run_id=str(get_run_id() or ""),
-            hypothesis_id="H4",
-            location="workflows/runner.py:run_double_process_new_post:start",
-            message="double-process workflow started",
-            data={"allow_angles_fallback": allow_angles_fallback},
-        )
-        # endregion
         post_id, file_name, resumed_from_claim = self._resolve_double_process_post(explicit_post_id)
         self._emit(
             on_progress,
@@ -1657,15 +1647,6 @@ class WorkflowRunner:
                     "post_id": post_id,
                 },
             )
-            # region agent log
-            write_debug_probe(
-                run_id=str(get_run_id() or ""),
-                hypothesis_id="H4",
-                location="workflows/runner.py:run_double_process_new_post:pass1_start",
-                message="double-process pass 1 started",
-                data={"post_id": post_id, "cache_mode": "pass_1"},
-            )
-            # endregion
             t_pass1 = time.perf_counter()
             while True:
                 try:
@@ -1706,15 +1687,6 @@ class WorkflowRunner:
                     time.sleep(1.0)
 
             pass1_total_ms = int((time.perf_counter() - t_pass1) * 1000)
-            # region agent log
-            write_debug_probe(
-                run_id=str(get_run_id() or ""),
-                hypothesis_id="H4",
-                location="workflows/runner.py:run_double_process_new_post:pass1_end",
-                message="double-process pass 1 finished",
-                data={"post_id": post_id, "elapsed_ms": pass1_total_ms},
-            )
-            # endregion
             self._emit(
                 on_progress,
                 "stage_progress",
@@ -1742,15 +1714,6 @@ class WorkflowRunner:
                     "post_id": post_id,
                 },
             )
-            # region agent log
-            write_debug_probe(
-                run_id=str(get_run_id() or ""),
-                hypothesis_id="H4",
-                location="workflows/runner.py:run_double_process_new_post:pass2_start",
-                message="double-process pass 2 started",
-                data={"post_id": post_id, "cache_mode": "pass_2"},
-            )
-            # endregion
             t_pass2 = time.perf_counter()
             while True:
                 try:
@@ -1790,15 +1753,6 @@ class WorkflowRunner:
                     time.sleep(1.0)
 
             pass2_total_ms = int((time.perf_counter() - t_pass2) * 1000)
-            # region agent log
-            write_debug_probe(
-                run_id=str(get_run_id() or ""),
-                hypothesis_id="H4",
-                location="workflows/runner.py:run_double_process_new_post:pass2_end",
-                message="double-process pass 2 finished",
-                data={"post_id": post_id, "elapsed_ms": pass2_total_ms},
-            )
-            # endregion
             self._emit(
                 on_progress,
                 "stage_progress",
@@ -1833,15 +1787,6 @@ class WorkflowRunner:
                 },
                 "stage_hash_match": comparison,
             }
-            # region agent log
-            write_debug_probe(
-                run_id=str(get_run_id() or ""),
-                hypothesis_id="H4",
-                location="workflows/runner.py:run_double_process_new_post:compare",
-                message="double-process stage comparison computed",
-                data={"post_id": post_id, **comparison},
-            )
-            # endregion
             _LOG.info(
                 "double_process_new_post post_id={} data_load_match={} research_match={} gen_angles_match={}",
                 post_id,

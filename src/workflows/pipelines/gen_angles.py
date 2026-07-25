@@ -29,7 +29,6 @@ from workflows.utils.angles_llm_config import (
 from workflows.utils.angles_llm_config import (
     angles_model_name,
 )
-from workflows.utils.debug_probe import write_debug_probe
 from workflows.utils.naturalness_gate import (
     filter_angles_for_post,
     naturalness_gate_enabled,
@@ -269,21 +268,6 @@ class GenAnglesPipeline:
             "input_capacity_limits": dictionary_report["capacity_limits"],
             "input_sample_entries": dictionary_report["sample_entries"],
         }
-        write_debug_probe(
-            run_id=None,
-            hypothesis_id="H3",
-            location="workflows/pipelines/gen_angles.py:preview_post:begin",
-            message="angle preview started",
-            data={
-                "post_id": post_id,
-                "input_count": len(dictionary),
-                "allow_fallback": allow_fallback,
-                "input_hash": report["input_hash"],
-                "dictionary_id": report["dictionary_id"],
-                "input_source_counts": report["input_source_counts"],
-                "input_capacity_applied": report["input_capacity_applied"],
-            },
-        )
         if not dictionary:
             angles = _apply_tangent_db_builder(
                 post=post,
@@ -400,20 +384,6 @@ class GenAnglesPipeline:
                     "angles_max_output": max_angles,
                 }
             )
-            write_debug_probe(
-                run_id=_probe_llm_run_id(self),
-                hypothesis_id="H3",
-                location="workflows/pipelines/gen_angles.py:preview_post:success",
-                message="angle preview succeeded",
-                data={
-                    "post_id": post_id,
-                    "input_count": len(dictionary),
-                    "angles_count": len(angles),
-                    "angles_raw_count": angles_raw_count,
-                    "angles_capped": angles_raw_count != len(angles),
-                    "allow_fallback": allow_fallback,
-                },
-            )
             _gen_angles_bind_log().info(
                 "gen_angles_preview_complete",
                 path="analyze_angles",
@@ -431,18 +401,6 @@ class GenAnglesPipeline:
             return {"post": processed_post, "report": report}
         except Exception as e:
             primary_ms = _elapsed_ms(t_an)
-            write_debug_probe(
-                run_id=_probe_llm_run_id(self),
-                hypothesis_id="H3",
-                location="workflows/pipelines/gen_angles.py:preview_post:failure",
-                message="angle preview primary path failed",
-                data={
-                    "post_id": post_id,
-                    "input_count": len(dictionary),
-                    "allow_fallback": allow_fallback,
-                    "error_kind": type(e).__name__,
-                },
-            )
             if not allow_fallback:
                 _gen_angles_bind_log().opt(exception=True).error(
                     "gen_angles_preview_failed",
@@ -460,18 +418,6 @@ class GenAnglesPipeline:
                 elapsed_ms_primary_path=primary_ms,
                 input_count=len(dictionary),
                 error_kind=type(e).__name__,
-            )
-            write_debug_probe(
-                run_id=_probe_llm_run_id(self),
-                hypothesis_id="H3",
-                location="workflows/pipelines/gen_angles.py:preview_post:fallback",
-                message="angle preview falling back to llm-generated angles",
-                data={
-                    "post_id": post_id,
-                    "input_count": len(dictionary),
-                    "allow_fallback": allow_fallback,
-                    "error_kind": type(e).__name__,
-                },
             )
             t_fb = time.perf_counter()
             angles = self._generate_angles_llm(dictionary)

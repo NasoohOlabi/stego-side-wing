@@ -93,7 +93,9 @@ def create_app(
     cache = Cache(
         config={
             "CACHE_TYPE": "FileSystemCache",  # Store on disk, not RAM
-            "CACHE_DIR": "cache-directory",  # Folder name (will be created auto)
+            # Anchored to REPO_ROOT: a bare relative name made the cache location depend
+            # on the process working directory. Same resolved path for the documented cwd.
+            "CACHE_DIR": str(REPO_ROOT / "cache-directory"),
             "CACHE_DEFAULT_TIMEOUT": 9999999,  # ~115 days (effectively permanent)
             "CACHE_THRESHOLD": 10000,  # Max number of items to store
         }

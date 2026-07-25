@@ -6,10 +6,16 @@ import os
 import sqlite3
 from typing import Any
 
+from infrastructure.config import REPO_ROOT
+
 logger = logging.getLogger(__name__)
 
-DB_FILE = "kv_store.db"
-OLD_DB_FILE = "kv_store.json"
+# Anchored to REPO_ROOT like every other path in the project. These used to be bare
+# relative names, so the store that got opened depended on the process working directory:
+# running the API from anywhere but the repo root silently created a second, empty
+# database. The resolved location is unchanged for the documented cwd.
+DB_FILE = str(REPO_ROOT / "kv_store.db")
+OLD_DB_FILE = str(REPO_ROOT / "kv_store.json")
 
 
 def init_db() -> None:

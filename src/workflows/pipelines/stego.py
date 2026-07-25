@@ -249,6 +249,11 @@ def _text_preview(text: Any, max_len: int = 180) -> str:
 
 
 def _prompt_style_for_attempt(configured_style: str, retry_count: int) -> str:
+    """Prompt contract for one attempt.
+
+    ``natural_sharpened`` generates with the plain natural prompt; the sharpening it names
+    happens after validation, not in the prompt (see ``should_sharpen`` in ``encode``).
+    """
     if configured_style == "natural_sharpened":
         return "natural"
     if configured_style == "natural_then_anchor_retry":
@@ -1905,6 +1910,8 @@ class StegoPipeline:
                     selected_idx,
                     _decoded_indices(validation_details),
                 )
+                # natural_sharpened sharpens on every attempt; every other style only
+                # sharpens once retries are exhausted.
                 should_sharpen = (
                     configured_prompt_style == "natural_sharpened"
                     or retry_count >= resolved_max_retries

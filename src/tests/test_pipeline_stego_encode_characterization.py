@@ -278,6 +278,52 @@ def test_encode_accepts_a_context_sharpened_candidate(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.usefixtures("clear_workflow_capacity_env")
+def test_natural_sharpened_style_is_selectable_and_sharpens_on_the_first_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``natural_sharpened`` was implemented but unreachable through config.
+
+    ``should_sharpen`` tests for it, but the config parser could never return it, so the
+    branch was dead and sharpening only ever ran on the final retry.
+    """
+    from infrastructure.config import get_workflow_stego_prompt_style
+
+    monkeypatch.setenv("WORKFLOW_STEGO_PROMPT_STYLE", "natural_sharpened")
+    assert get_workflow_stego_prompt_style() == "natural_sharpened"
+
+    class _SharpeningLLM:
+        last_call_metadata: ClassVar[dict[str, Any]] = {"elapsed_ms": 1}
+
+        def call_llm(self, prompt: str, **kwargs: Any) -> str:
+            if prompt.startswith("Revise the draft reply"):
+                return json.dumps({"text": "SHARPENED start next spring reply."})
+            return json.dumps(LLM_TEXTS)
+
+    class _OnlyAcceptsSharpened:
+        def __init__(self) -> None:
+            self.selected_idx = 0
+
+        def decode(self, **kwargs: Any) -> int:
+            text = str(kwargs.get("stego_text", ""))
+            if text.startswith("SHARPENED"):
+                return self.selected_idx
+            return self.selected_idx - 1 if self.selected_idx > 0 else self.selected_idx + 1
+
+    monkeypatch.setenv("WORKFLOW_NATURALNESS_GATE_ENABLED", "0")
+    decode = _OnlyAcceptsSharpened()
+    pipeline = _build_pipeline(decode, llm=_SharpeningLLM())
+    augmentation = pipeline._augment_post("x", POST)
+    decode.selected_idx = int(augmentation["angleEmbedding"]["selectedAngle"]["idx"])
+
+    # max_retries=2 means the last-retry fallback would not fire on attempt 1.
+    result = pipeline.encode(payload="meet at noon", post=POST, tag="sharp", max_retries=2)
+
+    assert result["succeeded"] is True
+    assert result["retry_count"] == 0, "sharpening should have happened on the first attempt"
+    assert result["stego_text"].startswith("SHARPENED")
+
+
+@pytest.mark.usefixtures("clear_workflow_capacity_env")
 def test_encode_rejects_a_post_without_angles() -> None:
     pipeline = _build_pipeline(_AlwaysSelectedDecode())
 

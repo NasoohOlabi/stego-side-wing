@@ -110,6 +110,10 @@ WorkflowStegoPromptStyle = Literal[
     "anchored",
     "guided_natural",
     "natural_then_anchor_retry",
+    # Generate with the natural prompt, then context-sharpen on every attempt rather than
+    # only on the last retry. StegoPipeline has always implemented this, but it was absent
+    # from this Literal and from the parser below, so it could not be selected.
+    "natural_sharpened",
 ]
 
 # --- Workflow capacity & URL fetch (defaults in code; WORKFLOW_* overrides: process env only) ---
@@ -405,6 +409,8 @@ def get_workflow_stego_prompt_style() -> WorkflowStegoPromptStyle:
         return "natural_then_anchor_retry"
     if raw in ("anchored", "anchor", "recoverable"):
         return "anchored"
+    if raw in ("natural_sharpened", "sharpened", "natural_sharpen"):
+        return "natural_sharpened"
     return "natural"
 
 

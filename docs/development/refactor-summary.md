@@ -1,6 +1,15 @@
 ﻿# Refactor Summary
 
-This document summarizes the structural refactoring of the `src/` directory.
+**Historical.** This records the 2024-era split of `src/` into
+app / services / integrations / infrastructure. The tree under "New Structure" was already
+out of date when this note was added and is kept only as a record of the intent at the time
+— it predates `workflows/` entirely, lists an `integrations/lumen_api.py` that was never
+created, and shows a single test file.
+
+For the structure as it actually is, read
+[`architecture-layers.md`](architecture-layers.md) (layer rules, ports, and the enforced
+`.importlinter` contract) and [`refactor-baseline.md`](refactor-baseline.md) (measured
+sizes, gates, and the maintainability work done since).
 
 ## Current notes (2026)
 

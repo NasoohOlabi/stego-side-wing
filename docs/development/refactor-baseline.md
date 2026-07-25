@@ -129,8 +129,28 @@ around it.
   `_evaluate_candidate_groups` and the receiver — Phase 4 work, not a local edit.
 - **Phase 5.3–5.4** — HTTP error mapping and a validated settings model for
   `infrastructure/config.py`.
-- **Phase 6.2–6.3** — `src/tests` and `scripts/` are still outside pyright's `include`;
-  `integrations/` and several services still have no tests.
+- **Phase 6.3** — `integrations/` and several services still have no tests.
+
+### Phase 6.2 — measured, then deliberately deferred
+
+Bringing `src/tests` and `scripts/` under pyright was attempted and reverted. The numbers,
+so nobody re-derives them:
+
+| Scope added | Errors | Character |
+|---|---|---|
+| `src/tests` | 206 | 182 are `reportAttributeAccessIssue` — the monkeypatch idiom (assigning lambdas onto methods of `__new__`-built objects). Enforcing this fights the established test style rather than finding bugs. |
+| `scripts` only, `src/tests` excluded, `scripts` given its own `executionEnvironment` | **25** | Genuinely tractable, mostly `reportOptionalMemberAccess` (calling `.get` on a possibly-`None` value) in the analysis scripts. Worth doing as its own task. |
+
+There is a trap: adding `scripts` to `include` **without** giving it its own entry in
+`executionEnvironments` silently widens the checked set to `src/tests` as well, turning 25
+errors into 203. The existing environment is rooted at `src`, so anything included outside
+that root needs its own.
+
+Enabling `scripts` is the recommended next step — it already paid for itself. While measuring
+this, pyright found `scripts/run_zlg_comparison.py` was dead on arrival: it constructed
+`ComparisonInput(domain=..., comment_chain=...)` after those fields had been replaced by
+`cover_texts`, so it raised `TypeError` immediately, and it lacked the `sys.path` bootstrap
+its sibling scripts have so it could not even be imported. Both fixed.
 - **Phase 2.3** — the import-time runner singleton, blocked as described above.
 
 ### Bugs found while refactoring
@@ -143,6 +163,7 @@ All found while refactoring, all fixed.
 | `POST /workflows/run` with `command="stego-receiver-live"` ran `run_full_pipeline` while echoing the requested command | `routes_workflows.wf_run` |
 | `natural_sharpened` prompt style implemented but absent from the config Literal and parser, so it could never be selected and both its branches were dead | `config.py` / `pipelines/stego.py` |
 | KV store and Flask cache used bare relative paths, so which database you got depended on the process working directory | `services/kv_service.py`, `app/app_factory.py` |
+| `scripts/run_zlg_comparison.py` was dead on arrival — built `ComparisonInput` with fields removed in an earlier refactor, and had no `sys.path` bootstrap so it could not import at all | `scripts/run_zlg_comparison.py` |
 | Non-breaking hyphen inside a live search query string | `integrations/scrapingdog_api.py` |
 | `infrastructure` imported `workflows` (bottom layer depending on an upper one) | `prep_run_manifest` |
 | Env-precedence test passed only on machines without a `.env` | `test_angle_runner_llm_retries` |

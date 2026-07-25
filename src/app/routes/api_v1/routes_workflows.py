@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from app.routes.api_v1.blueprint import bp
 from app.routes.api_v1.constants import WORKFLOW_COMMANDS
+from app.routes.api_v1.error_mapping import workflow_error_response
 from app.routes.api_v1.http_parsers import (
     body_bool,
     body_int,
@@ -85,7 +86,7 @@ def wf_data_load() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/research", methods=["POST"])
@@ -130,7 +131,7 @@ def wf_research() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/gen-angles", methods=["POST"])
@@ -175,7 +176,7 @@ def wf_gen_angles() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/prep-until-google-quota-then-stego", methods=["POST"])
@@ -225,7 +226,7 @@ def wf_prep_until_google_quota_then_stego() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/stego", methods=["POST"])
@@ -292,7 +293,7 @@ def wf_stego() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/decode", methods=["POST"])
@@ -342,7 +343,7 @@ def wf_decode() -> Any:
         )
         return ok(payload_out)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/receiver", methods=["POST"])
@@ -409,7 +410,7 @@ def wf_receiver() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/stego-receiver-live", methods=["POST"])
@@ -502,7 +503,7 @@ def wf_stego_receiver_live() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/gen-terms", methods=["POST"])
@@ -543,7 +544,7 @@ def wf_gen_terms() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/validate-post", methods=["POST"])
@@ -592,7 +593,7 @@ def wf_validate_post() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/double-process-new-post", methods=["POST"])
@@ -644,7 +645,7 @@ def wf_double_process_new_post() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/batch-angles-determinism", methods=["POST"])
@@ -688,7 +689,7 @@ def wf_batch_angles_determinism() -> Any:
     except ValueError as exc:
         return fail(str(exc), status=400)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/full", methods=["POST"])
@@ -732,7 +733,7 @@ def wf_full() -> Any:
         )
         return ok(data)
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)
 
 
 @bp.route("/workflows/pipelines", methods=["GET"])
@@ -1205,4 +1206,4 @@ def wf_run() -> Any:
         data = sync_workflow(command, lambda: run_dispatch(None))
         return ok({"command": command, "result": data})
     except Exception as exc:
-        return fail("Workflow execution failed", status=500, details=str(exc))
+        return workflow_error_response(exc)

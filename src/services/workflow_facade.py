@@ -6,6 +6,13 @@ re-exports stable symbols so route code does not import deep workflow internals.
 
 from __future__ import annotations
 
+from workflows.errors import (
+    DataLoadFetchError,
+    NoUnprocessedPostsError,
+    QuotaExceededError,
+    ReceiverDataLoadError,
+    WorkflowError,
+)
 from workflows.runner import WorkflowRunner
 from workflows.runner_orchestration_utils import (
     reconcile_stale_double_process_claim_vs_explicit,
@@ -22,6 +29,11 @@ from workflows.utils.workflow_llm_prompts import (
 )
 
 __all__ = [
+    "DataLoadFetchError",
+    "NoUnprocessedPostsError",
+    "QuotaExceededError",
+    "ReceiverDataLoadError",
+    "WorkflowError",
     "WorkflowLlmPromptsDocument",
     "WorkflowRunner",
     "default_workflow_llm_prompts",

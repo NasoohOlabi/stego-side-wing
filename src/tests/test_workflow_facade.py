@@ -16,6 +16,12 @@ from services import workflow_facade
 
 # Everything app code is allowed to reach through the facade.
 EXPECTED_SURFACE = {
+    # Error types, so app can map failures to HTTP without importing workflows directly.
+    "WorkflowError",
+    "NoUnprocessedPostsError",
+    "QuotaExceededError",
+    "DataLoadFetchError",
+    "ReceiverDataLoadError",
     "WorkflowRunner",
     "WorkflowLlmPromptsDocument",
     "default_workflow_llm_prompts",

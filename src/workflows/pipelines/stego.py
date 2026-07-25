@@ -60,12 +60,6 @@ from workflows.utils.stego_codec import (
 from workflows.utils.stego_codec import (
     compress_payload as codec_compress_payload,
 )
-from workflows.utils.stego_codec import (
-    embed_in_angle_selection as codec_embed_in_angle_selection,
-)
-from workflows.utils.stego_codec import (
-    embed_in_comment_selection as codec_embed_in_comment_selection,
-)
 from workflows.utils.workflow_llm_prompts import stego_encode_prompts_for_style
 
 # Backward-compatible names for tests and callers.
@@ -854,14 +848,6 @@ class StegoPipeline:
             else None,
         }
 
-    def _embed_in_comment_selection(self, bits: str, post: dict[str, Any]) -> dict[str, Any]:
-        return codec_embed_in_comment_selection(bits, post)
-
-    def _embed_in_angle_selection(
-        self, bits: str, nested_angles: list[list[dict[str, Any]]]
-    ) -> dict[str, Any]:
-        return codec_embed_in_angle_selection(bits, nested_angles)
-
     def _augment_post(self, payload: str, post: dict[str, Any]) -> dict[str, Any]:
         return codec_augment_post(payload, post)
 
@@ -1415,104 +1401,6 @@ class StegoPipeline:
             **revised_validation,
             "succeeded": False,
             "synthetic_anchor_replacement_failed": True,
-        }
-
-    def _cross_validate(
-        self,
-        candidate_texts: list[str],
-        few_shots: list[dict[str, Any]],
-        tangents_db: list[dict[str, Any]],
-        selected_angle: dict[str, Any],
-        *,
-        encode_run_id: str = "",
-    ) -> dict[str, Any]:
-        t_cv = time.perf_counter()
-        decoded_indices: list[int | None] = []
-        decodeds: list[dict[str, Any] | None] = []
-        for idx, text in enumerate(candidate_texts):
-            t_dec = time.perf_counter()
-            decoded_idx = self.decode_pipeline.decode(
-                stego_text=text,
-                angles=tangents_db,
-                few_shots=few_shots,
-            )
-            dec_ms = _elapsed_ms_since(t_dec)
-            db = _stego_log_bind("timing", timing_phase="decode_candidate").bind(
-                stego_encode_run_id=encode_run_id,
-                candidate_index=idx,
-                elapsed_ms=dec_ms,
-            )
-            db.debug(
-                "candidate_index={} elapsed_ms={} decoded_idx={}",
-                idx,
-                dec_ms,
-                decoded_idx,
-            )
-            decoded_indices.append(decoded_idx)
-            if isinstance(decoded_idx, int) and 0 <= decoded_idx < len(tangents_db):
-                decoded = tangents_db[decoded_idx]
-                decodeds.append(decoded)
-            else:
-                decodeds.append(None)
-
-        validation_candidates: list[dict[str, Any]] = []
-        selected_summary = _angle_summary(selected_angle)
-        for idx, text in enumerate(candidate_texts):
-            decoded_obj = decodeds[idx] if idx < len(decodeds) else None
-            decoded_idx = decoded_indices[idx] if idx < len(decoded_indices) else None
-            validation_candidates.append(
-                {
-                    "candidate_index": idx,
-                    "decoded_index": decoded_idx,
-                    "decoded_angle": _angle_summary(decoded_obj),
-                    "matches_selected_angle": _eq_angle(decoded_obj, selected_angle),
-                    "text_preview": _text_preview(text),
-                }
-            )
-
-        success_idx = -1
-        for idx, decoded_obj in enumerate(decodeds):
-            candidate_text = candidate_texts[idx] if idx < len(candidate_texts) else None
-            if _eq_angle(decoded_obj, selected_angle) and _is_non_empty_string(candidate_text):
-                success_idx = idx
-                break
-
-        cv_ms = _elapsed_ms_since(t_cv)
-        _stego_log_bind("timing", timing_phase="cross_validate").bind(
-            stego_encode_run_id=encode_run_id,
-            elapsed_ms=cv_ms,
-            candidate_count=len(candidate_texts),
-            succeeded=success_idx != -1,
-        ).info(
-            "elapsed_ms={} candidate_count={} succeeded={}",
-            cv_ms,
-            len(candidate_texts),
-            success_idx != -1,
-        )
-
-        if success_idx != -1:
-            return {
-                "succeeded": True,
-                "stegoText": candidate_texts[success_idx],
-                "successIdx": success_idx,
-                "decodedIndices": decoded_indices,
-                "validationDetails": {
-                    "selected_angle": selected_summary,
-                    "candidates": validation_candidates,
-                },
-            }
-
-        breakdown: dict[str, Any] = {}
-        for idx, text in enumerate(candidate_texts):
-            breakdown[text] = decodeds[idx]
-        return {
-            "succeeded": False,
-            "breakDown": breakdown,
-            "decodedIndices": decoded_indices,
-            "validationDetails": {
-                "selected_angle": selected_summary,
-                "candidates": validation_candidates,
-            },
         }
 
     def encode(

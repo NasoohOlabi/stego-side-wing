@@ -3,6 +3,11 @@
 import pytest
 
 from workflows.utils.stego_codec import (
+    INVISIBLE_PAYLOAD_END,
+    INVISIBLE_PAYLOAD_LENGTH_BITS,
+    INVISIBLE_PAYLOAD_ONE,
+    INVISIBLE_PAYLOAD_START,
+    INVISIBLE_PAYLOAD_ZERO,
     angle_selection_bit_width,
     augment_post,
     augment_post_with_selection_bits,
@@ -12,7 +17,6 @@ from workflows.utils.stego_codec import (
     compress_payload,
     decode_elias_gamma,
     decompress_after_embed_prefix,
-    embed_invisible_payload,
     encode_elias_gamma,
     encode_int,
     extract_invisible_payload,
@@ -292,14 +296,43 @@ def test_recover_with_compressed_full_accepts_modulo_angle_bits():
     assert recovered[1]["angle_bits"] == "11"
 
 
-def test_legacy_invisible_payload_helpers_are_migration_only():
+def _build_legacy_invisible_text(visible_text: str, payload: str) -> str:
+    """Construct a legacy invisible-carrier artifact.
+
+    The production write-side helper was removed: AGENTS.md forbids invisible carriers, so
+    the codec must not offer a way to create one. This local builder keeps the read-side
+    (detect / strip) covered against the exact byte layout legacy artifacts use.
+    """
+    payload_bytes = payload.encode("utf-8")
+    length_bits = format(len(payload_bytes), f"0{INVISIBLE_PAYLOAD_LENGTH_BITS}b")
+    payload_bits = "".join(format(b, "08b") for b in payload_bytes)
+    invisible_bits = "".join(
+        INVISIBLE_PAYLOAD_ONE if bit == "1" else INVISIBLE_PAYLOAD_ZERO
+        for bit in length_bits + payload_bits
+    )
+    return f"{visible_text}{INVISIBLE_PAYLOAD_START}{invisible_bits}{INVISIBLE_PAYLOAD_END}"
+
+
+def test_legacy_invisible_payload_helpers_are_read_only():
     visible_text = "Distribution-compatible visible text."
     payload = "hidden-" + ("XYZ123" * 256)
 
-    stego_text = embed_invisible_payload(visible_text, payload)
+    stego_text = _build_legacy_invisible_text(visible_text, payload)
 
     assert strip_invisible_payload(stego_text) == visible_text
     assert extract_invisible_payload(stego_text) == payload
+
+
+def test_codec_exposes_no_invisible_carrier_write_helper():
+    """Guard the forbidden-carrier rule: nothing in the codec may create invisible payloads."""
+    import workflows.utils.stego_codec as codec
+
+    writers = [
+        name
+        for name in dir(codec)
+        if "invisible" in name.lower() and name.startswith(("embed", "encode", "build", "make"))
+    ]
+    assert writers == []
 
 
 def test_secure_payload_transform_roundtrip_and_authentication():

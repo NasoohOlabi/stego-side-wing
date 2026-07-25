@@ -271,17 +271,11 @@ def unprotect_payload(
     return _unprotect_secure_compact_v2(protected_payload, secret)
 
 
-@validate_call
-def embed_invisible_payload(visible_text: str, payload: str) -> str:
-    """Legacy migration-only helper. New sender code must not use invisible carriers."""
-    payload_bytes = payload.encode("utf-8")
-    length_bits = format(len(payload_bytes), f"0{INVISIBLE_PAYLOAD_LENGTH_BITS}b")
-    payload_bits = "".join(format(b, "08b") for b in payload_bytes)
-    invisible_bits = "".join(
-        INVISIBLE_PAYLOAD_ONE if bit == "1" else INVISIBLE_PAYLOAD_ZERO
-        for bit in length_bits + payload_bits
-    )
-    return f"{visible_text}{INVISIBLE_PAYLOAD_START}{invisible_bits}{INVISIBLE_PAYLOAD_END}"
+# The invisible-carrier helpers below are READ-ONLY on purpose. AGENTS.md forbids embedding
+# payloads in zero-width / invisible / control-format Unicode, so there is deliberately no
+# write-side counterpart: `extract_invisible_payload` and `strip_invisible_payload` exist only
+# to detect and clean up legacy artifacts produced before that rule, and to assert in tests
+# that current output carries no invisible payload.
 
 
 def _split_invisible_payload(text: str) -> tuple[str, str | None]:

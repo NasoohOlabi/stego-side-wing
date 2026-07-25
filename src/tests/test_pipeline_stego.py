@@ -507,21 +507,6 @@ def test_process_post_falls_back_to_auto_select_when_post_id_missing_on_disk():
     assert saved == [("final-step", "p11_same-tag.json")]
 
 
-def test_cross_validate_rejects_empty_matching_candidate_text():
-    pipeline = StegoPipeline.__new__(StegoPipeline)
-    angle = {"category": "c", "tangent": "t", "source_quote": "q"}
-    pipeline.decode_pipeline = SimpleNamespace(decode=lambda **kwargs: 0)
-
-    result = pipeline._cross_validate(
-        candidate_texts=[""],
-        few_shots=[],
-        tangents_db=[angle],
-        selected_angle=angle,
-    )
-
-    assert result["succeeded"] is False
-
-
 def test_contextuality_gate_rejects_generic_editorial_drift():
     post_augmentation = {
         "commentEmbedding": {

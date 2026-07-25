@@ -59,6 +59,28 @@ that assert on env precedence must use the `clear_llm_backend_env` /
 `clear_workflow_capacity_env` fixtures in `src/tests/conftest.py`, which strip keys from
 **both** `os.environ` and the dotenv cache.
 
+## Refactors that were investigated and rejected
+
+Several apparent duplications turned out to be deliberate. They are recorded here so
+nobody spends the effort again — and, more importantly, so nobody "fixes" them and
+silently changes behaviour.
+
+| Apparent duplicate | Why it stays split |
+|---|---|
+| `stego._STOPWORDS` vs `naturalness_gate._STOPWORDS` | Different sets (63 vs 33 entries; 32 words appear only in stego). They return different tokens for the same input and drive different decisions — contextuality scoring vs the naturalness gate. |
+| `stego._text_preview` vs `protocol_utils.text_preview` | Different defaults (180 vs 160) and different truncation: one appends `...` after the cut so output can exceed the limit, the other reserves room inside it. They feed different output fields. |
+| `stego_feedback_service._flatten_angles` vs `stego_codec.flatten_angle_groups` | The codec version injects a positional `idx` into every angle. The service must report angles unchanged. |
+| `llm.py` vs `angle_runner.py` retry loops | Independently tuned: 3 vs 6 attempts, 1.0/30.0 s vs 1.5/60.0 s backoff, and `angle_runner` deliberately does not retry HTTP 408. Angle extraction sends far larger prompts. Only the transport-fault token sets were genuinely shared (now in `infrastructure/retry_policy.py`). |
+| scripts' `_read_json`/`_write_json` vs `infrastructure/cache.py` | `read_json_cache` is a **cache** helper: it swallows every exception and returns `None`. The scripts must fail loudly — several validate the payload is a dict and raise. Swapping them would let benchmark scripts silently proceed on unreadable input. The scripts' `_write_json` variants also disagree with each other on `ensure_ascii` (True vs False), which changes output bytes for non-ASCII text. |
+
+## Phase outcomes
+
+| Phase | Tests | Coverage | Notes |
+|---|---|---|---|
+| Baseline | 523 | 67% | starting point |
+| 0 — safety nets | 530 | 67% | golden characterization test, offline network guard, shared fakes |
+| 1 — dead code & dupes | 530 | 68% | 307 statements removed; `src/util` forks, dead stego seams, the invisible-carrier write helper, and the f0bcc9 debug scaffold all deleted |
+
 ## Verifying a change is formatting-only
 
 Compare parsed ASTs against HEAD rather than eyeballing the diff. Decode git blobs as

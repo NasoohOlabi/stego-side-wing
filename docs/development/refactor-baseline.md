@@ -73,6 +73,35 @@ silently changes behaviour.
 | `llm.py` vs `angle_runner.py` retry loops | Independently tuned: 3 vs 6 attempts, 1.0/30.0 s vs 1.5/60.0 s backoff, and `angle_runner` deliberately does not retry HTTP 408. Angle extraction sends far larger prompts. Only the transport-fault token sets were genuinely shared (now in `infrastructure/retry_policy.py`). |
 | scripts' `_read_json`/`_write_json` vs `infrastructure/cache.py` | `read_json_cache` is a **cache** helper: it swallows every exception and returns `None`. The scripts must fail loudly — several validate the payload is a dict and raise. Swapping them would let benchmark scripts silently proceed on unreadable input. The scripts' `_write_json` variants also disagree with each other on `ensure_ascii` (True vs False), which changes output bytes for non-ASCII text. |
 
+## Deferred: removing the import-time runner singleton
+
+`app/routes/api_v1/runner_access.py` builds a `WorkflowRunner` at import. That is genuinely
+undesirable — it constructs every pipeline and adapter, and `WorkflowConfig.__init__`
+(`workflows/config.py:56-66`) creates eight directories, so *importing a route module writes
+to disk*.
+
+It is not removable without rewriting test mocks. Roughly ten `test_api_v1_*.py` files patch
+**methods on the instance**:
+
+```python
+monkeypatch.setattr(api_v1_routes.runner, "run_receiver", _run)
+```
+
+That works only because `routes_workflows.py` holds the very same object (bound by
+`from ... import runner` at line 24). Making the runner lazy, per-app, or proxied changes
+which object the routes see, and every one of those tests breaks.
+
+Two things must land before this is worth attempting:
+
+1. Move directory creation out of `WorkflowConfig.__init__` so import stops touching the
+   filesystem. Needs care: some readers assume the directories already exist, so a fresh
+   clone could regress.
+2. Migrate the affected tests onto the constructor injection added in phase 2.4, so they
+   inject a runner instead of mutating a shared one.
+
+Until then the singleton stays, and the import-linter contract keeps the layering honest
+around it.
+
 ## Phase outcomes
 
 | Phase | Tests | Coverage | Notes |
@@ -80,6 +109,16 @@ silently changes behaviour.
 | Baseline | 523 | 67% | starting point |
 | 0 — safety nets | 530 | 67% | golden characterization test, offline network guard, shared fakes |
 | 1 — dead code & dupes | 530 | 68% | 307 statements removed; `src/util` forks, dead stego seams, the invisible-carrier write helper, and the f0bcc9 debug scaffold all deleted |
+| 2 — layering & DI | 548 | 68% | `workflows -> services` crossings 12 → 3; ports + constructor injection added; `lint-imports` now gated in CI |
+
+### Gate added in phase 2
+
+```bash
+PYTHONPATH=src uv run lint-imports
+```
+
+Contracts live in `.importlinter` and encode `architecture-layers.md`, including the three
+documented deferred-import exceptions. CI runs it between the ruff and pyright steps.
 
 ## Verifying a change is formatting-only
 

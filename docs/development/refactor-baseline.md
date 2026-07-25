@@ -112,14 +112,37 @@ around it.
 | 2 — layering & DI | 548 | 68% | `workflows -> services` crossings 12 → 3; ports + constructor injection added; `lint-imports` now gated in CI |
 | 3 — god objects (partial) | 558 | 69% | `encode` 444 → 368 lines, `encode_binary_selection_bits` 244 → 195; `stego.py` now 88% covered |
 | 5 — errors (partial) | 574 | 69% | typed `workflows/errors.py` behind the existing message-based detectors |
-| 6 — guardrails (partial) | 588 | 69% | ruff ratcheted to SIM/C4/RUF/PT; `/workflows/run` dispatch bug found and fixed |
+| 6 — guardrails (partial) | 589 | 71% | ruff ratcheted to SIM/C4/RUF/PT with no carve-outs; `/workflows/run` dispatch bug found and fixed |
+
+### Still open
+
+- **Phase 4 (Pydantic contracts)** — untouched. `workflows/contracts.py` still uses
+  `@dataclass` with hand-rolled `to_dict`, whose filter drops falsy-but-present values
+  (`""`, `0`), not just `None`. A naive `model_dump(exclude_none=True)` conversion would
+  change artifact shape.
+- **Phase 3.2–3.4** — splitting `stego.py` and `runner.py` into packages.
+- **Phase 3.5** — LLM provider strategy. Note the four `_call_*` methods are less alike than
+  they look: the Gemini one rotates API keys and falls back from SDK to REST.
+- **Phase 5.2** — the bare `except` wrapping `DecodePipeline.decode` returns `None`, making a
+  crash indistinguishable from "no match" *to the caller* (it is logged with a traceback).
+  Fixing it properly means changing the return contract, which ripples through
+  `_evaluate_candidate_groups` and the receiver — Phase 4 work, not a local edit.
+- **Phase 5.3–5.4** — HTTP error mapping and a validated settings model for
+  `infrastructure/config.py`.
+- **Phase 6.2–6.3** — `src/tests` and `scripts/` are still outside pyright's `include`;
+  `integrations/` and several services still have no tests.
+- **Phase 2.3** — the import-time runner singleton, blocked as described above.
 
 ### Bugs found while refactoring
+
+All found while refactoring, all fixed.
 
 | Bug | Where |
 |---|---|
 | `config/pareto_variants.json` required by code but silently untracked (blanket `*.json` ignore) | `.gitignore` |
 | `POST /workflows/run` with `command="stego-receiver-live"` ran `run_full_pipeline` while echoing the requested command | `routes_workflows.wf_run` |
+| `natural_sharpened` prompt style implemented but absent from the config Literal and parser, so it could never be selected and both its branches were dead | `config.py` / `pipelines/stego.py` |
+| KV store and Flask cache used bare relative paths, so which database you got depended on the process working directory | `services/kv_service.py`, `app/app_factory.py` |
 | Non-breaking hyphen inside a live search query string | `integrations/scrapingdog_api.py` |
 | `infrastructure` imported `workflows` (bottom layer depending on an upper one) | `prep_run_manifest` |
 | Env-precedence test passed only on machines without a `.env` | `test_angle_runner_llm_retries` |

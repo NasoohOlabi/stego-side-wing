@@ -263,6 +263,67 @@ def _decoded_indices(validation_details: dict[str, Any]) -> list[Any]:
     return [item.get("decoded_index") for item in candidates]
 
 
+def _candidate_validation_audit(
+    accepted_candidate: dict[str, Any], *, acceptance_source: str
+) -> dict[str, Any]:
+    """Sender-audit record describing which candidate was accepted and how."""
+    return {
+        "acceptance_source": acceptance_source,
+        "group_index": accepted_candidate.get("group_index"),
+        "candidate_index": accepted_candidate.get("candidate_index"),
+        "decoded_index": accepted_candidate.get("decoded_index"),
+        "strict_decoded_index": accepted_candidate.get("strict_decoded_index"),
+    }
+
+
+def _encode_success_result(
+    *,
+    stego_text: str,
+    post: dict[str, Any],
+    selected_angle: dict[str, Any],
+    selected_idx: Any,
+    retry_count: int,
+    tag: str | None,
+    sender_audit: dict[str, Any],
+    post_augmentation: dict[str, Any],
+    encoded_results: list[dict[str, Any]],
+    validation_details: dict[str, Any] | None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Successful encode artifact, shared by the payload and diagnostic entry points.
+
+    ``extra`` carries the diagnostic-only fields the binary-selection-bits path adds.
+    """
+    result: dict[str, Any] = {
+        "stego_text": stego_text,
+        "post": post,
+        "selected_angle": selected_angle,
+        "angle_index": selected_idx,
+        "succeeded": True,
+        "retry_count": retry_count,
+        "tag": tag,
+        "sender_audit": sender_audit,
+        "embedding": post_augmentation,
+        "encoded_samples": encoded_results,
+        "decoded_indices": _decoded_indices(validation_details or {}),
+        "validation_details": validation_details,
+    }
+    if extra:
+        result.update(extra)
+    return result
+
+
+def _diagnostic_bits_fields(bits: str, post_augmentation: dict[str, Any]) -> dict[str, Any]:
+    """Extra result fields carried only by the binary-selection-bits diagnostic path."""
+    return {
+        "binary_selection_bits": bits,
+        "comment_bits": post_augmentation.get("commentBits", ""),
+        "angle_bits": post_augmentation.get("angleBits", ""),
+        "compression_skipped": True,
+        "payload_transform_skipped": True,
+    }
+
+
 def _tokenize_content_words(text: str) -> list[str]:
     return [
         token
@@ -1687,29 +1748,21 @@ class StegoPipeline:
                         retry_count=retry_count,
                         timing_outcome="success",
                     )
-                    sender_audit["candidate_validation"] = {
-                        "acceptance_source": "draft",
-                        "group_index": accepted_candidate.get("group_index"),
-                        "candidate_index": accepted_candidate.get("candidate_index"),
-                        "decoded_index": accepted_candidate.get("decoded_index"),
-                        "strict_decoded_index": accepted_candidate.get("strict_decoded_index"),
-                    }
-                    return {
-                        "stego_text": stego_text,
-                        "post": post,
-                        "selected_angle": selected_angle,
-                        "angle_index": selected_idx,
-                        "succeeded": True,
-                        "retry_count": retry_count,
-                        "tag": tag,
-                        "sender_audit": sender_audit,
-                        "embedding": post_augmentation,
-                        "encoded_samples": encoded_results,
-                        "decoded_indices": _decoded_indices(
-                            validation.get("validationDetails", {})
-                        ),
-                        "validation_details": validation.get("validationDetails"),
-                    }
+                    sender_audit["candidate_validation"] = _candidate_validation_audit(
+                        accepted_candidate, acceptance_source="draft"
+                    )
+                    return _encode_success_result(
+                        stego_text=stego_text,
+                        post=post,
+                        selected_angle=selected_angle,
+                        selected_idx=selected_idx,
+                        retry_count=retry_count,
+                        tag=tag,
+                        sender_audit=sender_audit,
+                        post_augmentation=post_augmentation,
+                        encoded_results=encoded_results,
+                        validation_details=validation.get("validationDetails"),
+                    )
 
                 validation_details = validation.get("validationDetails", {})
                 _stego_log_bind("validation").warning(
@@ -1764,31 +1817,21 @@ class StegoPipeline:
                                 retry_count=retry_count,
                                 timing_outcome="context_sharpen",
                             )
-                            sender_audit["candidate_validation"] = {
-                                "acceptance_source": "context_sharpen",
-                                "group_index": accepted_candidate.get("group_index"),
-                                "candidate_index": accepted_candidate.get("candidate_index"),
-                                "decoded_index": accepted_candidate.get("decoded_index"),
-                                "strict_decoded_index": accepted_candidate.get(
-                                    "strict_decoded_index"
-                                ),
-                            }
-                            return {
-                                "stego_text": str(accepted_candidate.get("text", "")),
-                                "post": post,
-                                "selected_angle": selected_angle,
-                                "angle_index": selected_idx,
-                                "succeeded": True,
-                                "retry_count": retry_count,
-                                "tag": tag,
-                                "sender_audit": sender_audit,
-                                "embedding": post_augmentation,
-                                "encoded_samples": encoded_results,
-                                "decoded_indices": _decoded_indices(
-                                    sharpen_validation.get("validationDetails", {})
-                                ),
-                                "validation_details": sharpen_validation.get("validationDetails"),
-                            }
+                            sender_audit["candidate_validation"] = _candidate_validation_audit(
+                                accepted_candidate, acceptance_source="context_sharpen"
+                            )
+                            return _encode_success_result(
+                                stego_text=str(accepted_candidate.get("text", "")),
+                                post=post,
+                                selected_angle=selected_angle,
+                                selected_idx=selected_idx,
+                                retry_count=retry_count,
+                                tag=tag,
+                                sender_audit=sender_audit,
+                                post_augmentation=post_augmentation,
+                                encoded_results=encoded_results,
+                                validation_details=sharpen_validation.get("validationDetails"),
+                            )
                 if retry_count >= resolved_max_retries:
                     error_details = {
                         "reason": (
@@ -1941,11 +1984,7 @@ class StegoPipeline:
                 "sender_audit": sender_audit,
                 "error": "No samples generated from angle embedding",
                 "embedding": post_augmentation,
-                "binary_selection_bits": bits,
-                "comment_bits": post_augmentation.get("commentBits", ""),
-                "angle_bits": post_augmentation.get("angleBits", ""),
-                "compression_skipped": True,
-                "payload_transform_skipped": True,
+                **_diagnostic_bits_fields(bits, post_augmentation),
             }
 
         retry_count = 0
@@ -1984,13 +2023,9 @@ class StegoPipeline:
                 if validation.get("succeeded"):
                     accepted_candidate = validation.get("accepted_candidate") or {}
                     stego_text = str(accepted_candidate.get("text", ""))
-                    sender_audit["candidate_validation"] = {
-                        "acceptance_source": "draft",
-                        "group_index": accepted_candidate.get("group_index"),
-                        "candidate_index": accepted_candidate.get("candidate_index"),
-                        "decoded_index": accepted_candidate.get("decoded_index"),
-                        "strict_decoded_index": accepted_candidate.get("strict_decoded_index"),
-                    }
+                    sender_audit["candidate_validation"] = _candidate_validation_audit(
+                        accepted_candidate, acceptance_source="draft"
+                    )
                     _log_encode_timing_complete(
                         encode_run_id=encode_run_id,
                         post_id=post_id,
@@ -2001,27 +2036,19 @@ class StegoPipeline:
                         retry_count=retry_count,
                         timing_outcome="diagnostic_success",
                     )
-                    return {
-                        "stego_text": stego_text,
-                        "post": post,
-                        "selected_angle": selected_angle,
-                        "angle_index": selected_idx,
-                        "succeeded": True,
-                        "retry_count": retry_count,
-                        "tag": tag,
-                        "sender_audit": sender_audit,
-                        "embedding": post_augmentation,
-                        "encoded_samples": encoded_results,
-                        "decoded_indices": _decoded_indices(
-                            validation.get("validationDetails", {})
-                        ),
-                        "validation_details": validation.get("validationDetails"),
-                        "binary_selection_bits": bits,
-                        "comment_bits": post_augmentation.get("commentBits", ""),
-                        "angle_bits": post_augmentation.get("angleBits", ""),
-                        "compression_skipped": True,
-                        "payload_transform_skipped": True,
-                    }
+                    return _encode_success_result(
+                        stego_text=stego_text,
+                        post=post,
+                        selected_angle=selected_angle,
+                        selected_idx=selected_idx,
+                        retry_count=retry_count,
+                        tag=tag,
+                        sender_audit=sender_audit,
+                        post_augmentation=post_augmentation,
+                        encoded_results=encoded_results,
+                        validation_details=validation.get("validationDetails"),
+                        extra=_diagnostic_bits_fields(bits, post_augmentation),
+                    )
 
                 validation_details = validation.get("validationDetails", {})
                 if retry_count >= resolved_max_retries:
@@ -2053,11 +2080,7 @@ class StegoPipeline:
                         "validation_details": validation_details,
                         "embedding": post_augmentation,
                         "encoded_samples": encoded_results,
-                        "binary_selection_bits": bits,
-                        "comment_bits": post_augmentation.get("commentBits", ""),
-                        "angle_bits": post_augmentation.get("angleBits", ""),
-                        "compression_skipped": True,
-                        "payload_transform_skipped": True,
+                        **_diagnostic_bits_fields(bits, post_augmentation),
                     }
                 retry_count += 1
             except Exception as exc:
@@ -2089,11 +2112,7 @@ class StegoPipeline:
                             "selected_angle": _angle_summary(selected_angle),
                         },
                         "embedding": post_augmentation,
-                        "binary_selection_bits": bits,
-                        "comment_bits": post_augmentation.get("commentBits", ""),
-                        "angle_bits": post_augmentation.get("angleBits", ""),
-                        "compression_skipped": True,
-                        "payload_transform_skipped": True,
+                        **_diagnostic_bits_fields(bits, post_augmentation),
                     }
                 retry_count += 1
 

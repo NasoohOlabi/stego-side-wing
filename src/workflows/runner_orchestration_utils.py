@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from collections.abc import Callable
@@ -132,10 +133,8 @@ def persist_double_process_final_report(dp_base: Path, body: dict[str, Any]) -> 
 
 
 def clear_double_process_claim() -> None:
-    try:
+    with contextlib.suppress(OSError):
         double_process_claim_path().unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 def reconcile_stale_double_process_claim_vs_explicit(

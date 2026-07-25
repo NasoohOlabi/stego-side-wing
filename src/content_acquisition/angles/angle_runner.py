@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import logging
@@ -507,10 +508,8 @@ def _is_context_window_error(response: requests.Response) -> bool:
     if response.status_code not in (400, 422, 500, 502, 503):
         return False
     blob = (response.text or "").lower()
-    try:
+    with contextlib.suppress(Exception):
         blob += " " + json.dumps(response.json()).lower()
-    except Exception:
-        pass
     needles = (
         "context",
         "token",

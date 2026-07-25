@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from pytest import MonkeyPatch, raises
+import pytest
 
 
 def _load_module():
@@ -111,7 +111,7 @@ def test_run_signature_covers_comparison_configuration() -> None:
 
 
 def test_zlg_server_identity_requires_and_records_a_version(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _load_module()
 
@@ -124,7 +124,7 @@ def test_zlg_server_identity_requires_and_records_a_version(
 
     monkeypatch.setattr(module.requests, "get", lambda *args, **kwargs: _Response())
 
-    with raises(ValueError, match="server version"):
+    with pytest.raises(ValueError, match="server version"):
         module._zlg_server_identity("http://127.0.0.1:9000")
     identity = module._zlg_server_identity("http://127.0.0.1:9000", "commit-123")
 
@@ -132,7 +132,7 @@ def test_zlg_server_identity_requires_and_records_a_version(
 
 
 def test_max_capacity_uses_zlg_probe_instead_of_target_frames(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _load_module()
     seen = []
@@ -187,7 +187,7 @@ def test_max_capacity_uses_zlg_probe_instead_of_target_frames(
     assert result["capacity_censored"] is False
 
 
-def test_failed_max_capacity_probe_has_no_carrier(monkeypatch: MonkeyPatch) -> None:
+def test_failed_max_capacity_probe_has_no_carrier(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_module()
     monkeypatch.setattr(
         module,
@@ -264,7 +264,7 @@ def test_capacity_probe_selects_highest_verified_trial_within_word_budget() -> N
 
 
 def test_our_max_payload_is_bounded_by_dynamic_selection_capacity(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _load_module()
 
@@ -288,7 +288,7 @@ def test_our_max_payload_is_bounded_by_dynamic_selection_capacity(
 
 
 def test_our_max_capacity_falls_back_to_verified_smaller_payload(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _load_module()
     monkeypatch.setattr(module, "_our_capacity_payloads", lambda *args, **kwargs: ["four", "two"])

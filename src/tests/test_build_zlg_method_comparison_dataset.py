@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 def _load_module():
     path = (
@@ -88,12 +90,8 @@ def test_diversity_guard_rejects_repeated_our_method_text_per_post() -> None:
         {**_row(1, "p1", "our_method", 0.5), "stegotext": " same   text "},
     ]
 
-    try:
+    with pytest.raises(ValueError, match="p1"):
         module._assert_diversity(rows, minimum_ratio=1.0)
-    except ValueError as exc:
-        assert "p1" in str(exc)
-    else:
-        raise AssertionError("expected the diversity guard to fail")
 
 
 def test_diversity_guard_accepts_distinct_texts_and_reports_ratio() -> None:

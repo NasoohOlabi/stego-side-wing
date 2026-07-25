@@ -15,7 +15,7 @@ def _research_pipeline_stub() -> ResearchPipeline:
 
 
 @pytest.mark.parametrize(
-    "post,expected",
+    ("post", "expected"),
     [
         ({}, True),
         ({"search_results": []}, True),

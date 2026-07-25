@@ -22,7 +22,7 @@ def test_get_workflow_llm_backend_default(clear_llm_backend_env: None) -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ("google", "GEMINI", "ai_studio"),
+    ["google", "GEMINI", "ai_studio"],
 )
 def test_get_workflow_llm_backend_google_aliases(
     monkeypatch: pytest.MonkeyPatch, value: str

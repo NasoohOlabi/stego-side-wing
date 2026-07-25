@@ -40,21 +40,23 @@ async def searchDuckDuckGo(query: str, max_results: int = 10, timeout: int = 10)
     try:
         _LOG.debug("duckduckgo_search_start", query=query)
 
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
-                if response.status != 200:
-                    _LOG.warning(
-                        "duckduckgo_http_error",
-                        status=response.status,
-                        reason=str(response.reason),
-                    )
-                    return {"organic_results": []}
+        async with (
+            aiohttp.ClientSession(headers=headers) as session,
+            session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response,
+        ):
+            if response.status != 200:
+                _LOG.warning(
+                    "duckduckgo_http_error",
+                    status=response.status,
+                    reason=str(response.reason),
+                )
+                return {"organic_results": []}
 
-                try:
-                    data = await response.json()
-                except aiohttp.ContentTypeError:
-                    text = await response.text()
-                    data = json.loads(text)
+            try:
+                data = await response.json()
+            except aiohttp.ContentTypeError:
+                text = await response.text()
+                data = json.loads(text)
 
         _LOG.debug("duckduckgo_response_ok", query=query)
         results = []
@@ -68,20 +70,19 @@ async def searchDuckDuckGo(query: str, max_results: int = 10, timeout: int = 10)
                 }
             )
 
-        if related_topics := data.get("RelatedTopics"):
-            if isinstance(related_topics, list):
-                remaining = max_results - len(results)
-                for topic in related_topics[:remaining]:
-                    if topic.get("Text") and topic.get("FirstURL"):
-                        results.append(
-                            {
-                                "title": topic["Text"].split(" - ")[0]
-                                if " - " in topic["Text"]
-                                else topic["Text"],
-                                "href": topic["FirstURL"],
-                                "body": topic["Text"],
-                            }
-                        )
+        if (related_topics := data.get("RelatedTopics")) and isinstance(related_topics, list):
+            remaining = max_results - len(results)
+            for topic in related_topics[:remaining]:
+                if topic.get("Text") and topic.get("FirstURL"):
+                    results.append(
+                        {
+                            "title": topic["Text"].split(" - ")[0]
+                            if " - " in topic["Text"]
+                            else topic["Text"],
+                            "href": topic["FirstURL"],
+                            "body": topic["Text"],
+                        }
+                    )
 
         organic_results = [
             {

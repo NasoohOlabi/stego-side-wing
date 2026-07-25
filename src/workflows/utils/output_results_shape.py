@@ -23,9 +23,13 @@ class OutputResultsShapeKind(StrEnum):
 
 
 def classify_output_results_root(data: Any) -> OutputResultsShapeKind:
-    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
-        if frozenset(data[0].keys()) == N8N_ARTIFACT_KEYS:
-            return OutputResultsShapeKind.OK
+    if (
+        isinstance(data, list)
+        and len(data) == 1
+        and isinstance(data[0], dict)
+        and frozenset(data[0].keys()) == N8N_ARTIFACT_KEYS
+    ):
+        return OutputResultsShapeKind.OK
     if isinstance(data, dict) and "stego_text" in data:
         return OutputResultsShapeKind.MIGRATABLE
     return OutputResultsShapeKind.OTHER

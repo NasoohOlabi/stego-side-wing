@@ -1,5 +1,7 @@
 """Tests for HTTP-first plain text extraction."""
 
+from typing import ClassVar
+
 import httpx
 import pytest
 
@@ -17,7 +19,7 @@ def test_fetch_main_text_returns_none_below_min_chars(monkeypatch: pytest.Monkey
         def get(self, _url: str) -> object:
             class Resp:
                 status_code = 200
-                headers = {"content-type": "text/html; charset=utf-8"}
+                headers: ClassVar[dict[str, str]] = {"content-type": "text/html; charset=utf-8"}
                 text = "<html><body><p>short</p></body></html>"
 
             return Resp()
@@ -40,7 +42,7 @@ def test_fetch_main_text_returns_content_when_long_enough(monkeypatch: pytest.Mo
         def get(self, _url: str) -> object:
             class Resp:
                 status_code = 200
-                headers = {"content-type": "text/html"}
+                headers: ClassVar[dict[str, str]] = {"content-type": "text/html"}
                 text = html
 
             return Resp()

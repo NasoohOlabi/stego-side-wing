@@ -34,11 +34,11 @@ def test_workflow_capacity_defaults_to_uncapped_mid_profile(
 
 @pytest.mark.parametrize(
     ("profile", "expected_terms", "expected_urls", "expected_blocks"),
-    (
+    [
         ("low", 4, 12, 24),
         ("high", 12, 96, 192),
         ("weird", 8, 48, 96),
-    ),
+    ],
 )
 def test_workflow_capacity_profile_presets(
     monkeypatch: pytest.MonkeyPatch,

@@ -76,16 +76,6 @@ ignore = [
     # churn ~40 existing tests for no behavioural gain.
     "PT011", # broad pytest.raises without match=
     "PT018", # composite assertions (assert a and b) read fine here
-    # Pre-existing violations in modules this refactor did not otherwise touch. Left
-    # enabled-but-ignored rather than silently dropped, so the list is the cleanup queue.
-    "PT006",
-    "PT007",
-    "PT013",
-    "PT017",
-    "RUF012",
-    "SIM102",
-    "SIM105",
-    "SIM117",
 ]
 
 # RUF001/RUF002 stay on: this project has an explicit encoding-hygiene rule (AGENTS.md),

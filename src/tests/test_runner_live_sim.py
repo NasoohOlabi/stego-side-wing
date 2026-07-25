@@ -67,14 +67,16 @@ def test_live_sim_raises_non_data_load_runtime_error(tmp_path: Path) -> None:
     def _once(**kwargs: object) -> dict:
         raise RuntimeError("receiver failed for other reasons")
 
-    with patch("workflows.runner.run_stego_receiver_live_sim_once", side_effect=_once):
-        with pytest.raises(RuntimeError, match="other reasons"):
-            runner.run_stego_receiver_live_sim(
-                "alice",
-                post_id=None,
-                max_post_attempts=1,
-                simulation_root=tmp_path,
-            )
+    with (
+        patch("workflows.runner.run_stego_receiver_live_sim_once", side_effect=_once),
+        pytest.raises(RuntimeError, match="other reasons"),
+    ):
+        runner.run_stego_receiver_live_sim(
+            "alice",
+            post_id=None,
+            max_post_attempts=1,
+            simulation_root=tmp_path,
+        )
 
 
 def test_live_sim_skips_google_quota_then_succeeds(tmp_path: Path) -> None:

@@ -61,12 +61,8 @@ def test_finalize_rejects_lane_that_fails_m9(tmp_path: Path) -> None:
     legacy.write_text(json.dumps(_summary(passed=False)), encoding="utf-8")
     v1.write_text(json.dumps(_summary()), encoding="utf-8")
 
-    try:
+    with pytest.raises(ValueError, match="M9"):
         module.finalize_comparison(tmp_path, legacy, v1)
-    except ValueError as exc:
-        assert "M9" in str(exc)
-    else:
-        raise AssertionError("expected M9 validation failure")
 
 
 def test_materialize_cached_v1_preserves_input_and_selects_with_source_mix(

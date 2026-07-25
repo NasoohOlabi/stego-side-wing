@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 def _summarize(rows):
     path = Path(__file__).resolve().parents[2] / "scripts" / "score_thread_quality_judgments.py"
@@ -43,9 +45,6 @@ def test_summary_pairs_and_clusters_by_post() -> None:
 
 def test_summary_rejects_mixed_metrics() -> None:
     rows = [_row("a", "our_method", 4), {**_row("a", "zlg", 4), "metric": "writing_quality"}]
-    try:
+
+    with pytest.raises(ValueError, match="one metric"):
         _summarize(rows)
-    except ValueError as error:
-        assert "one metric" in str(error)
-    else:
-        raise AssertionError("mixed metrics must fail")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
@@ -12,7 +13,5 @@ def configure_stdio_utf8() -> None:
     for stream in (sys.stdout, sys.stderr):
         reconf = getattr(stream, "reconfigure", None)
         if callable(reconf):
-            try:
+            with contextlib.suppress(OSError, ValueError, AttributeError):
                 reconf(encoding="utf-8", errors="replace")
-            except (OSError, ValueError, AttributeError):
-                pass

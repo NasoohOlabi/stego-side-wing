@@ -186,6 +186,98 @@ def test_encode_reports_failure_when_no_candidate_decodes_back() -> None:
 
 
 @pytest.mark.usefixtures("clear_workflow_capacity_env")
+def test_encode_returns_an_exception_result_when_generation_raises() -> None:
+    """The retry loop's except arm: a generation failure becomes a result, not a raise."""
+
+    class _BadJsonLLM:
+        last_call_metadata: dict[str, Any] = {"elapsed_ms": 1}
+
+        def call_llm(self, prompt: str, **kwargs: Any) -> str:
+            return "not json at all"
+
+    pipeline = _build_pipeline(_AlwaysSelectedDecode(), llm=_BadJsonLLM())
+
+    result = pipeline.encode(payload="p", post=POST, tag="boom", max_retries=0)
+
+    assert result["succeeded"] is False
+    assert result["stego_text"] == ""
+    assert result["tag"] == "boom"
+    assert result["error"]
+    details = result["error_details"]
+    assert details["reason"] == "Unexpected exception during stego encoding."
+    assert details["exception_type"] == "RuntimeError"
+    assert "embedding" in result
+
+
+@pytest.mark.usefixtures("clear_workflow_capacity_env")
+def test_encode_returns_early_when_no_samples_are_built() -> None:
+    """The no-samples early return, before the retry loop is ever entered.
+
+    ``_build_samples`` is stubbed rather than starved via config, because the configured
+    sample count is clamped to at least one.
+    """
+    decode = _AlwaysSelectedDecode()
+    pipeline = _build_pipeline(decode)
+    pipeline._build_samples = lambda aug, post: ([], [])  # type: ignore[method-assign]
+
+    result = pipeline.encode(payload="p", post=POST, tag="empty")
+
+    assert result["succeeded"] is False
+    assert result["stego_text"] == ""
+    assert result["retry_count"] == 0
+    assert result["error"] == "No samples generated from angle embedding"
+    assert result["error_details"]["reason"].startswith("Angle embedding produced zero")
+    # Never reached generation or validation.
+    assert decode.calls == 0
+
+
+@pytest.mark.usefixtures("clear_workflow_capacity_env")
+def test_encode_accepts_a_context_sharpened_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The context-sharpen arm: drafts miss, a revised candidate is accepted instead.
+
+    Reaching it needs the naturalness gate off, otherwise the synthetic-anchor
+    replacement rescues the attempt first and sharpening never runs.
+    """
+    monkeypatch.setenv("WORKFLOW_NATURALNESS_GATE_ENABLED", "0")
+
+    class _SharpeningLLM:
+        """Returns drafts normally, and a distinctive revision when asked to revise."""
+
+        last_call_metadata: dict[str, Any] = {"elapsed_ms": 1}
+
+        def call_llm(self, prompt: str, **kwargs: Any) -> str:
+            if prompt.startswith("Revise the draft reply"):
+                return json.dumps({"text": "SHARPENED start next spring reply."})
+            return json.dumps(LLM_TEXTS)
+
+    class _OnlyAcceptsSharpened:
+        """Drafts decode to a near-miss; only the sharpened text decodes exactly."""
+
+        def __init__(self) -> None:
+            self.selected_idx = 0
+
+        def decode(self, **kwargs: Any) -> int:
+            text = str(kwargs.get("stego_text", ""))
+            if text.startswith("SHARPENED"):
+                return self.selected_idx
+            # Near miss, but must stay a valid index: an out-of-range value gets
+            # canonicalized back and would read as an exact hit.
+            return self.selected_idx - 1 if self.selected_idx > 0 else self.selected_idx + 1
+
+    decode = _OnlyAcceptsSharpened()
+    pipeline = _build_pipeline(decode, llm=_SharpeningLLM())
+    augmentation = pipeline._augment_post("x", POST)
+    decode.selected_idx = int(augmentation["angleEmbedding"]["selectedAngle"]["idx"])
+
+    result = pipeline.encode(payload="meet at noon", post=POST, tag="sharp", max_retries=0)
+
+    assert result["succeeded"] is True
+    assert result["stego_text"].startswith("SHARPENED")
+    assert result["sender_audit"]["candidate_validation"]["acceptance_source"] == "context_sharpen"
+    assert SUCCESS_KEYS <= set(result)
+
+
+@pytest.mark.usefixtures("clear_workflow_capacity_env")
 def test_encode_rejects_a_post_without_angles() -> None:
     pipeline = _build_pipeline(_AlwaysSelectedDecode())
 

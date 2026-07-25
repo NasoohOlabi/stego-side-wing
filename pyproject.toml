@@ -37,6 +37,7 @@ metrics = [
 dev = [
     "pyright>=1.1.408",
     "pytest>=9.0.2",
+    "pytest-cov>=6.0.0",
     "requests-toolbelt>=1.0.0",
     "ruff>=0.9.0",
 ]
@@ -46,6 +47,18 @@ testpaths = ["src/tests"]
 addopts = "-q"
 filterwarnings = [
     "ignore::requests.exceptions.RequestsDependencyWarning",
+]
+
+[tool.coverage.run]
+source = ["src"]
+# The suite itself is not the subject of measurement.
+omit = ["src/tests/*"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
 ]
 
 [tool.ruff]

@@ -84,7 +84,7 @@ run artifacts, identical codec output — reached through code a newcomer can na
 | 3.1 Deduplicate `encode` and `encode_binary_selection_bits` before splitting either | ✅ — `encode` 444 → 368 lines, `encode_binary_selection_bits` 244 → 195; extracted `_generate_candidate_groups`, `_decoded_indices`, `_encode_success_result`, `_candidate_validation_audit`, `_diagnostic_bits_fields`, `_encode_failure_result`, `_encode_exception_result`, `_sharpen_until_accepted` |
 | 3.2 Split `stego.py` (2342 L) into a package | ⬜ not started |
 | 3.3 Split `runner.py` (2249 L) into a package, finishing the stalled `runner_orchestration_utils.py` extraction | ⬜ not started |
-| 3.4 Collapse the 5-fold `data_load → research → gen_angles` sequence into one `run_context_stages(...)` helper | ⬜ not started — flagged in the original plan as "the highest-value deduplication in the repo" (exact path where sender/receiver drift gets introduced) |
+| 3.4 Collapse the 5-fold `data_load → research → gen_angles` sequence into one `run_context_stages(...)` helper | 🟡 — the single `run_context_stages(...)` was investigated and rejected: the five sites run the same stages through three different pipeline APIs (`preview_post` / `process_post_id` / `process_post_objects`) with different failure policies (receiver *raises*, prep breaks on quota, full-pipeline returns early) and different emit contracts. The two real duplications under it were collapsed instead — `workflows/stages.py` now single-sources the stage↔step triple that was hand-spelled in 4 places, and `run_full_pipeline`'s verbatim duplicate tail became two helpers (136 → 50 lines). See baseline for both writeups. |
 | 3.5 Replace the LLM provider if/elif with a strategy map (`workflows/adapters/providers/`) | ⬜ not started — verified in code: `llm.py` still dispatches `openai/gemini/groq/lm_studio` via if/elif to four `_call_*` methods, no `providers/` package exists. (A task-tracking label briefly marked this done in error; corrected.) |
 | 3.6 Thin out `wf_run`'s 13-branch if/elif into a command registry | ⛔ — investigated and rejected: each branch returns both a dispatch closure and an early-return error response, making a registry signature awkward for no real gain. The concrete defect the registry would have prevented (a listed command with no branch) is now caught directly by `test_api_v1_workflow_run_dispatch.py` — that test *was* the actual bug-fix (see Phase 5-era bug: `stego-receiver-live` silently ran the full pipeline). |
 
@@ -123,13 +123,11 @@ run artifacts, identical codec output — reached through code a newcomer can na
 
 In priority order, the open, non-blocked items:
 
-1. **3.4** — the 5-fold context-stage duplication (highest-value per the original plan; it's
-   the exact sender/receiver-agreement path).
-2. **3.2 / 3.3** — splitting the two god modules into packages.
-3. **3.5** — the LLM provider strategy split.
-4. **4.2 / 4.3 / 4.4** — the remaining typed-contract work (blocks 5.2).
-5. **5.4** — settings model for `config.py`.
-6. **6.3** — test coverage for `integrations/` and the untested services.
+1. **3.2 / 3.3** — splitting the two god modules into packages.
+2. **3.5** — the LLM provider strategy split.
+3. **4.2 / 4.3 / 4.4** — the remaining typed-contract work (blocks 5.2).
+4. **5.4** — settings model for `config.py`.
+5. **6.3** — test coverage for `integrations/` and the untested services.
 
 Blocked, in dependency order:
 

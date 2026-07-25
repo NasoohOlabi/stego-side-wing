@@ -26,6 +26,14 @@ uv run python -m ruff check src scripts; uv run python -m ruff format --check sr
 | `pytest -q` | 523 passed |
 | Coverage (non-test `src/`) | **67%** — 12,611 statements, 4,180 missed |
 
+**Scope note — the gate is `src scripts`, not `.`.** Running bare `ruff check .` also picks
+up `extreact_searched_values.py`, a tracked one-off script at the repo root, which fails with
+9 findings (I001, E402, 2× UP015, 2× SIM114; 5 auto-fixable). Those are pre-existing and
+outside every gate this refactor ran. Nothing else lives outside `src/` and `scripts/`. Left
+alone deliberately: cleaning it is a separate concern from any refactor phase, and the file
+looks like a superseded throwaway — worth deleting rather than linting, but that is a call
+for the repo owner.
+
 Coverage is measured with the config in `pyproject.toml` (`[tool.coverage.run]`
 omits `src/tests/*`):
 
@@ -76,6 +84,7 @@ silently changes behaviour.
 | `stego._text_preview` vs `protocol_utils.text_preview` | Different defaults (180 vs 160) and different truncation: one appends `...` after the cut so output can exceed the limit, the other reserves room inside it. They feed different output fields. |
 | `stego_feedback_service._flatten_angles` vs `stego_codec.flatten_angle_groups` | The codec version injects a positional `idx` into every angle. The service must report angles unchanged. |
 | `llm.py` vs `angle_runner.py` retry loops | Independently tuned: 3 vs 6 attempts, 1.0/30.0 s vs 1.5/60.0 s backoff, and `angle_runner` deliberately does not retry HTTP 408. Angle extraction sends far larger prompts. Only the transport-fault token sets were genuinely shared (now in `infrastructure/retry_policy.py`). |
+| The five `data_load → research → gen_angles` sequences (plan step 3.4) | They run the same three stages through **three different pipeline APIs**: `preview_post` (receiver, non-persisting, returns `{post, report}`), `process_post_id` (double-process, per id), and `process_post_objects`/`process_posts` (batch). Failure policy differs too — the prep loop breaks on a Google quota error, `run_full_pipeline` returns early on an empty batch, and `ReceiverPipeline.rebuild_context` **raises** on data-load failure because the receiver has no useful degraded mode. Progress emits differ in event name and payload at all five sites. One `run_context_stages(...)` would need flags for API family, per-stage kwargs, emit contract and failure policy — a worse read than the five sites, and it would put receiver failure semantics behind a parameter. What *was* genuinely shared is now in `workflows/stages.py`; see the note below. |
 | scripts' `_read_json`/`_write_json` vs `infrastructure/cache.py` | `read_json_cache` is a **cache** helper: it swallows every exception and returns `None`. The scripts must fail loudly — several validate the payload is a dict and raise. Swapping them would let benchmark scripts silently proceed on unreadable input. The scripts' `_write_json` variants also disagree with each other on `ensure_ascii` (True vs False), which changes output bytes for non-ASCII text. |
 
 ## Deferred: removing the import-time runner singleton
@@ -222,8 +231,28 @@ matched by `classify_failure` in `stego_feedback_service` and asserted in
 The productive direction for these two methods is more named-phase extraction — pulling
 out the remaining prep and per-attempt blocks — not a shared loop.
 
-**Not started:** splitting `stego.py` and `runner.py` into packages (plan steps 3.2–3.4)
+**Not started:** splitting `stego.py` and `runner.py` into packages (plan steps 3.2–3.3)
 and the LLM provider strategy split (3.5).
+
+**3.4 — partly done, and the headline form rejected.** The plan called for collapsing the
+five `data_load → research → gen_angles` sequences into one `run_context_stages(...)`. That
+single helper is not worth building; the reasoning is in the rejected-refactors table above.
+Two real duplications underneath it *were* collapsed:
+
+- **The stage/step triple.** `data_load/research/gen_angles` ↔
+  `filter-url-unresolved/filter-researched/angles-step` was re-spelled by hand in
+  `WorkflowConfig.__init__`, the `validate_post` stage map, `build_prep_run_manifest`, and
+  every `step=` literal in `runner.py`. `workflows/stages.py` is now the single source; all
+  of them read from it. This is the drift the plan was actually worried about: a rename that
+  lands on the sender side and not the receiver side breaks context agreement silently.
+- **`run_full_pipeline`'s verbatim duplicate.** The "angle what we just researched, then
+  finish" tail was byte-identical in the `filter-url-unresolved` and `filter-researched`
+  branches, and the terminal `workflow_done` emit appeared five times. Now
+  `_full_pipeline_angle_researched` and `_full_pipeline_done`; the function went 136 → 50
+  lines. Same emit order, same payloads, same return values.
+
+`_run_three_stage_post` (the per-post-id sequence) was already an extracted helper before
+this phase and is unchanged.
 
 For 3.5, note the four `_call_*` methods are *not* as similar as they look: the Gemini one
 rotates through multiple API keys and falls back from the SDK to REST, while the others are

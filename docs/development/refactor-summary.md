@@ -8,8 +8,10 @@ created, and shows a single test file.
 
 For the structure as it actually is, read
 [`architecture-layers.md`](architecture-layers.md) (layer rules, ports, and the enforced
-`.importlinter` contract) and [`refactor-baseline.md`](refactor-baseline.md) (measured
-sizes, gates, and the maintainability work done since).
+`.importlinter` contract), [`refactor-plan.md`](refactor-plan.md) (the phased
+maintainability plan with a status marker on every step), and
+[`refactor-baseline.md`](refactor-baseline.md) (measured sizes, gates, and the
+maintainability work done since).
 
 ## Current notes (2026)
 

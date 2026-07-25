@@ -4,6 +4,11 @@ Reference point for the phased maintainability refactor. Captured on branch
 `refactor/maintainability-phase-0` at commit `1f9d773` (parent of the first
 behavioral change). Every phase must hold or improve these numbers.
 
+For the phase-by-phase plan and a status marker on every step (done / partial / decided
+against / not started / blocked), see [`refactor-plan.md`](refactor-plan.md). This document
+is the evidence behind those statuses — the gate numbers, the bugs found, and the
+refactors that were investigated and rejected.
+
 ## Gates
 
 Run from the repo root **in PowerShell** — `uv run pytest` fails under Git Bash with

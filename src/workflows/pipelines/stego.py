@@ -1290,6 +1290,54 @@ class StegoPipeline:
             )
         return encoded_results
 
+    def _sharpen_until_accepted(
+        self,
+        *,
+        validation: dict[str, Any],
+        encoded_results: list[dict[str, Any]],
+        tangents_db: list[dict[str, Any]],
+        selected_angle: dict[str, Any],
+        post_augmentation: dict[str, Any],
+        encode_run_id: str,
+        llm_timings: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """Revise promising candidates until one decodes to the selected angle.
+
+        Returns ``(accepted_candidate, sharpen_validation)`` on the first success, or
+        ``None`` if no revision was accepted. Appends the winning group to
+        ``encoded_results`` so the caller reports it among the generated samples.
+        """
+        for promising_candidate in validation.get("promising_candidates") or []:
+            group_idx = int(promising_candidate.get("group_index", 0))
+            source_group = encoded_results[group_idx]
+            sharpened_text = self._revise_candidate_text_contextually(
+                candidate_text=str(promising_candidate.get("text", "")),
+                sample=source_group,
+                comment_embedding=post_augmentation["commentEmbedding"],
+                encode_run_id=encode_run_id,
+                sample_index=group_idx,
+                llm_timings=llm_timings,
+            )
+            sharpened_group = {
+                "category": source_group.get("category"),
+                "source_quote": source_group.get("source_quote"),
+                "tangent": source_group.get("tangent"),
+                "prompt_style": "natural_sharpened",
+                "texts": [sharpened_text],
+                "generation_mode": "context_sharpen",
+            }
+            sharpen_validation = self._evaluate_candidate_groups(
+                encoded_results=[sharpened_group],
+                tangents_db=tangents_db,
+                selected_angle=selected_angle,
+                post_augmentation=post_augmentation,
+                encode_run_id=encode_run_id,
+            )
+            if sharpen_validation.get("succeeded"):
+                encoded_results.append(sharpened_group)
+                return sharpen_validation.get("accepted_candidate") or {}, sharpen_validation
+        return None
+
     def _decode_candidate(
         self,
         *,
@@ -1861,61 +1909,42 @@ class StegoPipeline:
                     or retry_count >= resolved_max_retries
                 )
                 if should_sharpen:
-                    promising_candidates = validation.get("promising_candidates") or []
-                    for promising_candidate in promising_candidates:
-                        group_idx = int(promising_candidate.get("group_index", 0))
-                        source_group = encoded_results[group_idx]
-                        sharpened_text = self._revise_candidate_text_contextually(
-                            candidate_text=str(promising_candidate.get("text", "")),
-                            sample=source_group,
-                            comment_embedding=post_augmentation["commentEmbedding"],
+                    sharpened = self._sharpen_until_accepted(
+                        validation=validation,
+                        encoded_results=encoded_results,
+                        tangents_db=tangents_db,
+                        selected_angle=selected_angle,
+                        post_augmentation=post_augmentation,
+                        encode_run_id=encode_run_id,
+                        llm_timings=llm_timings,
+                    )
+                    if sharpened is not None:
+                        accepted_candidate, sharpen_validation = sharpened
+                        _log_encode_timing_complete(
                             encode_run_id=encode_run_id,
-                            sample_index=group_idx,
-                            llm_timings=llm_timings,
+                            post_id=post_id,
+                            augment_ms=augment_ms,
+                            build_samples_ms=build_samples_ms,
+                            encode_total_ms=_elapsed_ms_since(t_encode),
+                            succeeded=True,
+                            retry_count=retry_count,
+                            timing_outcome="context_sharpen",
                         )
-                        sharpened_group = {
-                            "category": source_group.get("category"),
-                            "source_quote": source_group.get("source_quote"),
-                            "tangent": source_group.get("tangent"),
-                            "prompt_style": "natural_sharpened",
-                            "texts": [sharpened_text],
-                            "generation_mode": "context_sharpen",
-                        }
-                        sharpen_validation = self._evaluate_candidate_groups(
-                            encoded_results=[sharpened_group],
-                            tangents_db=tangents_db,
+                        sender_audit["candidate_validation"] = _candidate_validation_audit(
+                            accepted_candidate, acceptance_source="context_sharpen"
+                        )
+                        return _encode_success_result(
+                            stego_text=str(accepted_candidate.get("text", "")),
+                            post=post,
                             selected_angle=selected_angle,
+                            selected_idx=selected_idx,
+                            retry_count=retry_count,
+                            tag=tag,
+                            sender_audit=sender_audit,
                             post_augmentation=post_augmentation,
-                            encode_run_id=encode_run_id,
+                            encoded_results=encoded_results,
+                            validation_details=sharpen_validation.get("validationDetails"),
                         )
-                        if sharpen_validation.get("succeeded"):
-                            accepted_candidate = sharpen_validation.get("accepted_candidate") or {}
-                            encoded_results.append(sharpened_group)
-                            _log_encode_timing_complete(
-                                encode_run_id=encode_run_id,
-                                post_id=post_id,
-                                augment_ms=augment_ms,
-                                build_samples_ms=build_samples_ms,
-                                encode_total_ms=_elapsed_ms_since(t_encode),
-                                succeeded=True,
-                                retry_count=retry_count,
-                                timing_outcome="context_sharpen",
-                            )
-                            sender_audit["candidate_validation"] = _candidate_validation_audit(
-                                accepted_candidate, acceptance_source="context_sharpen"
-                            )
-                            return _encode_success_result(
-                                stego_text=str(accepted_candidate.get("text", "")),
-                                post=post,
-                                selected_angle=selected_angle,
-                                selected_idx=selected_idx,
-                                retry_count=retry_count,
-                                tag=tag,
-                                sender_audit=sender_audit,
-                                post_augmentation=post_augmentation,
-                                encoded_results=encoded_results,
-                                validation_details=sharpen_validation.get("validationDetails"),
-                            )
                 if retry_count >= resolved_max_retries:
                     error_details = {
                         "reason": (

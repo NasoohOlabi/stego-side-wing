@@ -110,24 +110,34 @@ around it.
 | 0 — safety nets | 530 | 67% | golden characterization test, offline network guard, shared fakes |
 | 1 — dead code & dupes | 530 | 68% | 307 statements removed; `src/util` forks, dead stego seams, the invisible-carrier write helper, and the f0bcc9 debug scaffold all deleted |
 | 2 — layering & DI | 548 | 68% | `workflows -> services` crossings 12 → 3; ports + constructor injection added; `lint-imports` now gated in CI |
-| 3 — god objects (in progress) | 555 | 69% | `encode` 444 → 396 lines, `encode_binary_selection_bits` 244 → 204; characterization tests added around `encode` first |
+| 3 — god objects (in progress) | 558 | 69% | `encode` 444 → 368 lines, `encode_binary_selection_bits` 244 → 195; `stego.py` now 88% covered |
 
 ### Phase 3 — where it stands
 
-Done: a characterization suite around `StegoPipeline.encode` that fakes only the LLM,
-backend and decode edges and lets the rest run, then two deduplication increments
-(`_generate_candidate_groups`, `_decoded_indices`, `_encode_success_result`,
-`_candidate_validation_audit`, `_diagnostic_bits_fields`).
+**Done.** A characterization suite around `StegoPipeline.encode` that fakes only the LLM,
+backend and decode edges and lets everything else run — all ten arms of the retry loop are
+pinned, including the exception handler, the no-samples early return and context-sharpen
+acceptance. Then three deduplication increments, each green before the next, extracting:
+`_generate_candidate_groups`, `_decoded_indices`, `_encode_success_result`,
+`_candidate_validation_audit`, `_diagnostic_bits_fields`, `_encode_failure_result`,
+`_encode_exception_result`, `_sharpen_until_accepted`.
 
-Next: the retry loop itself, still written twice. Parameterise it on the three real
-differences the diagnostic path has — it skips context sharpening entirely, reports
-`timing_outcome="diagnostic_success"`, and adds `_diagnostic_bits_fields` to its results.
-Before attempting it, add characterization coverage for the three paths the current tests
-do not reach: context-sharpen success, the exception handler, and the no-samples early
-return.
+**Deliberately not done: collapsing the retry loop into one shared implementation.**
+The two paths differ in eight ways — augmentation source, audit seeding, whether context
+sharpening runs, three distinct `timing_outcome` labels, two `error_details` shapes, and
+five extra result fields. A loop parameterised on all of that reads worse than the two
+methods do. The differences are also load-bearing: `"Decoding validation failed"` is
+matched by `classify_failure` in `stego_feedback_service` and asserted in
+`test_run_actual_workload_e2e`, so the error payloads cannot simply be merged.
 
-Not started: splitting `stego.py` and `runner.py` into packages (plan steps 3.2–3.4), the
-LLM provider strategy split (3.5), and the `wf_run` command registry (3.6).
+The productive direction for these two methods is more named-phase extraction — pulling
+out the remaining prep and per-attempt blocks — not a shared loop.
+
+**Not started:** splitting `stego.py` and `runner.py` into packages (plan steps 3.2–3.4),
+the LLM provider strategy split (3.5), and the `wf_run` command registry (3.6). Of these,
+3.5 and 3.6 are the best next targets: both are mechanical, and both are already covered
+(`test_llm_adapter_retries` + `test_llm_redacted_thinking` for the providers, the
+`test_api_v1_*` suite for the routes).
 
 ### Gate added in phase 2
 

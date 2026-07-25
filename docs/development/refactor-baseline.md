@@ -113,45 +113,71 @@ around it.
 | 3 — god objects (partial) | 558 | 69% | `encode` 444 → 368 lines, `encode_binary_selection_bits` 244 → 195; `stego.py` now 88% covered |
 | 5 — errors (partial) | 574 | 69% | typed `workflows/errors.py` behind the existing message-based detectors |
 | 6 — guardrails (partial) | 589 | 71% | ruff ratcheted to SIM/C4/RUF/PT with no carve-outs; `/workflows/run` dispatch bug found and fixed |
+| 4.1 — contracts.py to Pydantic v2 | 601 | 71% | `workflows/contracts.py` 126 → 21 lines: 4 of 5 dataclasses were dead code (zero references), `to_dict`/`from_dict` were never called anywhere. The one live type, `FetchUrlResult`, is now a frozen `BaseModel` |
+| 5.3 — HTTP error mapping | 601 | 71% | 14 duplicated `except Exception: return fail(..., 500)` handlers in `routes_workflows.py` replaced by one `workflow_error_response()` keyed on the Phase 5.1 exception hierarchy (409/503/502/500) |
+| 6.2 — pyright on `scripts/` | 601 | 71% | `scripts` added to pyright `include` with its own `executionEnvironment`; all 25 measured errors fixed (see below) |
 
 ### Still open
 
-- **Phase 4 (Pydantic contracts)** — untouched. `workflows/contracts.py` still uses
-  `@dataclass` with hand-rolled `to_dict`, whose filter drops falsy-but-present values
-  (`""`, `0`), not just `None`. A naive `model_dump(exclude_none=True)` conversion would
-  change artifact shape.
 - **Phase 3.2–3.4** — splitting `stego.py` and `runner.py` into packages.
 - **Phase 3.5** — LLM provider strategy. Note the four `_call_*` methods are less alike than
   they look: the Gemini one rotates API keys and falls back from SDK to REST.
 - **Phase 5.2** — the bare `except` wrapping `DecodePipeline.decode` returns `None`, making a
   crash indistinguishable from "no match" *to the caller* (it is logged with a traceback).
   Fixing it properly means changing the return contract, which ripples through
-  `_evaluate_candidate_groups` and the receiver — Phase 4 work, not a local edit.
-- **Phase 5.3–5.4** — HTTP error mapping and a validated settings model for
-  `infrastructure/config.py`.
+  `_evaluate_candidate_groups` and the receiver — Phase 4-scale work, not a local edit.
+- **Phase 5.4** — a validated settings model for `infrastructure/config.py` (781 lines,
+  ~75 getters).
 - **Phase 6.3** — `integrations/` and several services still have no tests.
+- **Phase 2.3** — the import-time runner singleton, blocked as described above.
 
-### Phase 6.2 — measured, then deliberately deferred
+### Phase 6.2 — done: pyright now covers `scripts/`
 
-Bringing `src/tests` and `scripts/` under pyright was attempted and reverted. The numbers,
-so nobody re-derives them:
+`scripts` was added to pyright's `include` with its own `executionEnvironment` entry
+(`root: "scripts"`, `extraPaths: ["src"]`), and `src/tests` was moved to `exclude`. Trap
+recorded so nobody re-hits it: adding `scripts` to `include` **without** giving it its own
+`executionEnvironments` entry silently widens the checked set to `src/tests` as well,
+because the existing environment is rooted at `src` — that combination measured 203 errors
+instead of 25.
 
-| Scope added | Errors | Character |
-|---|---|---|
-| `src/tests` | 206 | 182 are `reportAttributeAccessIssue` — the monkeypatch idiom (assigning lambdas onto methods of `__new__`-built objects). Enforcing this fights the established test style rather than finding bugs. |
-| `scripts` only, `src/tests` excluded, `scripts` given its own `executionEnvironment` | **25** | Genuinely tractable, mostly `reportOptionalMemberAccess` (calling `.get` on a possibly-`None` value) in the analysis scripts. Worth doing as its own task. |
+`src/tests` itself stays excluded: checking it measured 206 errors, 182 of them
+`reportAttributeAccessIssue` from the monkeypatch idiom (assigning lambdas onto methods of
+`__new__`-built objects). Enforcing that would fight the established test style rather than
+find bugs, so it was left out deliberately.
 
-There is a trap: adding `scripts` to `include` **without** giving it its own entry in
-`executionEnvironments` silently widens the checked set to `src/tests` as well, turning 25
-errors into 203. The existing environment is rooted at `src`, so anything included outside
-that root needs its own.
+All 25 measured `scripts/` errors are now fixed:
 
-Enabling `scripts` is the recommended next step — it already paid for itself. While measuring
-this, pyright found `scripts/run_zlg_comparison.py` was dead on arrival: it constructed
+- **13 `reportOptionalMemberAccess`**, all the same shape:
+  `x.get(k) if isinstance(x.get(k), dict) else {}` calls `.get` twice and narrows nothing,
+  because the `isinstance` check tests a different expression than the one whose value is
+  used — every downstream `.get` on the result was an access on a possibly-`None` value.
+  Fixed by extracting `infrastructure/mappings.py` (`dict_field`, `list_field`) and using it
+  at all 16 occurrences of the idiom across `scripts/` and `src/services/`.
+- **6 `reportPrivateUsage`** — several scripts import a leading-underscore helper from a
+  sibling script or from `StegoPipeline` (`_post_json`, `_run_profile`,
+  `_select_post_ids`, `_has_usable_angles`, `_read_json`,
+  `_load_default_payload_and_tag`). These are genuine cross-module call sites, not internals
+  leaking by accident, so each was renamed to drop the underscore at its definition and every
+  call site (including the `monkeypatch.setattr` string-name targets in the matching tests).
+- **1 `reportMissingImports`** — `scripts/make_schema.py` imports `genson`, which was never
+  declared as a project dependency; the script could not run at all. Added to the `dev`
+  dependency group.
+- **1 `reportCallIssue`** — `scripts/download_qwen_zlg_model.py` passed
+  `resume_download=True` to `huggingface_hub.snapshot_download`; that parameter was removed
+  in `huggingface_hub` 1.x (downloads resume from cache automatically now). Dropped it.
+- **1 `reportAttributeAccessIssue`** — `run_actual_workload_e2e.py` set a
+  `.feedback_envelope` attribute directly on a caught `Exception` instance to carry a payload
+  up to the caller. `Exception` has no such attribute typed; used `setattr()` for the
+  intentional dynamic-attribute pattern.
+- **1 `reportArgumentType`**, **1 `reportMissingParameterType`** — a `dict[str, Any]` that
+  pyright inferred too narrowly from its first literal assignment, and a bare-annotation
+  parameter in `make_schema.py`. Both are local type-annotation fixes with no behavior change.
+
+While measuring this (before any fixes), pyright also caught that
+`scripts/run_zlg_comparison.py` was dead on arrival: it constructed
 `ComparisonInput(domain=..., comment_chain=...)` after those fields had been replaced by
 `cover_texts`, so it raised `TypeError` immediately, and it lacked the `sys.path` bootstrap
-its sibling scripts have so it could not even be imported. Both fixed.
-- **Phase 2.3** — the import-time runner singleton, blocked as described above.
+its sibling scripts have so it could not even be imported. Both fixed in an earlier commit.
 
 ### Bugs found while refactoring
 
@@ -167,6 +193,8 @@ All found while refactoring, all fixed.
 | Non-breaking hyphen inside a live search query string | `integrations/scrapingdog_api.py` |
 | `infrastructure` imported `workflows` (bottom layer depending on an upper one) | `prep_run_manifest` |
 | Env-precedence test passed only on machines without a `.env` | `test_angle_runner_llm_retries` |
+| `genson` imported but never declared as a dependency — the script could not run in a clean env | `scripts/make_schema.py` |
+| `huggingface_hub.snapshot_download(resume_download=True)` — parameter removed in `huggingface_hub` 1.x, script raised `TypeError` on any run | `scripts/download_qwen_zlg_model.py` |
 
 ### Phase 3 — where it stands
 
@@ -204,10 +232,9 @@ error response, so the registry signature is awkward. The concrete defect the re
 meant to prevent — a listed command with no branch — is now caught directly by
 `test_api_v1_workflow_run_dispatch.py`, which is the safety the restructure was for.
 
-**Phases 4 (Pydantic contracts) and 5.2–5.5 are untouched.** Note `workflows/contracts.py`
-still uses `@dataclass` with hand-rolled `to_dict`; its filter drops falsy-but-present values
-(`""`, `0`), not just `None`, so a naive `model_dump(exclude_none=True)` conversion would
-change artifact shape.
+**Phase 4.1 and 5.3 are done** (contracts converted to Pydantic v2; HTTP errors mapped in one
+place — see the phase outcomes table above). **Phases 5.2, 5.4, and 3.2–3.5 remain open**,
+each with the blocker recorded in "Still open" above.
 
 ### Gate added in phase 2
 

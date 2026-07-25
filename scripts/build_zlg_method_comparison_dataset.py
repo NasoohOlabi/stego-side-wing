@@ -17,6 +17,7 @@ _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from infrastructure.mappings import dict_field, list_field  # noqa: E402
 from services.stego_metrics_service import run_single_post_metrics  # noqa: E402
 from services.zlg_comparison_service import stegotext_has_prompt_leakage  # noqa: E402
 
@@ -385,7 +386,7 @@ def _report_metrics(report: dict[str, Any]) -> dict[str, Any]:
     near_duplicate = max(0, int(dropped.get("near_duplicate") or 0))
     admitted_before_dedup = kept + near_duplicate + max(0, int(dropped.get("capped") or 0))
     min_size = max(0, int(config.get("min_size") or 0))
-    relaxations = report.get("relaxations") if isinstance(report.get("relaxations"), list) else []
+    relaxations = list_field(report, "relaxations")
     return {
         "kept_count": kept,
         "relevance_mean": relevance_mean,
@@ -526,15 +527,9 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             continue
         our_text = str(our_top.get("stegoText") or "")
         tangent_db_report = _extract_tangent_db_report(our_top)
-        embedding = our_top.get("embedding") if isinstance(our_top.get("embedding"), dict) else {}
-        comment_embedding = (
-            embedding.get("commentEmbedding")
-            if isinstance(embedding.get("commentEmbedding"), dict)
-            else {}
-        )
-        compression = (
-            embedding.get("compression") if isinstance(embedding.get("compression"), dict) else {}
-        )
+        embedding = dict_field(our_top, "embedding")
+        comment_embedding = dict_field(embedding, "commentEmbedding")
+        compression = dict_field(embedding, "compression")
         recovery = source_entry.get("receiver_decode", {}).get("recovery_meta", {})
         capacity_metrics = (source_entry.get("sample_metrics") or {}).get("capacity_metrics") or {}
         # Pure-channel capacity: bits a blind receiver actually recovers from this one comment's

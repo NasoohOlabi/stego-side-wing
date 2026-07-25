@@ -14,7 +14,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from services.zlg_comparison_service import (  # noqa: E402
-    _post_json,
+    post_json,
 )
 from workflows.pipelines.receiver import ReceiverPipeline  # noqa: E402
 
@@ -76,7 +76,7 @@ def _run_zlg(row: dict[str, Any], artifact: dict[str, Any]) -> bool:
     prompt = str(context.pop("prompt", ""))
     if row["attack"] == "context_mutation":
         prompt = _mutate_zlg_prompt(prompt, int(row["attack_seed"]))
-    response = _post_json(
+    response = post_json(
         f"{str(artifact['server_url']).rstrip('/')}/reveal",
         {
             "prompt": prompt,

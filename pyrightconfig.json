@@ -20,14 +20,23 @@
     "src/content_acquisition",
     "src/integrations",
     "src/infrastructure",
-    "src/workflows"
+    "src/workflows",
+    "scripts"
   ],
   "exclude": [
     "src/util",
     "src/angles",
-    "src/**/__pycache__"
+    "src/tests",
+    "src/**/__pycache__",
+    "**/__pycache__"
   ],
   "executionEnvironments": [
+    {
+      "root": "scripts",
+      "extraPaths": [
+        "src"
+      ]
+    },
     {
       "root": "src",
       "extraPaths": [

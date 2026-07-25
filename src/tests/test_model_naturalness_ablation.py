@@ -182,7 +182,7 @@ def test_run_model_naturalness_ablation_skips_and_blinds(
 
     monkeypatch.setattr(module, "list_lm_studio_model_ids", lambda: ["openai/gpt-oss-20b"])
     monkeypatch.setattr(module, "list_google_model_ids", lambda: ["gemma-test", "gemini-test"])
-    monkeypatch.setattr(module, "_run_profile", fake_run_profile)
+    monkeypatch.setattr(module, "run_profile", fake_run_profile)
 
     result = module.run_model_naturalness_ablation(
         samples_per_model=1,

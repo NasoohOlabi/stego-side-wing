@@ -445,7 +445,7 @@ def test_process_post_auto_selects_next_unprocessed_post_with_tag():
         },
         save_object_local=lambda data, step, filename: calls.append((step, filename)),
     )
-    pipeline._load_default_payload_and_tag = lambda: ("default payload", "same-tag")
+    pipeline.load_default_payload_and_tag = lambda: ("default payload", "same-tag")
     pipeline.encode = lambda payload, post, tag: {
         "succeeded": True,
         "post": post,
@@ -487,7 +487,7 @@ def test_process_post_falls_back_to_auto_select_when_post_id_missing_on_disk():
         get_post_local=fake_get_post_local,
         save_object_local=lambda data, step, filename: saved.append((step, filename)),
     )
-    pipeline._load_default_payload_and_tag = lambda: ("default payload", "same-tag")
+    pipeline.load_default_payload_and_tag = lambda: ("default payload", "same-tag")
     pipeline.encode = lambda payload, post, tag: {
         "succeeded": True,
         "post": post,

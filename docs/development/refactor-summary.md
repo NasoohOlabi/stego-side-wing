@@ -13,11 +13,12 @@ sizes, gates, and the maintainability work done since).
 
 ## Current notes (2026)
 
-- Tests live under `src/tests/` (many `test_api_v1_*.py`, pipeline, runner, codec modules)â€”not only `test_parity.py`.
+- Tests live under `src/tests/` (many `test_api_v1_*.py`, pipeline, runner, codec modules) — not only `test_parity.py`.
 - **Layering** and validation checklists: [`architecture-layers.md`](architecture-layers.md), [`validation-per-phase.md`](validation-per-phase.md).
 - **`services/workflow_facade.py`**: re-exports workflow runner + prompt/protocol helpers for `app` so routes do not import deep `workflows` modules.
 - **`workflows/utils/angles_llm_config.py`**: angle LLM prompts and model id defaults; `gen_angles` and legacy `angle_runner` both use it (single source of truth).
-- **`workflows/runner_orchestration_utils.py`**: research breakdown, double-process FS claims, live-sim stego/receiver pair, angle normalizationâ€”extracted from `runner.py` for clarity.
+- **`workflows/runner_orchestration_utils.py`**: research breakdown, double-process FS claims, live-sim stego/receiver pair, angle normalization — extracted from `runner.py` for clarity.
+- **`infrastructure/mappings.py`**: `dict_field`/`list_field` coerce a possibly-absent JSON key to `{}`/`[]` in one call, replacing the double-`.get()` `isinstance` idiom that defeats type-narrowing. Shared by `services/` and `scripts/`.
 
 ## New Structure
 

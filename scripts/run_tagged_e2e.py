@@ -58,7 +58,7 @@ def _resolve_post_ids(
 def _resolve_payload(stego: StegoPipeline, payload: str | None) -> str:
     if isinstance(payload, str) and payload:
         return payload
-    workflow_payload, _ = stego._load_default_payload_and_tag()
+    workflow_payload, _ = stego.load_default_payload_and_tag()
     if workflow_payload:
         return workflow_payload
     raise ValueError("Payload is required; pass --payload or configure the workflow default.")

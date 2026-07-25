@@ -19,6 +19,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from infrastructure.config import get_workflow_angles_max_output  # noqa: E402
+from infrastructure.mappings import dict_field  # noqa: E402
 from workflows.pipelines.gen_angles import GenAnglesPipeline  # noqa: E402
 from workflows.utils.prep_run_manifest import write_prep_run_manifest  # noqa: E402
 from workflows.utils.stego_codec import (  # noqa: E402
@@ -336,13 +337,9 @@ def _quality_from_report(report: dict[str, Any] | None) -> dict[str, Any]:
             "unique_posts": 0,
             "available": False,
         }
-    relevance = report.get("relevance") if isinstance(report.get("relevance"), dict) else {}
-    distinctness = (
-        report.get("distinctness") if isinstance(report.get("distinctness"), dict) else {}
-    )
-    source_mix = (
-        report.get("source_mix_kept") if isinstance(report.get("source_mix_kept"), dict) else {}
-    )
+    relevance = dict_field(report, "relevance")
+    distinctness = dict_field(report, "distinctness")
+    source_mix = dict_field(report, "source_mix_kept")
     total = sum(float(source_mix.get(key, 0)) for key in ("post", "comments", "search_results"))
     return {
         "version": "tangent_db_quality_summary_v1",

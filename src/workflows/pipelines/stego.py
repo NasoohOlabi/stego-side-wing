@@ -735,7 +735,7 @@ class StegoPipeline:
         # swap it per test/run. Capturing an injected instance would defeat that.
         self.config = get_config()
 
-    def _load_default_payload_and_tag(self) -> tuple[str | None, str | None]:
+    def load_default_payload_and_tag(self) -> tuple[str | None, str | None]:
         """Load default payload/tag from the n8n Stego workflow SetSecretData node."""
         workflow_path = (
             Path(__file__).resolve().parents[3] / "workflows" / f"{STEGO_WORKFLOW_ID}.json"
@@ -2265,7 +2265,7 @@ class StegoPipeline:
             post_id,
             list_offset,
         )
-        workflow_payload, workflow_tag = self._load_default_payload_and_tag()
+        workflow_payload, workflow_tag = self.load_default_payload_and_tag()
         using_workflow_payload = not (isinstance(payload, str) and payload)
         resolved_payload = payload if isinstance(payload, str) and payload else workflow_payload
         resolved_tag = (

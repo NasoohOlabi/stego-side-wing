@@ -132,7 +132,7 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
-def _read_json(path: Path) -> dict[str, Any]:
+def read_json(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"Expected JSON object: {path}")
@@ -148,7 +148,7 @@ def _metric_progress(label: str, current: int, total: int) -> None:
     )
 
 
-def _has_usable_angles(post: dict[str, Any]) -> bool:
+def has_usable_angles(post: dict[str, Any]) -> bool:
     angles = post.get("angles")
     return isinstance(angles, list) and bool(angles)
 
@@ -224,7 +224,7 @@ def _cycle_to_length(items: Sequence[str], length: int) -> list[str]:
     return [items[idx % len(items)] for idx in range(length)]
 
 
-def _select_post_ids(
+def select_post_ids(
     *,
     explicit_post_ids: Sequence[str],
     angles_dir: Path,
@@ -247,10 +247,10 @@ def _select_post_ids(
         if not baseline_path.exists():
             continue
         try:
-            post = _read_json(path)
+            post = read_json(path)
         except Exception:
             continue
-        if _has_usable_angles(post):
+        if has_usable_angles(post):
             selected.append(path.stem)
     if len(selected) < samples_per_profile:
         if allow_post_reuse and selected:
@@ -361,12 +361,12 @@ def _run_sample(
             "adaptive_attempt": adaptive_attempts,
         }
         try:
-            post = _read_json(angles_dir / f"{post_id}.json")
-            baseline_post = _read_json(dataset_dir / f"{post_id}.json")
+            post = read_json(angles_dir / f"{post_id}.json")
+            baseline_post = read_json(dataset_dir / f"{post_id}.json")
             envelope.update(summarize_input_post(post, baseline_post))
             post, angle_gate_report = _apply_e2e_angle_relevance_gate(post, baseline_post)
             envelope["angle_relevance_gate"] = angle_gate_report
-            if not _has_usable_angles(post):
+            if not has_usable_angles(post):
                 raise ValueError(f"Post {post_id} has no usable angles")
             _write_json(input_dir / f"{sample_label}.json", post)
             _write_json(profile_dataset_dir / f"{post_id}.json", baseline_post)
@@ -520,11 +520,13 @@ def _run_sample(
                     time.sleep(wait_seconds)
                 attempt_index += 1
                 continue
-            exc.feedback_envelope = envelope
+            # Out-of-band transport: the envelope has to survive the re-raise up to
+            # run_profile, which reads it back with a matching getattr.
+            setattr(exc, "feedback_envelope", envelope)  # noqa: B010
             raise
 
 
-def _run_profile(
+def run_profile(
     *,
     run_id: str,
     variant: ExperimentVariant,
@@ -608,7 +610,7 @@ def _run_profile(
             except Exception as exc:
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
                 failure_code = classify_failure(f"{type(exc).__name__}: {exc}")
-                failure = {
+                failure: dict[str, Any] = {
                     "profile": variant.base_profile,
                     "variant": variant.name,
                     "post_id": post_id,
@@ -820,7 +822,7 @@ def run_actual_workload_e2e(
         raise ValueError("samples_per_profile must be positive")
     variant_names = list(variants or profiles)
     resolved_variants = resolve_experiment_variants(variant_names)
-    selected_post_ids = _select_post_ids(
+    selected_post_ids = select_post_ids(
         explicit_post_ids=post_ids,
         angles_dir=angles_dir,
         dataset_dir=dataset_dir,
@@ -862,7 +864,7 @@ def run_actual_workload_e2e(
     )
     for variant in resolved_variants:
         profile_summaries.append(
-            _run_profile(
+            run_profile(
                 run_id=run_id,
                 variant=variant,
                 post_ids=selected_post_ids,

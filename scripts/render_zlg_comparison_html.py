@@ -3,8 +3,16 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SRC = _REPO_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from infrastructure.mappings import dict_field  # noqa: E402
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -46,13 +54,11 @@ def _method_title(name: str) -> str:
 
 
 def _method_block(summary: dict[str, Any], method: str) -> dict[str, Any]:
-    methods = summary.get("methods") if isinstance(summary.get("methods"), dict) else {}
-    block = methods.get(method)
-    return block if isinstance(block, dict) else {}
+    return dict_field(dict_field(summary, "methods"), method)
 
 
 def _method_cards(summary: dict[str, Any]) -> str:
-    methods = summary.get("methods") if isinstance(summary.get("methods"), dict) else {}
+    methods = dict_field(summary, "methods")
     cards = []
     for name in ("our_method", "zlg"):
         block = methods.get(name)
@@ -81,11 +87,7 @@ def _method_cards(summary: dict[str, Any]) -> str:
 def _metric_notes(summary: dict[str, Any], progress: dict[str, Any]) -> str:
     our = _method_block(summary, "our_method")
     zlg = _method_block(summary, "zlg")
-    paired = (
-        summary.get("paired_statistics")
-        if isinstance(summary.get("paired_statistics"), dict)
-        else {}
-    )
+    paired = dict_field(summary, "paired_statistics")
     paired_n = paired.get("paired_n")
     zlg_payload = _num(zlg.get("payload_bits_encoded_mean"))
     our_payload = _num(our.get("payload_bits_encoded_mean"))
@@ -132,11 +134,7 @@ _DELTA_LABELS = {
 
 
 def _paired_table(summary: dict[str, Any]) -> str:
-    stats = (
-        summary.get("paired_statistics")
-        if isinstance(summary.get("paired_statistics"), dict)
-        else {}
-    )
+    stats = dict_field(summary, "paired_statistics")
     rows = []
     for key in _DELTA_LABELS:
         block = stats.get(key)

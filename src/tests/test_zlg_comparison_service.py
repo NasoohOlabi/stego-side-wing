@@ -165,7 +165,7 @@ def test_run_comparison_recovers_partial_from_422_best_candidate(monkeypatch) ->
             )
         )
 
-    monkeypatch.setattr(svc, "_post_json", _fake_post_json)
+    monkeypatch.setattr(svc, "post_json", _fake_post_json)
     result = svc.run_comparison_sample(
         svc.ComparisonInput(
             target_payload="hello",

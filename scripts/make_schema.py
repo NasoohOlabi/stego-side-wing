@@ -1,6 +1,7 @@
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from genson import SchemaBuilder
 
@@ -12,7 +13,7 @@ if str(_SRC) not in sys.path:
 from infrastructure.process_tracking import append_current_pid_to_log
 
 
-def generalize_search_results(schema_dict):
+def generalize_search_results(schema_dict: Any) -> None:
     """Recursively finds search_results and converts properties to additionalProperties."""
     if not isinstance(schema_dict, dict):
         return

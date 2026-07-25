@@ -35,6 +35,8 @@ metrics = [
 
 [dependency-groups]
 dev = [
+    # scripts/make_schema.py imports this; it was undeclared, so the script could not run.
+    "genson>=1.3.0",
     "import-linter>=2.0",
     "pyright>=1.1.408",
     "pytest>=9.0.2",

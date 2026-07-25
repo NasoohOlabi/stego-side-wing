@@ -16,8 +16,8 @@ if str(_SRC) not in sys.path:
 from loguru import logger  # noqa: E402
 from run_actual_workload_e2e import (  # noqa: E402
     NATURALNESS_EXPERIMENT_ROOT,
-    _has_usable_angles,
-    _read_json,
+    has_usable_angles,
+    read_json,
     run_actual_workload_e2e,
 )
 
@@ -37,10 +37,10 @@ def _select_random_post_ids(
         if not (dataset_dir / path.name).is_file():
             continue
         try:
-            post = _read_json(path)
+            post = read_json(path)
         except Exception:
             continue
-        if _has_usable_angles(post):
+        if has_usable_angles(post):
             candidates.append(path.stem)
     if len(candidates) < count:
         raise ValueError(f"Only found {len(candidates)} usable posts, need {count}.")

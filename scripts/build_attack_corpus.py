@@ -23,6 +23,8 @@ def _synonym(word: str) -> str | None:
     except ImportError as exc:
         raise RuntimeError("Install the metrics extra with NLTK for synonym attacks") from exc
     for synset in wordnet.synsets(word):
+        if synset is None:
+            continue
         for lemma in synset.lemmas():
             candidate = lemma.name().replace("_", " ")
             if candidate.lower() != word.lower() and " " not in candidate:

@@ -479,7 +479,7 @@ class ComparisonInput:
     use_capacity_probe: bool = False
 
 
-def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+def post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
     timeout_seconds = int(payload.pop("__timeout_seconds__", 3600))
     timeout_value = None if timeout_seconds <= 0 else timeout_seconds
     response = requests.post(url, json=payload, timeout=timeout_value)
@@ -535,7 +535,7 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
     if sample.use_capacity_probe and not sample.server_url.startswith("local://"):
         started = time.perf_counter()
         try:
-            probe_resp = _post_json(
+            probe_resp = post_json(
                 capacity_url,
                 {
                     "prompt": prompt,
@@ -631,7 +631,7 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
     for attempt in range(1, sample.max_retries + 1):
         started = time.perf_counter()
         try:
-            hide_resp = _post_json(
+            hide_resp = post_json(
                 hide_url,
                 {
                     "prompt": prompt,
@@ -729,7 +729,7 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
         decode_ok: bool | None = None
         if sample.do_reveal_check:
             try:
-                reveal_resp = _post_json(
+                reveal_resp = post_json(
                     reveal_url,
                     {
                         "prompt": prompt,

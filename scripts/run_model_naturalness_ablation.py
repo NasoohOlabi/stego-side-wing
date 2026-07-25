@@ -26,8 +26,8 @@ if str(_SCRIPTS) not in sys.path:
 from run_actual_workload_e2e import (  # noqa: E402
     DEFAULT_MAX_TRANSIENT_SAMPLE_RETRIES,
     DEFAULT_TRANSIENT_SAMPLE_RETRY_BASE_DELAY_SECONDS,
-    _run_profile,
-    _select_post_ids,
+    run_profile,
+    select_post_ids,
 )
 
 from infrastructure.config import (  # noqa: E402
@@ -562,7 +562,7 @@ def run_model_naturalness_ablation(
         max_gemma_models=max_gemma_models,
         skip_preflight=skip_preflight,
     )
-    selected_post_ids = _select_post_ids(
+    selected_post_ids = select_post_ids(
         explicit_post_ids=post_ids,
         angles_dir=angles_dir,
         dataset_dir=dataset_dir,
@@ -579,7 +579,7 @@ def run_model_naturalness_ablation(
         lane_dir = resolved_run_dir / _safe_lane_slug(lane)
         try:
             with applied_model_lane(lane):
-                lane_summary = _run_profile(
+                lane_summary = run_profile(
                     run_id=run_id,
                     variant=balanced_variant,
                     post_ids=selected_post_ids,

@@ -177,7 +177,11 @@ def test_analyze_angles_sets_source_document_per_text_block(
     assert out[1]["source_document"] == 1
 
 
+@pytest.mark.usefixtures("clear_llm_backend_env")
 def test_angles_model_name_env_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    # clear_llm_backend_env strips WORKFLOW_LM_STUDIO_MODEL from os.environ *and* the cached
+    # .env values; angles_model_name() consults it between ANGLES_MODEL and MODEL, so a local
+    # .env would otherwise win over the MODEL fallback this test is asserting on.
     monkeypatch.delenv("ANGLES_MODEL", raising=False)
     monkeypatch.setenv("MODEL", "mistral-test")
     assert angles_model_name() == "mistral-test"

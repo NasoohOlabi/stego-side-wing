@@ -255,6 +255,14 @@ def _prompt_style_for_attempt(configured_style: str, retry_count: int) -> str:
     return configured_style
 
 
+def _decoded_indices(validation_details: dict[str, Any]) -> list[Any]:
+    """Decoded angle index per evaluated candidate, in evaluation order."""
+    candidates = validation_details.get("candidates", [])
+    if not isinstance(candidates, list):
+        return []
+    return [item.get("decoded_index") for item in candidates]
+
+
 def _tokenize_content_words(text: str) -> list[str]:
     return [
         token
@@ -1099,6 +1107,44 @@ class StegoPipeline:
             "markdown code fence — no prose before/after."
         )
 
+    def _generate_candidate_groups(
+        self,
+        *,
+        samples: list[dict[str, Any]],
+        post_augmentation: dict[str, Any],
+        selected_angle: dict[str, Any],
+        prompt_style: str,
+        encode_run_id: str,
+        llm_timings: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Generate one candidate group per sample for a single attempt.
+
+        Shared by both encode entry points: the payload path and the diagnostic
+        binary-selection-bits path drive generation identically.
+        """
+        encoded_results: list[dict[str, Any]] = []
+        for sample_index, sample in enumerate(samples):
+            texts = self._generate_stego_texts(
+                sample=sample,
+                comment_embedding=post_augmentation["commentEmbedding"],
+                prompt_style=prompt_style,
+                sample_index=sample_index,
+                encode_run_id=encode_run_id,
+                llm_timings=llm_timings,
+            )
+            if _eq_angle(sample, selected_angle):
+                texts = _with_selected_angle_anchor_variants(texts, selected_angle)
+            encoded_results.append(
+                {
+                    "category": sample.get("category"),
+                    "source_quote": sample.get("source_quote"),
+                    "tangent": sample.get("tangent"),
+                    "prompt_style": prompt_style,
+                    "texts": texts,
+                }
+            )
+        return encoded_results
+
     def _decode_candidate(
         self,
         *,
@@ -1555,28 +1601,15 @@ class StegoPipeline:
                     selected_idx,
                     prompt_style,
                 )
-                encoded_results: list[dict[str, Any]] = []
                 t_gen = time.perf_counter()
-                for sidx, sample in enumerate(samples):
-                    texts = self._generate_stego_texts(
-                        sample=sample,
-                        comment_embedding=post_augmentation["commentEmbedding"],
-                        prompt_style=prompt_style,
-                        sample_index=sidx,
-                        encode_run_id=encode_run_id,
-                        llm_timings=llm_timings,
-                    )
-                    if _eq_angle(sample, selected_angle):
-                        texts = _with_selected_angle_anchor_variants(texts, selected_angle)
-                    encoded_results.append(
-                        {
-                            "category": sample.get("category"),
-                            "source_quote": sample.get("source_quote"),
-                            "tangent": sample.get("tangent"),
-                            "prompt_style": prompt_style,
-                            "texts": texts,
-                        }
-                    )
+                encoded_results = self._generate_candidate_groups(
+                    samples=samples,
+                    post_augmentation=post_augmentation,
+                    selected_angle=selected_angle,
+                    prompt_style=prompt_style,
+                    encode_run_id=encode_run_id,
+                    llm_timings=llm_timings,
+                )
                 generate_ms = _elapsed_ms_since(t_gen)
 
                 primary_texts = encoded_results[0].get("texts", []) if encoded_results else []
@@ -1642,12 +1675,7 @@ class StegoPipeline:
                             "group_index": accepted_candidate.get("group_index"),
                             "candidate_index": accepted_candidate.get("candidate_index"),
                         },
-                        [
-                            item.get("decoded_index")
-                            for item in validation.get("validationDetails", {}).get(
-                                "candidates", []
-                            )
-                        ],
+                        _decoded_indices(validation.get("validationDetails", {})),
                     )
                     _log_encode_timing_complete(
                         encode_run_id=encode_run_id,
@@ -1677,12 +1705,9 @@ class StegoPipeline:
                         "sender_audit": sender_audit,
                         "embedding": post_augmentation,
                         "encoded_samples": encoded_results,
-                        "decoded_indices": [
-                            item.get("decoded_index")
-                            for item in validation.get("validationDetails", {}).get(
-                                "candidates", []
-                            )
-                        ],
+                        "decoded_indices": _decoded_indices(
+                            validation.get("validationDetails", {})
+                        ),
                         "validation_details": validation.get("validationDetails"),
                     }
 
@@ -1692,10 +1717,7 @@ class StegoPipeline:
                     post_id,
                     retry_count + 1,
                     selected_idx,
-                    [
-                        item.get("decoded_index")
-                        for item in validation_details.get("candidates", [])
-                    ],
+                    _decoded_indices(validation_details),
                 )
                 should_sharpen = (
                     configured_prompt_style == "natural_sharpened"
@@ -1762,12 +1784,9 @@ class StegoPipeline:
                                 "sender_audit": sender_audit,
                                 "embedding": post_augmentation,
                                 "encoded_samples": encoded_results,
-                                "decoded_indices": [
-                                    item.get("decoded_index")
-                                    for item in sharpen_validation.get("validationDetails", {}).get(
-                                        "candidates", []
-                                    )
-                                ],
+                                "decoded_indices": _decoded_indices(
+                                    sharpen_validation.get("validationDetails", {})
+                                ),
                                 "validation_details": sharpen_validation.get("validationDetails"),
                             }
                 if retry_count >= resolved_max_retries:
@@ -1776,10 +1795,7 @@ class StegoPipeline:
                             "No generated or context-sharpened candidate stayed context-faithful and decoded to the selected angle in strict mode."
                         ),
                         "selected_angle": _angle_summary(selected_angle),
-                        "decoded_indices": [
-                            item.get("decoded_index")
-                            for item in validation_details.get("candidates", [])
-                        ],
+                        "decoded_indices": _decoded_indices(validation_details),
                         "candidate_results": validation_details.get("candidates", []),
                     }
                     _stego_log_bind("failed").error(
@@ -1937,27 +1953,14 @@ class StegoPipeline:
         while retry_count <= resolved_max_retries:
             try:
                 prompt_style = _prompt_style_for_attempt(configured_prompt_style, retry_count)
-                encoded_results: list[dict[str, Any]] = []
-                for sidx, sample in enumerate(samples):
-                    texts = self._generate_stego_texts(
-                        sample=sample,
-                        comment_embedding=post_augmentation["commentEmbedding"],
-                        prompt_style=prompt_style,
-                        sample_index=sidx,
-                        encode_run_id=encode_run_id,
-                        llm_timings=llm_timings,
-                    )
-                    if _eq_angle(sample, selected_angle):
-                        texts = _with_selected_angle_anchor_variants(texts, selected_angle)
-                    encoded_results.append(
-                        {
-                            "category": sample.get("category"),
-                            "source_quote": sample.get("source_quote"),
-                            "tangent": sample.get("tangent"),
-                            "prompt_style": prompt_style,
-                            "texts": texts,
-                        }
-                    )
+                encoded_results = self._generate_candidate_groups(
+                    samples=samples,
+                    post_augmentation=post_augmentation,
+                    selected_angle=selected_angle,
+                    prompt_style=prompt_style,
+                    encode_run_id=encode_run_id,
+                    llm_timings=llm_timings,
+                )
                 primary_texts = encoded_results[0].get("texts", []) if encoded_results else []
                 if not primary_texts:
                     raise RuntimeError("Encoder did not return candidate texts")
@@ -2009,12 +2012,9 @@ class StegoPipeline:
                         "sender_audit": sender_audit,
                         "embedding": post_augmentation,
                         "encoded_samples": encoded_results,
-                        "decoded_indices": [
-                            item.get("decoded_index")
-                            for item in validation.get("validationDetails", {}).get(
-                                "candidates", []
-                            )
-                        ],
+                        "decoded_indices": _decoded_indices(
+                            validation.get("validationDetails", {})
+                        ),
                         "validation_details": validation.get("validationDetails"),
                         "binary_selection_bits": bits,
                         "comment_bits": post_augmentation.get("commentBits", ""),

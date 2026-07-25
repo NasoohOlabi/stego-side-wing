@@ -31,7 +31,9 @@ def _replace_comment(comments: list[dict[str, Any]], comment_id: str, body: str)
 
 
 def _mutate_context(posts: list[dict[str, Any]], seed: int) -> None:
-    candidates = [post for post in posts if isinstance(post.get("comments"), list) and post["comments"]]
+    candidates = [
+        post for post in posts if isinstance(post.get("comments"), list) and post["comments"]
+    ]
     if not candidates:
         return
     comments = candidates[0]["comments"]
@@ -55,7 +57,9 @@ def _run_our(row: dict[str, Any], artifact: dict[str, Any]) -> bool:
     else:
         ref = refs[int(row["carrier_index"])]
         target = next(post for post in posts if str(post.get("id")) == str(ref["post_id"]))
-        if not _replace_comment(target.get("comments", []), str(ref["comment_id"]), str(row["text"])):
+        if not _replace_comment(
+            target.get("comments", []), str(ref["comment_id"]), str(row["text"])
+        ):
             raise RuntimeError("Sender frame comment was not found")
     decoded = ReceiverPipeline().run_multi_frame(
         posts,
@@ -89,7 +93,9 @@ def evaluate(row: dict[str, Any]) -> dict[str, Any]:
         return {**row, "decode_ok": None, "decode_reason": "not_applicable"}
     try:
         artifact = json.loads(Path(str(row["receiver_artifact"])).read_text(encoding="utf-8"))
-        recovered = _run_our(row, artifact) if row["method"] == "our_method" else _run_zlg(row, artifact)
+        recovered = (
+            _run_our(row, artifact) if row["method"] == "our_method" else _run_zlg(row, artifact)
+        )
         return {**row, "decode_ok": recovered, "decode_reason": None}
     except Exception as exc:
         return {**row, "decode_ok": False, "decode_reason": f"{type(exc).__name__}: {exc}"}
@@ -100,9 +106,15 @@ def main() -> int:
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    rows = [json.loads(line) for line in Path(args.input).read_text(encoding="utf-8").splitlines() if line]
+    rows = [
+        json.loads(line)
+        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     evaluated = [evaluate(row) for row in rows]
-    Path(args.output).write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in evaluated) + "\n", encoding="utf-8")
+    Path(args.output).write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in evaluated) + "\n", encoding="utf-8"
+    )
     return 0
 
 

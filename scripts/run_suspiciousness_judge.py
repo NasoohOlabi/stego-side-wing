@@ -29,7 +29,11 @@ def _selected_index(raw: str) -> int | None:
 def _done(path: Path) -> set[str]:
     if not path.exists():
         return set()
-    return {str(json.loads(line)["task_id"]) for line in path.read_text(encoding="utf-8").splitlines() if line}
+    return {
+        str(json.loads(line)["task_id"])
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line
+    }
 
 
 def _append(path: Path, row: dict[str, Any]) -> None:
@@ -45,7 +49,11 @@ def main() -> int:
     parser.add_argument("--provider", default="lm_studio")
     parser.add_argument("--model", default="google/gemma-3-12b")
     args = parser.parse_args()
-    tasks = [json.loads(line) for line in Path(args.tasks).read_text(encoding="utf-8").splitlines() if line]
+    tasks = [
+        json.loads(line)
+        for line in Path(args.tasks).read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     prompt_path, output = Path(args.prompt), Path(args.output)
     template = prompt_path.read_text(encoding="utf-8")
     prompt_hash = hashlib.sha256(prompt_path.read_bytes()).hexdigest()
@@ -55,15 +63,18 @@ def main() -> int:
             continue
         prompt = template.format(candidates_json=json.dumps(task["candidates"], ensure_ascii=False))
         raw = llm.call_llm(prompt, provider=args.provider, model=args.model, temperature=0.0)
-        _append(output, {
-            "task_id": task["task_id"],
-            "selected_index": _selected_index(raw),
-            "raw_response": raw,
-            "judge_model": args.model,
-            "provider": args.provider,
-            "temperature": 0.0,
-            "judge_prompt_sha256": prompt_hash,
-        })
+        _append(
+            output,
+            {
+                "task_id": task["task_id"],
+                "selected_index": _selected_index(raw),
+                "raw_response": raw,
+                "judge_model": args.model,
+                "provider": args.provider,
+                "temperature": 0.0,
+                "judge_prompt_sha256": prompt_hash,
+            },
+        )
     return 0
 
 

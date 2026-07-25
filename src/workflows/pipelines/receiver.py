@@ -487,9 +487,7 @@ class ReceiverPipeline:
         }
         parity_mismatch = _tangent_db_parity_mismatch(pre_sender_post, ga["report"])
         if parity_mismatch is not None:
-            self._log.warning(
-                "tangent_db_config_mismatch", post_id=post_id, **parity_mismatch
-            )
+            self._log.warning("tangent_db_config_mismatch", post_id=post_id, **parity_mismatch)
             summary["tangent_db_config_mismatch"] = parity_mismatch
         reports = {"data_load": dl_report, "research": rs["report"], "gen_angles": ga["report"]}
         return rebuilt, {"summary": summary, "reports": reports}

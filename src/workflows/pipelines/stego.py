@@ -1268,9 +1268,7 @@ class StegoPipeline:
                         "accepted": item["accepted"],
                         "rejection_reasons": item["rejection_reasons"],
                         "text_preview": item["text_preview"],
-                        "is_synthetic_anchor": _is_synthetic_anchor_text(
-                            str(item["text"])
-                        ),
+                        "is_synthetic_anchor": _is_synthetic_anchor_text(str(item["text"])),
                         "context_gate": item["context_gate"],
                     }
                     for item in evaluations

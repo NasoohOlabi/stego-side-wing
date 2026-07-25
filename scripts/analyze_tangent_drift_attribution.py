@@ -80,8 +80,7 @@ def analyze(paired: list[dict[str, Any]], judgments: list[dict[str, Any]]) -> di
     detected_posts = {
         str(row.get("post_id"))
         for row in judgments
-        if row.get("valid") is True
-        and row.get("correct") is True
+        if row.get("valid") is True and row.get("correct") is True
     }
     detected = [report for post_id, report in reports.items() if post_id in detected_posts]
     undetected = [report for post_id, report in reports.items() if post_id not in detected_posts]

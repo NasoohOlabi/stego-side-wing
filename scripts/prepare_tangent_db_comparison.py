@@ -314,7 +314,16 @@ def _lexical_quality(text: str) -> float:
     max_repeat = max((bigrams.count(item) for item in set(bigrams)), default=1)
     bigram_component = 1.0 / max_repeat
     length_component = min(len(tokens) / 5, 1.0, 120 / len(tokens))
-    return round(100 * (0.4 * unique + 0.25 * (1 - repetition) + 0.25 * bigram_component + 0.1 * length_component), 6)
+    return round(
+        100
+        * (
+            0.4 * unique
+            + 0.25 * (1 - repetition)
+            + 0.25 * bigram_component
+            + 0.1 * length_component
+        ),
+        6,
+    )
 
 
 def _quality_from_report(report: dict[str, Any] | None) -> dict[str, Any]:
@@ -330,7 +339,9 @@ def _quality_from_report(report: dict[str, Any] | None) -> dict[str, Any]:
     distinctness = (
         report.get("distinctness") if isinstance(report.get("distinctness"), dict) else {}
     )
-    source_mix = report.get("source_mix_kept") if isinstance(report.get("source_mix_kept"), dict) else {}
+    source_mix = (
+        report.get("source_mix_kept") if isinstance(report.get("source_mix_kept"), dict) else {}
+    )
     total = sum(float(source_mix.get(key, 0)) for key in ("post", "comments", "search_results"))
     return {
         "version": "tangent_db_quality_summary_v1",
@@ -381,7 +392,9 @@ def _enrich_lane_summary(root: Path, lane: str, summary: dict[str, Any]) -> None
     }
     summary["provenance"] = {
         "prep_run": _read_object(root / lane / "prep_run.json"),
-        "paired_rows_sha256": hashlib.sha256((root / lane / "paired_rows.jsonl").read_bytes()).hexdigest(),
+        "paired_rows_sha256": hashlib.sha256(
+            (root / lane / "paired_rows.jsonl").read_bytes()
+        ).hexdigest(),
         "summary_inputs_sha256": _json_sha256({key: summary[key] for key in metric_paths}),
     }
 

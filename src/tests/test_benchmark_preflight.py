@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("benchmark_preflight", ROOT / "scripts" / "benchmark_preflight.py")
+SPEC = importlib.util.spec_from_file_location(
+    "benchmark_preflight", ROOT / "scripts" / "benchmark_preflight.py"
+)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)

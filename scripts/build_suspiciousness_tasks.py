@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any
 
 
-def build(rows: list[dict[str, Any]], prompt_hash: str, judge_model: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def build(
+    rows: list[dict[str, Any]], prompt_hash: str, judge_model: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     tasks: list[dict[str, Any]] = []
     keys: list[dict[str, Any]] = []
     for row in rows:
@@ -26,26 +28,32 @@ def build(rows: list[dict[str, Any]], prompt_hash: str, judge_model: str) -> tup
             candidates = [str(stego), *decoys]
             random.Random(seed + 1).shuffle(candidates)
             task_id = hashlib.sha256(f"judge:{identity}".encode()).hexdigest()
-            tasks.append({
-                "task_id": task_id,
-                "post_id": row["post_id"],
-                "candidates": candidates,
-                "order_seed": seed + 1,
-                "judge_model": judge_model,
-                "judge_prompt_sha256": prompt_hash,
-            })
-            keys.append({
-                "task_id": task_id,
-                "post_id": row["post_id"],
-                "method": row["method"],
-                "carrier_index": carrier_index,
-                "correct_index": candidates.index(str(stego)),
-            })
+            tasks.append(
+                {
+                    "task_id": task_id,
+                    "post_id": row["post_id"],
+                    "candidates": candidates,
+                    "order_seed": seed + 1,
+                    "judge_model": judge_model,
+                    "judge_prompt_sha256": prompt_hash,
+                }
+            )
+            keys.append(
+                {
+                    "task_id": task_id,
+                    "post_id": row["post_id"],
+                    "method": row["method"],
+                    "carrier_index": carrier_index,
+                    "correct_index": candidates.index(str(stego)),
+                }
+            )
     return tasks, keys
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8"
+    )
 
 
 def main() -> int:
@@ -56,7 +64,11 @@ def main() -> int:
     parser.add_argument("--judge-prompt", required=True)
     parser.add_argument("--judge-model", default="google/gemma-3-12b")
     args = parser.parse_args()
-    rows = [json.loads(line) for line in Path(args.input).read_text(encoding="utf-8").splitlines() if line]
+    rows = [
+        json.loads(line)
+        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     prompt_hash = hashlib.sha256(Path(args.judge_prompt).read_bytes()).hexdigest()
     tasks, keys = build(rows, prompt_hash, args.judge_model)
     _write_jsonl(Path(args.tasks), tasks)

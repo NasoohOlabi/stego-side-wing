@@ -15,7 +15,9 @@ def _load_module():
 
 def test_replace_comment_finds_nested_sender_frame() -> None:
     module = _load_module()
-    comments = [{"id": "root", "body": "root", "replies": [{"id": "frame", "body": "old", "replies": []}]}]
+    comments = [
+        {"id": "root", "body": "root", "replies": [{"id": "frame", "body": "old", "replies": []}]}
+    ]
 
     replaced = module._replace_comment(comments, "frame", "attacked")
 

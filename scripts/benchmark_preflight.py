@@ -23,7 +23,9 @@ def _sha256(path: Path) -> str:
 
 
 def _git(*args: str) -> str:
-    result = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), *args], capture_output=True, text=True, check=False
+    )
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
@@ -73,6 +75,7 @@ def build_manifest(
     required = [row for row in model_rows if isinstance(row, dict) and row.get("required")]
     if not required:
         raise ValueError("benchmark model manifest has no required models")
+
     def _display(path: Path) -> str:
         try:
             return str(path.relative_to(ROOT))
@@ -101,7 +104,9 @@ def build_manifest(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--post-ids", required=True, help="Text file with one immutable post ID per line")
+    parser.add_argument(
+        "--post-ids", required=True, help="Text file with one immutable post ID per line"
+    )
     parser.add_argument("--output", default="metrics/benchmark_manifest.json")
     parser.add_argument("--models", default="config/benchmark_models.json")
     parser.add_argument("--protocol", default="config/benchmark_protocol.json")
@@ -112,7 +117,11 @@ def main() -> int:
     post_path = (ROOT / args.post_ids).resolve()
     model_path = (ROOT / args.models).resolve()
     protocol_path = (ROOT / args.protocol).resolve()
-    post_ids = [line.strip() for line in post_path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    post_ids = [
+        line.strip()
+        for line in post_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
     manifest = build_manifest(
         post_ids,
         model_path,
@@ -121,7 +130,9 @@ def main() -> int:
         dataset_dir=(ROOT / args.dataset_dir).resolve() if args.dataset_dir else None,
     )
     if manifest["git_dirty"] and not args.allow_dirty:
-        raise SystemExit("Benchmark preflight refused: working tree is dirty (use --allow-dirty for exploratory runs).")
+        raise SystemExit(
+            "Benchmark preflight refused: working tree is dirty (use --allow-dirty for exploratory runs)."
+        )
     output = (ROOT / args.output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

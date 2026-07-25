@@ -294,9 +294,9 @@ def test_tangent_db_v1_selection_is_sender_receiver_reproducible(
     receiver = pipeline.preview_post(post)["post"]
 
     assert receiver["angles"] == sender["angles"]
-    assert receiver["tangent_db_report"]["config_hash"] == sender["tangent_db_report"][
-        "config_hash"
-    ]
+    assert (
+        receiver["tangent_db_report"]["config_hash"] == sender["tangent_db_report"]["config_hash"]
+    )
 
 
 def test_tangent_db_legacy_does_not_add_report(monkeypatch, clear_workflow_capacity_env):

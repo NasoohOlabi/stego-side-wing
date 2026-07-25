@@ -52,7 +52,11 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     losses = sum(score < 0.5 for score in post_scores)
     provenance = sorted(
         {
-            (str(row.get("provider")), str(row.get("judge_model")), str(row.get("judge_prompt_sha256")))
+            (
+                str(row.get("provider")),
+                str(row.get("judge_model")),
+                str(row.get("judge_prompt_sha256")),
+            )
             for row, _ in valid
         }
     )
@@ -68,7 +72,9 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "post_cluster_losses": losses,
         "post_cluster_ties": len(post_scores) - wins - losses,
         "two_sided_sign_test_p": _sign_test(wins, losses),
-        "row_level_our_method_score": statistics.fmean(score for _, score in valid) if valid else None,
+        "row_level_our_method_score": statistics.fmean(score for _, score in valid)
+        if valid
+        else None,
         "provenance": [
             {"provider": provider, "judge_model": model, "judge_prompt_sha256": prompt_hash}
             for provider, model, prompt_hash in provenance
@@ -82,10 +88,16 @@ def main() -> int:
     parser.add_argument("--output")
     parser.add_argument("--comparison-summary")
     args = parser.parse_args()
-    rows = [json.loads(line) for line in Path(args.input).read_text(encoding="utf-8").splitlines() if line]
+    rows = [
+        json.loads(line)
+        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     result = summarize(rows)
     if args.output:
-        Path(args.output).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        Path(args.output).write_text(
+            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     if args.comparison_summary:
         path = Path(args.comparison_summary)
         summary = json.loads(path.read_text(encoding="utf-8"))

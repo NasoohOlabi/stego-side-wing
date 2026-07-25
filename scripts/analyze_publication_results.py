@@ -31,25 +31,39 @@ def _quality(metrics: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _score_text(post_id: str, method: str, index: int, text: str, temp: Path, dataset: Path, device: str) -> dict[str, Any]:
+def _score_text(
+    post_id: str, method: str, index: int, text: str, temp: Path, dataset: Path, device: str
+) -> dict[str, Any]:
     path = temp / f"{post_id}_version_{method}_{index}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps([{"stegoText": text}], ensure_ascii=False), encoding="utf-8")
     return _quality(run_single_post_metrics(path, dataset, device=device))
 
 
-def score_quality(rows: list[dict[str, Any]], temp: Path, dataset: Path, device: str) -> list[dict[str, Any]]:
+def score_quality(
+    rows: list[dict[str, Any]], temp: Path, dataset: Path, device: str
+) -> list[dict[str, Any]]:
     scored: list[dict[str, Any]] = []
     for row in rows:
         if not row.get("accepted"):
             continue
         for index, text in enumerate(row.get("stegotexts", [])):
-            scored.append({
-                "post_id": row["post_id"],
-                "method": row["method"],
-                "carrier_index": index,
-                **_score_text(str(row["post_id"]), str(row["method"]), index, str(text), temp, dataset, device),
-            })
+            scored.append(
+                {
+                    "post_id": row["post_id"],
+                    "method": row["method"],
+                    "carrier_index": index,
+                    **_score_text(
+                        str(row["post_id"]),
+                        str(row["method"]),
+                        index,
+                        str(text),
+                        temp,
+                        dataset,
+                        device,
+                    ),
+                }
+            )
     return scored
 
 
@@ -58,29 +72,48 @@ def _mean(values: list[float]) -> float | None:
     return statistics.fmean(finite) if finite else None
 
 
-def _method_summary(rows: list[dict[str, Any]], quality: list[dict[str, Any]], method: str) -> dict[str, Any]:
+def _method_summary(
+    rows: list[dict[str, Any]], quality: list[dict[str, Any]], method: str
+) -> dict[str, Any]:
     attempts = [row for row in rows if row.get("method") == method]
     accepted = [row for row in attempts if row.get("accepted")]
     qrows = [row for row in quality if row.get("method") == method]
-    reasons = Counter(str(row.get("reason") or "unknown") for row in attempts if not row.get("accepted"))
+    reasons = Counter(
+        str(row.get("reason") or "unknown") for row in attempts if not row.get("accepted")
+    )
     return {
         "attempted": len(attempts),
         "accepted": len(accepted),
         "failed": len(attempts) - len(accepted),
         "attempt_success_rate": len(accepted) / len(attempts) if attempts else 0.0,
-        "exact_recovery_rate": sum(bool(row.get("decode_ok")) for row in attempts) / len(attempts) if attempts else 0.0,
-        "effective_recovered_bits_per_word": _mean([
-            float(row.get("payload_bits_encoded") or 0) / max(1, int(row.get("word_count") or 0))
-            for row in accepted
-        ]),
+        "exact_recovery_rate": sum(bool(row.get("decode_ok")) for row in attempts) / len(attempts)
+        if attempts
+        else 0.0,
+        "effective_recovered_bits_per_word": _mean(
+            [
+                float(row.get("payload_bits_encoded") or 0)
+                / max(1, int(row.get("word_count") or 0))
+                for row in accepted
+            ]
+        ),
         "latency_ms": _mean([float(row.get("latency_ms") or 0) for row in attempts]),
-        "perplexity": _mean([row["perplexity"] for row in qrows if isinstance(row.get("perplexity"), (int, float))]),
-        "matched_post_jsd": _mean([row["matched_post_jsd"] for row in qrows if isinstance(row.get("matched_post_jsd"), (int, float))]),
+        "perplexity": _mean(
+            [row["perplexity"] for row in qrows if isinstance(row.get("perplexity"), (int, float))]
+        ),
+        "matched_post_jsd": _mean(
+            [
+                row["matched_post_jsd"]
+                for row in qrows
+                if isinstance(row.get("matched_post_jsd"), (int, float))
+            ]
+        ),
         "failure_taxonomy": dict(reasons),
     }
 
 
-def _post_metric(rows: list[dict[str, Any]], quality: list[dict[str, Any]], metric: str) -> dict[tuple[str, str], float]:
+def _post_metric(
+    rows: list[dict[str, Any]], quality: list[dict[str, Any]], metric: str
+) -> dict[tuple[str, str], float]:
     values: dict[tuple[str, str], list[float]] = defaultdict(list)
     source = quality if metric in {"perplexity", "matched_post_jsd"} else rows
     for row in source:
@@ -88,7 +121,9 @@ def _post_metric(rows: list[dict[str, Any]], quality: list[dict[str, Any]], metr
             continue
         value: Any = row.get(metric)
         if metric == "effective_recovered_bits_per_word":
-            value = float(row.get("payload_bits_encoded") or 0) / max(1, int(row.get("word_count") or 0))
+            value = float(row.get("payload_bits_encoded") or 0) / max(
+                1, int(row.get("word_count") or 0)
+            )
         if isinstance(value, (int, float)) and math.isfinite(value):
             values[(str(row["post_id"]), str(row["method"]))].append(float(value))
     return {key: statistics.fmean(group) for key, group in values.items()}
@@ -107,15 +142,26 @@ def _bootstrap(deltas: list[float], iterations: int = 10_000) -> dict[str, float
     if not deltas:
         return None
     rng, count = random.Random(1337), len(deltas)
-    means = sorted(statistics.fmean(deltas[rng.randrange(count)] for _ in range(count)) for _ in range(iterations))
+    means = sorted(
+        statistics.fmean(deltas[rng.randrange(count)] for _ in range(count))
+        for _ in range(iterations)
+    )
     return {"lower": means[int(0.025 * iterations)], "upper": means[int(0.975 * iterations)]}
 
 
 def _paired(rows: list[dict[str, Any]], quality: list[dict[str, Any]]) -> dict[str, Any]:
     report: dict[str, Any] = {}
-    for metric in ("effective_recovered_bits_per_word", "latency_ms", "perplexity", "matched_post_jsd"):
+    for metric in (
+        "effective_recovered_bits_per_word",
+        "latency_ms",
+        "perplexity",
+        "matched_post_jsd",
+    ):
         values = _post_metric(rows, quality, metric)
-        posts = sorted({post for post, method in values if method == "our_method"} & {post for post, method in values if method == "official_zgls"})
+        posts = sorted(
+            {post for post, method in values if method == "our_method"}
+            & {post for post, method in values if method == "official_zgls"}
+        )
         deltas = [values[(post, "official_zgls")] - values[(post, "our_method")] for post in posts]
         report[metric] = {
             "paired_posts": len(deltas),
@@ -128,7 +174,11 @@ def _paired(rows: list[dict[str, Any]], quality: list[dict[str, Any]]) -> dict[s
 
 
 def _apply_holm(report: dict[str, Any]) -> None:
-    ranked = sorted((block["sign_test_p"], name) for name, block in report.items() if block["sign_test_p"] is not None)
+    ranked = sorted(
+        (block["sign_test_p"], name)
+        for name, block in report.items()
+        if block["sign_test_p"] is not None
+    )
     running = 0.0
     count = len(ranked)
     for rank, (p_value, name) in enumerate(ranked):
@@ -151,11 +201,19 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     args = parser.parse_args()
-    rows = [json.loads(line) for line in Path(args.input).read_text(encoding="utf-8").splitlines() if line]
+    rows = [
+        json.loads(line)
+        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     output = Path(args.output).resolve()
-    quality = score_quality(rows, output.parent / "metric_inputs", Path(args.dataset_dir).resolve(), args.device)
+    quality = score_quality(
+        rows, output.parent / "metric_inputs", Path(args.dataset_dir).resolve(), args.device
+    )
     report = build_report(rows, quality)
-    output.write_text(json.dumps({**report, "quality_rows": quality}, indent=2) + "\n", encoding="utf-8")
+    output.write_text(
+        json.dumps({**report, "quality_rows": quality}, indent=2) + "\n", encoding="utf-8"
+    )
     return 0
 
 

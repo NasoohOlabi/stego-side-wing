@@ -213,9 +213,10 @@ def test_plan_payload_frames_is_deterministic_and_skips_zero_capacity_posts():
     assert all(frame["post_id"] != "p0" for frame in plan1["frames"])
     assert all(frame["capacity_report"]["comment_choices"] == 3 for frame in plan1["frames"])
     assert all(frame["capacity_report"]["tangent_choices"] == 3 for frame in plan1["frames"])
-    assert sum(frame["bits_used"] for frame in plan1["frames"]) == plan1["recovery_meta"][
-        "stream_bit_length"
-    ]
+    assert (
+        sum(frame["bits_used"] for frame in plan1["frames"])
+        == plan1["recovery_meta"]["stream_bit_length"]
+    )
     assert all(frame["padding_bits"] == 0 for frame in plan1["frames"][:-1])
 
 

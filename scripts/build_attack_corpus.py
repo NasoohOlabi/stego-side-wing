@@ -33,14 +33,20 @@ def _synonym(word: str) -> str | None:
 def _load_paraphrases(path: str) -> dict[tuple[str, str, int], dict[str, str]]:
     if not path:
         return {}
-    rows = [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line]
+    rows = [
+        json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line
+    ]
     return {
-        (str(row["post_id"]), str(row["method"]), int(row["carrier_index"])): dict(row["paraphrases"])
+        (str(row["post_id"]), str(row["method"]), int(row["carrier_index"])): dict(
+            row["paraphrases"]
+        )
         for row in rows
     }
 
 
-def build(rows: list[dict[str, Any]], paraphrases: dict[tuple[str, str, int], dict[str, str]]) -> list[dict[str, Any]]:
+def build(
+    rows: list[dict[str, Any]], paraphrases: dict[tuple[str, str, int], dict[str, str]]
+) -> list[dict[str, Any]]:
     attacked: list[dict[str, Any]] = []
     for row in rows:
         if not row.get("accepted"):
@@ -72,7 +78,11 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--paraphrases", default="")
     args = parser.parse_args()
-    rows = [json.loads(line) for line in Path(args.input).read_text(encoding="utf-8").splitlines() if line]
+    rows = [
+        json.loads(line)
+        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     attacked = build(rows, _load_paraphrases(args.paraphrases))
     Path(args.output).write_text(
         "\n".join(json.dumps(row, ensure_ascii=False) for row in attacked) + "\n",

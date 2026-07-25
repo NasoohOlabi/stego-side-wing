@@ -33,9 +33,7 @@ def delete_words(text: str, severity: float, seed: int) -> str:
 
 
 @validate_call(config={"arbitrary_types_allowed": True})
-def substitute_synonyms(
-    text: str, severity: float, seed: int, resolver: SynonymResolver
-) -> str:
+def substitute_synonyms(text: str, severity: float, seed: int, resolver: SynonymResolver) -> str:
     spans = _word_spans(text)
     candidates = [(index, resolver(span.group(0))) for index, span in enumerate(spans)]
     candidates = [(index, synonym) for index, synonym in candidates if synonym]
@@ -92,11 +90,32 @@ def attack_variants(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for offset, severity in enumerate((0.05, 0.10, 0.20)):
-        rows.append({"attack": "word_deletion", "severity": severity, "text": delete_words(text, severity, seed + offset)})
-        rows.append({"attack": "synonym_substitution", "severity": severity, "text": substitute_synonyms(text, severity, seed + offset, resolver)})
+        rows.append(
+            {
+                "attack": "word_deletion",
+                "severity": severity,
+                "text": delete_words(text, severity, seed + offset),
+            }
+        )
+        rows.append(
+            {
+                "attack": "synonym_substitution",
+                "severity": severity,
+                "text": substitute_synonyms(text, severity, seed + offset, resolver),
+            }
+        )
     rows.append({"attack": "sentence_deletion", "severity": 1, "text": delete_sentence(text, seed)})
-    rows.append({"attack": "sentence_reorder", "severity": 1, "text": reorder_sentences(text, seed)})
-    rows.append({"attack": "context_mutation", "severity": 1, "text": text, "context": mutate_context(context, seed)})
+    rows.append(
+        {"attack": "sentence_reorder", "severity": 1, "text": reorder_sentences(text, seed)}
+    )
+    rows.append(
+        {
+            "attack": "context_mutation",
+            "severity": 1,
+            "text": text,
+            "context": mutate_context(context, seed),
+        }
+    )
     for severity, value in (paraphrases or {}).items():
         rows.append({"attack": "llm_paraphrase", "severity": severity, "text": value})
     for row in rows:

@@ -315,9 +315,7 @@ def _normalized_text(value: Any) -> str:
     return " ".join(str(value or "").split())
 
 
-def _diversity_diagnostics(
-    rows: list[dict[str, Any]], *, minimum_ratio: float
-) -> dict[str, Any]:
+def _diversity_diagnostics(rows: list[dict[str, Any]], *, minimum_ratio: float) -> dict[str, Any]:
     texts_by_post: dict[str, list[str]] = {}
     for row in rows:
         if row.get("method") == "our_method":
@@ -464,9 +462,7 @@ def _tangent_db_quality_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "kept_score_median_by_post": _mean_post_metric(posts, "relevance_median"),
         },
         "distinctness": {
-            "mean_pairwise_jaccard_by_post": _mean_post_metric(
-                posts, "mean_pairwise_jaccard"
-            ),
+            "mean_pairwise_jaccard_by_post": _mean_post_metric(posts, "mean_pairwise_jaccard"),
             "lower_is_more_distinct": True,
         },
         "source_composition": {
@@ -476,7 +472,9 @@ def _tangent_db_quality_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "deduplication": {
             "near_duplicate_drops_by_post": _mean_post_metric(posts, "near_duplicate_drops"),
             "drop_rate_by_post": _mean_post_metric(posts, "dedup_drop_rate"),
-            "posts_with_dedup_drops": sum((post.get("near_duplicate_drops") or 0) > 0 for post in posts),
+            "posts_with_dedup_drops": sum(
+                (post.get("near_duplicate_drops") or 0) > 0 for post in posts
+            ),
         },
         "capacity_floor_relaxation": {
             "posts_relaxed": sum(bool(post["relaxation_used"]) for post in posts),

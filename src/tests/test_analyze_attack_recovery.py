@@ -16,9 +16,30 @@ def _load_module():
 def test_attack_analysis_clusters_repeated_carriers_by_post() -> None:
     module = _load_module()
     rows = [
-        {"post_id": "p1", "method": "our_method", "attack": "word_deletion", "severity": 0.1, "applicable": True, "decode_ok": True},
-        {"post_id": "p1", "method": "our_method", "attack": "word_deletion", "severity": 0.1, "applicable": True, "decode_ok": False},
-        {"post_id": "p2", "method": "our_method", "attack": "word_deletion", "severity": 0.1, "applicable": True, "decode_ok": True},
+        {
+            "post_id": "p1",
+            "method": "our_method",
+            "attack": "word_deletion",
+            "severity": 0.1,
+            "applicable": True,
+            "decode_ok": True,
+        },
+        {
+            "post_id": "p1",
+            "method": "our_method",
+            "attack": "word_deletion",
+            "severity": 0.1,
+            "applicable": True,
+            "decode_ok": False,
+        },
+        {
+            "post_id": "p2",
+            "method": "our_method",
+            "attack": "word_deletion",
+            "severity": 0.1,
+            "applicable": True,
+            "decode_ok": True,
+        },
     ]
 
     report = module.analyze(rows)

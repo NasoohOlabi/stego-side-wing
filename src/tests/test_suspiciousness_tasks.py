@@ -15,13 +15,15 @@ def _load(name: str):
 
 def test_blinded_tasks_are_deterministic_and_keep_answer_separate() -> None:
     module = _load("build_suspiciousness_tasks")
-    rows = [{
-        "post_id": "p1",
-        "method": "our_method",
-        "accepted": True,
-        "stegotexts": ["generated carrier"],
-        "human_texts": ["human one", "human two", "human three"],
-    }]
+    rows = [
+        {
+            "post_id": "p1",
+            "method": "our_method",
+            "accepted": True,
+            "stegotexts": ["generated carrier"],
+            "human_texts": ["human one", "human two", "human three"],
+        }
+    ]
 
     first = module.build(rows, "hash", "judge")
     second = module.build(rows, "hash", "judge")

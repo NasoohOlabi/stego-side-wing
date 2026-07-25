@@ -49,7 +49,11 @@ def parse_result(raw: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         parsed = {}
     score = parsed.get("score") if isinstance(parsed, dict) else None
-    valid_score = score if isinstance(score, int) and not isinstance(score, bool) and 1 <= score <= 5 else None
+    valid_score = (
+        score
+        if isinstance(score, int) and not isinstance(score, bool) and 1 <= score <= 5
+        else None
+    )
     return {
         "score": valid_score,
         "rationale": parsed.get("rationale") if isinstance(parsed, dict) else None,

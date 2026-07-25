@@ -18,7 +18,10 @@ def _bootstrap_ci(values: list[float], iterations: int = 10_000) -> dict[str, fl
         return None
     rng = random.Random(int(hashlib.sha256(json.dumps(values).encode()).hexdigest()[:8], 16))
     size = len(values)
-    means = sorted(statistics.fmean(values[rng.randrange(size)] for _ in range(size)) for _ in range(iterations))
+    means = sorted(
+        statistics.fmean(values[rng.randrange(size)] for _ in range(size))
+        for _ in range(iterations)
+    )
     return {"lower": means[int(0.025 * iterations)], "upper": means[int(0.975 * iterations)]}
 
 
@@ -41,12 +44,21 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     differences = []
     for methods in clusters.values():
         if {"our_method", "zlg"}.issubset(methods):
-            differences.append(statistics.fmean(methods["our_method"]) - statistics.fmean(methods["zlg"]))
+            differences.append(
+                statistics.fmean(methods["our_method"]) - statistics.fmean(methods["zlg"])
+            )
     wins = sum(value > 0 for value in differences)
     losses = sum(value < 0 for value in differences)
-    provenance = sorted({(str(r.get("provider")), str(r.get("judge_model")), str(r.get("judge_prompt_sha256"))) for r in valid})
+    provenance = sorted(
+        {
+            (str(r.get("provider")), str(r.get("judge_model")), str(r.get("judge_prompt_sha256")))
+            for r in valid
+        }
+    )
     method_scores = {
-        method: statistics.fmean(float(row["score"]) for row in valid if row.get("method") == method)
+        method: statistics.fmean(
+            float(row["score"]) for row in valid if row.get("method") == method
+        )
         for method in ("our_method", "zlg")
         if any(row.get("method") == method for row in valid)
     }
@@ -64,7 +76,9 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "post_cluster_losses": losses,
         "post_cluster_ties": len(differences) - wins - losses,
         "two_sided_sign_test_p": _sign_test(wins, losses),
-        "provenance": [{"provider": p, "judge_model": m, "judge_prompt_sha256": h} for p, m, h in provenance],
+        "provenance": [
+            {"provider": p, "judge_model": m, "judge_prompt_sha256": h} for p, m, h in provenance
+        ],
     }
 
 
@@ -74,10 +88,16 @@ def main() -> int:
     parser.add_argument("--output")
     parser.add_argument("--comparison-summary")
     args = parser.parse_args()
-    rows = [json.loads(line) for line in Path(args.input).read_text(encoding="utf-8").splitlines() if line]
+    rows = [
+        json.loads(line)
+        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     result = summarize(rows)
     if args.output:
-        Path(args.output).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        Path(args.output).write_text(
+            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     if args.comparison_summary:
         path = Path(args.comparison_summary)
         summary = json.loads(path.read_text(encoding="utf-8"))

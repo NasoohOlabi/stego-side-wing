@@ -42,11 +42,7 @@ def test_payload_is_deterministic_and_exactly_64_bits() -> None:
 
 def test_pilot_gate_requires_complete_paired_attempts() -> None:
     module = _load_module()
-    rows = [
-        _row(method, f"p{index}")
-        for index in range(25)
-        for method in module.METHODS
-    ]
+    rows = [_row(method, f"p{index}") for index in range(25) for method in module.METHODS]
 
     passing = module._summary(rows, 25)
     incomplete = module._summary(rows[:-1], 25)
@@ -71,11 +67,7 @@ def test_pilot_gate_counts_generation_failures() -> None:
 
 def test_completed_run_resume_filters_pilot_to_first_25_posts() -> None:
     module = _load_module()
-    rows = [
-        _row(method, f"p{index}")
-        for index in range(100)
-        for method in module.METHODS
-    ]
+    rows = [_row(method, f"p{index}") for index in range(100) for method in module.METHODS]
 
     pilot = module._rows_for_posts(rows, [f"p{index}" for index in range(25)])
 
@@ -299,9 +291,7 @@ def test_our_max_capacity_falls_back_to_verified_smaller_payload(
     monkeypatch: MonkeyPatch,
 ) -> None:
     module = _load_module()
-    monkeypatch.setattr(
-        module, "_our_capacity_payloads", lambda *args, **kwargs: ["four", "two"]
-    )
+    monkeypatch.setattr(module, "_our_capacity_payloads", lambda *args, **kwargs: ["four", "two"])
 
     def _run(
         post: dict[str, Any],

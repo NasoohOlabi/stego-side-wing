@@ -58,9 +58,7 @@ def test_posts_listing_uses_rebased_step_dirs(monkeypatch, tmp_path: Path):
     source.mkdir()
     (source / "isolated.json").write_text("{}", encoding="utf-8")
 
-    assert list_posts(count=1, step="angles-step") == {
-        "fileNames": ["isolated.json"]
-    }
+    assert list_posts(count=1, step="angles-step") == {"fileNames": ["isolated.json"]}
 
 
 def test_seed_corpus_stays_global_by_default(monkeypatch):

@@ -45,9 +45,16 @@ def main() -> int:
     parser.add_argument("--provider", default="lm_studio")
     parser.add_argument("--model", default="google/gemma-3-12b")
     args = parser.parse_args()
-    rows = [json.loads(line) for line in Path(args.input).read_text(encoding="utf-8").splitlines() if line]
+    rows = [
+        json.loads(line)
+        for line in Path(args.input).read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     prompt_path, output = Path(args.prompt), Path(args.output)
-    template, prompt_hash = prompt_path.read_text(encoding="utf-8"), hashlib.sha256(prompt_path.read_bytes()).hexdigest()
+    template, prompt_hash = (
+        prompt_path.read_text(encoding="utf-8"),
+        hashlib.sha256(prompt_path.read_bytes()).hexdigest(),
+    )
     done, llm = _done(output), LLMAdapter()
     for row in rows:
         if not row.get("accepted"):
@@ -59,14 +66,24 @@ def main() -> int:
             paraphrases, raw_responses = {}, {}
             for severity in ("low", "medium", "high"):
                 prompt = template.format(severity=severity, text=str(source))
-                raw = llm.call_llm(prompt, provider=args.provider, model=args.model, temperature=0.0)
+                raw = llm.call_llm(
+                    prompt, provider=args.provider, model=args.model, temperature=0.0
+                )
                 paraphrases[severity], raw_responses[severity] = _text(raw), raw
-            _append(output, {
-                "post_id": key[0], "method": key[1], "carrier_index": index,
-                "paraphrases": paraphrases, "raw_responses": raw_responses,
-                "model": args.model, "provider": args.provider, "temperature": 0.0,
-                "prompt_sha256": prompt_hash,
-            })
+            _append(
+                output,
+                {
+                    "post_id": key[0],
+                    "method": key[1],
+                    "carrier_index": index,
+                    "paraphrases": paraphrases,
+                    "raw_responses": raw_responses,
+                    "model": args.model,
+                    "provider": args.provider,
+                    "temperature": 0.0,
+                    "prompt_sha256": prompt_hash,
+                },
+            )
     return 0
 
 

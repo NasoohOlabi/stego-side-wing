@@ -13,7 +13,15 @@ def _load():
 
 def test_build_tasks_are_metric_model_and_prompt_specific() -> None:
     build_tasks = _load().build_tasks
-    rows = [{"pair_id": "p1", "post_id": "post", "method": "zlg", "post_text": "ctx", "stegotext": "reply"}]
+    rows = [
+        {
+            "pair_id": "p1",
+            "post_id": "post",
+            "method": "zlg",
+            "post_text": "ctx",
+            "stegotext": "reply",
+        }
+    ]
     first = build_tasks(rows, "thread_relevance", "hash", "model")[0]
     assert first["thread_context"] == "ctx"
     assert first["candidate"] == "reply"

@@ -872,9 +872,7 @@ def run_comparison_frames(
             break
         remaining = remaining[len(consumed) :]
     target_bits = len(sample.target_payload.encode("utf-8")) * 8
-    useful_bits = (
-        len(sample.target_payload.encode("utf-8")) - len(remaining.encode("utf-8"))
-    ) * 8
+    useful_bits = (len(sample.target_payload.encode("utf-8")) - len(remaining.encode("utf-8"))) * 8
     total_bits = sum(int(frame["total_embedded_bits"]) for frame in frames)
     succeeded = not remaining and all(frame.get("decode_ok") is True for frame in frames)
     return {

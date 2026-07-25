@@ -77,9 +77,7 @@ def _git_dirty() -> bool:
 def _runtime_code_sha256() -> str:
     paths = [Path(__file__).resolve()]
     paths.extend(
-        path
-        for path in sorted(SRC.rglob("*.py"))
-        if "tests" not in path.relative_to(SRC).parts
+        path for path in sorted(SRC.rglob("*.py")) if "tests" not in path.relative_to(SRC).parts
     )
     paths.extend(sorted((ROOT / "config").rglob("*.json")))
     paths.extend(sorted((ROOT / "workflows").rglob("*.json")))
@@ -92,9 +90,7 @@ def _runtime_code_sha256() -> str:
     return digest.hexdigest()
 
 
-def _zlg_server_identity(
-    server_url: str, declared_server_version: str = ""
-) -> dict[str, Any]:
+def _zlg_server_identity(server_url: str, declared_server_version: str = "") -> dict[str, Any]:
     if server_url.startswith("local://"):
         return {
             "backend": "local_hf",
@@ -104,8 +100,10 @@ def _zlg_server_identity(
     response = requests.get(f"{server_url.rstrip('/')}/health", timeout=30)
     response.raise_for_status()
     identity = response.json()
-    if not isinstance(identity, dict) or identity.get("status") != "ok" or not identity.get(
-        "model"
+    if (
+        not isinstance(identity, dict)
+        or identity.get("status") != "ok"
+        or not identity.get("model")
     ):
         raise ValueError("ZLG /health must report status=ok and the loaded model")
     version = (
@@ -138,7 +136,13 @@ def _verify_manifest(
         if _sha256(angles_dir / f"{post_id}.json") != hashes[post_id]:
             raise ValueError(f"Frozen angle artifact changed: {post_id}")
     expected = {row["post_id"]: row for row in manifest.get("payload_assignments", [])}
-    if any(expected.get(post_id, {}).get("payload_sha256") != hashlib.sha256(_payload(post_id, int(expected.get(post_id, {}).get("seed", -1))).encode()).hexdigest() for post_id in post_ids):
+    if any(
+        expected.get(post_id, {}).get("payload_sha256")
+        != hashlib.sha256(
+            _payload(post_id, int(expected.get(post_id, {}).get("seed", -1))).encode()
+        ).hexdigest()
+        for post_id in post_ids
+    ):
         raise ValueError("Manifest payload assignment is incomplete or inconsistent")
     return post_ids
 
@@ -169,7 +173,9 @@ def _word_count(text: str) -> int:
 
 
 def _cover_texts(post: dict[str, Any]) -> list[str]:
-    bodies = [str(row.get("body") or "").strip() for row in flatten_comments(post.get("comments", []))]
+    bodies = [
+        str(row.get("body") or "").strip() for row in flatten_comments(post.get("comments", []))
+    ]
     suitable = [body for body in bodies if 4 <= _word_count(body) <= 60]
     fallback = [str(post.get("title") or ""), str(post.get("selftext") or "")]
     return (suitable or [text for text in fallback if text.strip()])[:32]
@@ -271,17 +277,13 @@ def _our_capacity_payloads(
     payloads: list[str] = []
     for byte_count in range(upper_bytes, 0, -1):
         payload = _deterministic_capacity_payload(post_id, seed, byte_count)
-        plan = pipeline.plan_payload_frames(
-            payload, [post], max_frames_per_post=max_carriers
-        )
+        plan = pipeline.plan_payload_frames(payload, [post], max_frames_per_post=max_carriers)
         if plan.get("succeeded"):
             payloads.append(payload)
     return payloads
 
 
-def _max_our_payload(
-    post: dict[str, Any], post_id: str, seed: int, max_carriers: int
-) -> str:
+def _max_our_payload(post: dict[str, Any], post_id: str, seed: int, max_carriers: int) -> str:
     payloads = _our_capacity_payloads(post, post_id, seed, max_carriers)
     return payloads[0] if payloads else ""
 
@@ -299,9 +301,7 @@ def _run_our_max_capacity(
     last_result: dict[str, Any] | None = None
     last_payload = ""
     for payload in payloads:
-        result = _run_our_method(
-            post, payload, max_carriers, max_total_words, max_retries
-        )
+        result = _run_our_method(post, payload, max_carriers, max_total_words, max_retries)
         trials.append(
             {
                 "payload_bits": len(payload.encode("utf-8")) * 8,
@@ -315,9 +315,7 @@ def _run_our_max_capacity(
         last_result, last_payload = result, payload
         if result.get("accepted"):
             result["capacity_trials"] = trials
-            result["capacity_probe_ceiling_bits"] = (
-                len(payloads[0].encode("utf-8")) * 8
-            )
+            result["capacity_probe_ceiling_bits"] = len(payloads[0].encode("utf-8")) * 8
             result["capacity_censored"] = False
             return result, payload
     if last_result is None:
@@ -341,9 +339,7 @@ def _run_our_max_capacity(
     return last_result, last_payload
 
 
-def _candidate_int(
-    source: dict[str, Any], names: tuple[str, ...], fallback: int = 0
-) -> int:
+def _candidate_int(source: dict[str, Any], names: tuple[str, ...], fallback: int = 0) -> int:
     for name in names:
         value = source.get(name)
         if isinstance(value, (int, float)):
@@ -351,9 +347,7 @@ def _candidate_int(
     return fallback
 
 
-def _capacity_frame_from_source(
-    source: dict[str, Any], result: dict[str, Any]
-) -> dict[str, Any]:
+def _capacity_frame_from_source(source: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     stegotext = str(source.get("stegotext") or result.get("stegotext") or "")
     payload_segment = source.get("secret") or source.get("target_payload")
     useful = _candidate_int(
@@ -362,16 +356,16 @@ def _capacity_frame_from_source(
         int(result.get("payload_bits_encoded") or 0),
     )
     overhead = _candidate_int(
-        source, ("header_bits", "protocol_overhead_bits"), int(result.get("protocol_overhead_bits") or 0)
+        source,
+        ("header_bits", "protocol_overhead_bits"),
+        int(result.get("protocol_overhead_bits") or 0),
     )
     total = _candidate_int(
         source,
         ("total_used_bits", "used_bits", "total_embedded_bits"),
         int(result.get("total_embedded_bits") or 0),
     )
-    decode_value = (
-        source.get("decode_ok") if "decode_ok" in source else result.get("decode_ok")
-    )
+    decode_value = source.get("decode_ok") if "decode_ok" in source else result.get("decode_ok")
     return {
         **source,
         "stegotext": stegotext,
@@ -386,7 +380,9 @@ def _capacity_frame_from_source(
 
 def _capacity_frame(result: dict[str, Any], max_words: int) -> dict[str, Any] | None:
     raw_trials = result.get("capacity_trials")
-    sources = [row for row in raw_trials if isinstance(row, dict)] if isinstance(raw_trials, list) else []
+    sources = (
+        [row for row in raw_trials if isinstance(row, dict)] if isinstance(raw_trials, list) else []
+    )
     best = result.get("capacity_best_success")
     if isinstance(best, dict):
         sources.append(best)
@@ -456,15 +452,15 @@ def _run_zlg_max_capacity(
         "total_embedded_bits": total,
         "capacity_probe_ceiling_bits": ceiling * max(0, max_carriers),
         "capacity_probe_ceiling_bits_per_carrier": ceiling,
-        "capacity_censored": any(
-            int(frame["payload_bits_encoded"]) >= ceiling for frame in frames
-        ),
+        "capacity_censored": any(int(frame["payload_bits_encoded"]) >= ceiling for frame in frames),
         "capacity_probes": probes,
         "latency_ms": total_latency,
     }
 
 
-def _run_zlg(post: dict[str, Any], payload: str, args: argparse.Namespace, seed: int) -> dict[str, Any]:
+def _run_zlg(
+    post: dict[str, Any], payload: str, args: argparse.Namespace, seed: int
+) -> dict[str, Any]:
     sample = ComparisonInput(
         target_payload=payload,
         server_url=args.zlg_server_url,
@@ -562,7 +558,9 @@ def _run_tuple(
     artifact = result.pop("_receiver_artifact", None)
     artifact_path = None
     if isinstance(artifact, dict):
-        artifact_path = Path(args.run_dir).resolve() / "receiver_artifacts" / post_id / f"{method}.json"
+        artifact_path = (
+            Path(args.run_dir).resolve() / "receiver_artifacts" / post_id / f"{method}.json"
+        )
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
         artifact_path.write_text(json.dumps(artifact, ensure_ascii=False), encoding="utf-8")
     return {
@@ -637,10 +635,13 @@ def _summary(rows: list[dict[str, Any]], requested_posts: int) -> dict[str, Any]
         }
     complete = all(counts[method] == requested_posts for method in METHODS)
     accounting_ok = all(_accounting_valid(row) for row in rows)
-    gate = complete and accounting_ok and all(
-        block["generation_success_rate"] >= 0.80
-        and block["verified_recovery_rate"] >= 0.95
-        for block in methods.values()
+    gate = (
+        complete
+        and accounting_ok
+        and all(
+            block["generation_success_rate"] >= 0.80 and block["verified_recovery_rate"] >= 0.95
+            for block in methods.values()
+        )
     )
     return {
         "requested_posts": requested_posts,
@@ -675,7 +676,11 @@ def main() -> int:
     parser.add_argument("--angles-dir", default="metrics/benchmark/prepared_angles")
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--stage", choices=("pilot", "full", "auto"), default="auto")
-    parser.add_argument("--comparison-mode", choices=("capacity_matched", "max_capacity"), default="capacity_matched")
+    parser.add_argument(
+        "--comparison-mode",
+        choices=("capacity_matched", "max_capacity"),
+        default="capacity_matched",
+    )
     parser.add_argument("--zlg-server-url", default="http://127.0.0.1:9000")
     parser.add_argument(
         "--zlg-server-version",
@@ -692,9 +697,7 @@ def main() -> int:
     post_ids = _verify_manifest(
         manifest, Path(args.angles_dir).resolve(), allow_dirty=args.allow_dirty
     )
-    args.zlg_server_identity = _zlg_server_identity(
-        args.zlg_server_url, args.zlg_server_version
-    )
+    args.zlg_server_identity = _zlg_server_identity(args.zlg_server_url, args.zlg_server_version)
     args.run_signature = _run_signature(manifest, args)
     run_dir = Path(args.run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -710,14 +713,14 @@ def main() -> int:
         if pilot.get("run_signature") != args.run_signature or not pilot.get(
             "expansion_gate_passed"
         ):
-            raise SystemExit("Full stage requires a passing pilot_summary.json in the same run directory")
+            raise SystemExit(
+                "Full stage requires a passing pilot_summary.json in the same run directory"
+            )
     if args.stage in {"pilot", "auto"}:
         _run_posts(pilot_ids, args, results)
         current_rows = _rows_for_signature(_rows(results), args.run_signature)
         pilot_rows = _rows_for_posts(current_rows, pilot_ids)
-        pilot = _write_summary(
-            run_dir / "pilot_summary.json", pilot_rows, 25, args.run_signature
-        )
+        pilot = _write_summary(run_dir / "pilot_summary.json", pilot_rows, 25, args.run_signature)
         if args.stage == "pilot" or not pilot["expansion_gate_passed"]:
             return 0 if pilot["expansion_gate_passed"] else 2
     _run_posts(post_ids, args, results)

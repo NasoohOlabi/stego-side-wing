@@ -23,10 +23,26 @@ def _synthetic_posts() -> list[dict]:
                 "I keep a water bottle on the desk because small breaks add up.",
             ],
             [
-                ("A transition ritual can separate work time from home time.", "Suggest a low-effort start or end-of-day ritual.", "routine"),
-                ("Environmental cues can support a habit without relying on willpower.", "Discuss changing one small part of the workspace.", "environment"),
-                ("Planning the next action can make it easier to begin.", "Offer a concrete way to prepare the next work session.", "planning"),
-                ("Brief movement breaks can improve focus during long sessions.", "Share a simple movement or break idea.", "wellbeing"),
+                (
+                    "A transition ritual can separate work time from home time.",
+                    "Suggest a low-effort start or end-of-day ritual.",
+                    "routine",
+                ),
+                (
+                    "Environmental cues can support a habit without relying on willpower.",
+                    "Discuss changing one small part of the workspace.",
+                    "environment",
+                ),
+                (
+                    "Planning the next action can make it easier to begin.",
+                    "Offer a concrete way to prepare the next work session.",
+                    "planning",
+                ),
+                (
+                    "Brief movement breaks can improve focus during long sessions.",
+                    "Share a simple movement or break idea.",
+                    "wellbeing",
+                ),
             ],
         ),
         (
@@ -39,10 +55,26 @@ def _synthetic_posts() -> list[dict]:
                 "I start rice or pasta first, then choose the rest while it cooks.",
             ],
             [
-                ("Reducing decisions can make a routine more sustainable.", "Recommend a way to simplify meal choices.", "planning"),
-                ("Preparing extra portions can save effort later in the week.", "Suggest a batch-cooking strategy.", "meal prep"),
-                ("Pairing a chore with something enjoyable can help it feel lighter.", "Share a pleasant cooking companion or ritual.", "motivation"),
-                ("Starting with one reliable staple creates momentum.", "Offer a quick first step for dinner preparation.", "cooking"),
+                (
+                    "Reducing decisions can make a routine more sustainable.",
+                    "Recommend a way to simplify meal choices.",
+                    "planning",
+                ),
+                (
+                    "Preparing extra portions can save effort later in the week.",
+                    "Suggest a batch-cooking strategy.",
+                    "meal prep",
+                ),
+                (
+                    "Pairing a chore with something enjoyable can help it feel lighter.",
+                    "Share a pleasant cooking companion or ritual.",
+                    "motivation",
+                ),
+                (
+                    "Starting with one reliable staple creates momentum.",
+                    "Offer a quick first step for dinner preparation.",
+                    "cooking",
+                ),
             ],
         ),
     ]
@@ -118,9 +150,7 @@ def main() -> None:
         encoding="utf-8",
     )
     if not (
-        encoded.get("succeeded")
-        and decoded.get("succeeded")
-        and decoded.get("payload") == payload
+        encoded.get("succeeded") and decoded.get("succeeded") and decoded.get("payload") == payload
     ):
         raise SystemExit(f"Multi-frame E2E failed; inspect {out_dir / 'result.json'}")
 

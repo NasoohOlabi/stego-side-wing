@@ -17,6 +17,7 @@ from infrastructure.config import (
 )
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.contracts import FetchUrlResult
+from workflows.errors import QuotaExceededError
 from workflows.pipelines.fetch_url_content import FetchUrlContentPipeline
 from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline
 from workflows.utils.protocol_utils import stable_hash, text_preview
@@ -66,6 +67,13 @@ def _fetch_url_slot_progress(url_index: int, urls_total: int) -> dict[str, float
 
 
 def is_likely_google_quota_error(exc: BaseException) -> bool:
+    """True for provider quota/rate-limit failures.
+
+    Prefers the typed error; the substring scan remains because the providers themselves
+    raise their own exception classes and only say so in the message.
+    """
+    if isinstance(exc, QuotaExceededError):
+        return True
     s = str(exc).lower()
     needles = (
         "quota",

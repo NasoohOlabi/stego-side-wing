@@ -9,6 +9,7 @@ from loguru import logger
 
 from infrastructure.json_logging import TAG_WORKFLOW
 from workflows.adapters.backend_api import BackendAPIAdapter
+from workflows.errors import DataLoadFetchError
 from workflows.pipelines.fetch_url_content import FetchUrlContentPipeline
 from workflows.utils.protocol_utils import stable_hash, text_preview
 
@@ -419,7 +420,7 @@ class DataLoadPipeline:
         post = preview["post"]
         report = preview["report"]
         if not report.get("fetch_success") or not post.get("selftext"):
-            raise RuntimeError(
+            raise DataLoadFetchError(
                 f"Failed to fetch URL content for post {post_id}: {report.get('error')}"
             )
         t_save = time.perf_counter()

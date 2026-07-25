@@ -23,6 +23,7 @@ from infrastructure.config import (
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
+from workflows.errors import NoUnprocessedPostsError
 from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
 from workflows.utils import stego_codec
 from workflows.utils.naturalness_gate import (
@@ -1249,7 +1250,7 @@ class StegoPipeline:
             "Stego LLM output must be valid JSON: exactly "
             f"{STEGO_LLM_JSON_STRING_COUNT} non-empty strings (array or "
             "object with texts/comments/items/output), optionally in a "
-            "markdown code fence — no prose before/after."
+            "markdown code fence â€” no prose before/after."
         )
 
     def _generate_candidate_groups(
@@ -2236,7 +2237,7 @@ class StegoPipeline:
             )
             file_names = posts_list.get("fileNames", [])
             if not file_names:
-                raise ValueError(
+                raise NoUnprocessedPostsError(
                     f"No unprocessed posts found for step='final-step' and tag='{resolved_tag}'."
                 )
             first_file = file_names[0]

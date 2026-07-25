@@ -14,6 +14,7 @@ from infrastructure.json_logging import get_trace_id
 from infrastructure.workflow_run_tracker import has_active_run_for_command
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.config import isolated_workflow_config
+from workflows.errors import DataLoadFetchError, NoUnprocessedPostsError
 from workflows.pipelines.data_load import DataLoadPipeline
 from workflows.pipelines.decode import DecodePipeline
 from workflows.pipelines.gen_angles import GenAnglesPipeline
@@ -44,6 +45,17 @@ from workflows.utils.capacity_observability import log_workflow_capacity_observa
 from workflows.utils.protocol_utils import stable_hash
 
 _LOG = logger.bind(component="WorkflowRunner")
+
+
+def _is_no_unprocessed_posts(exc: Exception) -> bool:
+    """Normal end of a run-all loop rather than a fault.
+
+    Type check first; the substring fallback keeps callers that raise a plain ValueError
+    working, which several tests and older call sites still do.
+    """
+    if isinstance(exc, NoUnprocessedPostsError):
+        return True
+    return "No unprocessed posts found" in str(exc)
 
 
 class WorkflowRunner:
@@ -541,7 +553,7 @@ class WorkflowRunner:
                     list_offset=0,
                 )
             except ValueError as exc:
-                if "No unprocessed posts found" in str(exc):
+                if _is_no_unprocessed_posts(exc):
                     stego_stop_reason = "no_unprocessed_posts"
                     break
                 raise
@@ -764,7 +776,7 @@ class WorkflowRunner:
                     list_offset=list_offset,
                 )
             except ValueError as exc:
-                if "No unprocessed posts found" in str(exc):
+                if _is_no_unprocessed_posts(exc):
                     stop_reason = "no_unprocessed_posts"
                     break
                 raise
@@ -1373,8 +1385,9 @@ class WorkflowRunner:
 
     @staticmethod
     def _is_data_load_fetch_failure(exc: Exception) -> bool:
-        message = str(exc)
-        return "Failed to fetch URL content for post" in message
+        if isinstance(exc, DataLoadFetchError):
+            return True
+        return "Failed to fetch URL content for post" in str(exc)
 
     def _record_fetch_failure(self, post_id: str) -> int:
         if not hasattr(self, "_fetch_fail_counts"):

@@ -10,6 +10,7 @@ from typing import Any
 
 from infrastructure.config import REPO_ROOT, get_env, resolve_path
 from workflows.config import WorkflowConfig, isolated_workflow_config
+from workflows.errors import ReceiverDataLoadError
 
 
 def sum_research_preview_total_ms(entries: list[dict[str, Any]]) -> int:
@@ -152,7 +153,13 @@ def reconcile_stale_double_process_claim_vs_explicit(
 
 
 def is_receiver_data_load_failure(exc: Exception) -> bool:
-    """True when receiver rebuild failed because URL/HTML fetch did not yield usable body."""
+    """True when receiver rebuild failed because URL/HTML fetch did not yield usable body.
+
+    Type check first; the substring fallback keeps callers that raise a plain built-in
+    working, including tests that simulate the failure.
+    """
+    if isinstance(exc, ReceiverDataLoadError):
+        return True
     return "Receiver data-load failed" in str(exc)
 
 

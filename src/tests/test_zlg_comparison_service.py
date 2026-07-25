@@ -42,7 +42,7 @@ def test_build_api_prompt_is_plain_for_http_service() -> None:
 def test_run_comparison_success_with_reveal(monkeypatch) -> None:
     calls: list[dict] = []
 
-    def _fake_post(url: str, json: dict, timeout: int):  # noqa: A002
+    def _fake_post(url: str, json: dict, timeout: int):
         calls.append({"url": url, "json": json, "timeout": timeout})
         if url.endswith("/hide"):
             return _FakeResponse(
@@ -75,7 +75,7 @@ def test_run_comparison_success_with_reveal(monkeypatch) -> None:
 
 
 def test_run_comparison_retries_and_fails_on_size_mismatch(monkeypatch) -> None:
-    def _fake_post(url: str, json: dict, timeout: int):  # noqa: A002
+    def _fake_post(url: str, json: dict, timeout: int):
         if url.endswith("/hide"):
             return _FakeResponse(
                 {
@@ -101,7 +101,7 @@ def test_run_comparison_retries_and_fails_on_size_mismatch(monkeypatch) -> None:
 
 
 def test_run_comparison_returns_partial_on_truncated_hide(monkeypatch) -> None:
-    def _fake_post(url: str, json: dict, timeout: int):  # noqa: A002
+    def _fake_post(url: str, json: dict, timeout: int):
         assert url.endswith("/hide")
         return _FakeResponse(
             {

@@ -163,7 +163,7 @@ async def process_file(post_data: dict[str, Any]) -> dict[str, Any]:
                     )
 
                 except Exception as e:
-                    print(f"      ❌ Error fetching content: {str(e)}")
+                    print(f"      ❌ Error fetching content: {e!s}")
                     augmented_results.append({"content_fetched": False, "url": result})
 
                     # If it's a localhost redirect issue, try a different approach
@@ -172,7 +172,7 @@ async def process_file(post_data: dict[str, Any]) -> dict[str, Any]:
                         continue
 
         except Exception as e:
-            print(f"❌ Error searching for '{topic}': {str(e)}")
+            print(f"❌ Error searching for '{topic}': {e!s}")
             all_results[topic] = []
 
     # Close the browser after processing all URLs

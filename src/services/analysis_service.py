@@ -111,9 +111,7 @@ def _crawl4ai_extract_ok(result: Any) -> bool:
     """False for failed extractions that should not be served from cache or persisted."""
     if result is None:
         return False
-    if isinstance(result, list) and len(result) == 0:
-        return False
-    return True
+    return not (isinstance(result, list) and len(result) == 0)
 
 
 def _fetch_url_after_cache_miss(url: str) -> Any:

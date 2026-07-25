@@ -103,9 +103,7 @@ class LocalBackendClient:
                     raise ValueError("must be a string")
                 results.append(find_best_match(needle, haystack))
             except ValueError as exc:
-                results.append({"error": f"Failed to process needle '{needle}': {str(exc)}"})
+                results.append({"error": f"Failed to process needle '{needle}': {exc!s}"})
             except Exception as exc:
-                results.append(
-                    {"error": f"Unexpected error processing needle '{needle}': {str(exc)}"}
-                )
+                results.append({"error": f"Unexpected error processing needle '{needle}': {exc!s}"})
         return {"results": results}

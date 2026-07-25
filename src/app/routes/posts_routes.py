@@ -152,4 +152,4 @@ def save_json():
             }
         ), 200
     except Exception as e:
-        return jsonify({"error": f"Failed to save JSON: {str(e)}"}), 500
+        return jsonify({"error": f"Failed to save JSON: {e!s}"}), 500

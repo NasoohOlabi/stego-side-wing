@@ -145,7 +145,7 @@ def _candidate_tokens(cand: AngleCandidate) -> list[str]:
 def _anchor_weights(anchor_texts: list[str], *, use_idf: bool) -> dict[str, float]:
     counts = Counter(tokenize_content_words(" ".join(anchor_texts)))
     if not use_idf:
-        return {token: 1.0 for token in counts}
+        return dict.fromkeys(counts, 1.0)
     return {token: 1.0 / float(freq) for token, freq in counts.items()}
 
 

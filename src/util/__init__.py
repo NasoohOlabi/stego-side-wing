@@ -26,13 +26,13 @@ __all__ = [
     "ArticleSource",
     "EverythingParams",
     "NewsApiErrorResponse",
-    "NewsApiSuccessResponse",
     "NewsApiResponse",
+    "NewsApiSuccessResponse",
     "fetch_everything",
     # DuckDuckGo
     "searchDuckDuckGo",
-    "search_duckduckgo_with_fallback",
-    "search_sync",
     # ScrapingDog
     "searchGoogle",
+    "search_duckduckgo_with_fallback",
+    "search_sync",
 ]

@@ -54,10 +54,7 @@ def list_directory(relative_path: str, recursive: bool = False, limit: int = 200
     safe_limit = max(1, min(int(limit), 5000))
     entries: list[dict[str, Any]] = []
 
-    if recursive:
-        iterator = root.rglob("*")
-    else:
-        iterator = root.iterdir()
+    iterator = root.rglob("*") if recursive else root.iterdir()
 
     for item in iterator:
         if len(entries) >= safe_limit:

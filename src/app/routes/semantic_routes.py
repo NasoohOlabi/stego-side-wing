@@ -31,7 +31,7 @@ def semantic_search_route():
         status = 400 if isinstance(e, ValueError) else 500
         return jsonify({"error": str(e)}), status
     except Exception as e:
-        return jsonify({"error": f"Error processing semantic search: {str(e)}"}), 500
+        return jsonify({"error": f"Error processing semantic search: {e!s}"}), 500
 
 
 @bp.route("/needle_finder", methods=["POST"])
@@ -59,7 +59,7 @@ def needle_finder():
     except ImportError as e:
         return jsonify({"error": str(e)}), 500
     except Exception as e:
-        return jsonify({"error": f"Error processing needle finder: {str(e)}"}), 500
+        return jsonify({"error": f"Error processing needle finder: {e!s}"}), 500
 
 
 @bp.route("/needle_finder_batch", methods=["POST"])
@@ -88,8 +88,8 @@ def needle_finder_batch():
             result = find_best_match(needle, haystack)
             results.append(result)
         except ValueError as e:
-            results.append({"error": f"Failed to process needle '{needle}': {str(e)}"})
+            results.append({"error": f"Failed to process needle '{needle}': {e!s}"})
         except Exception as e:
-            results.append({"error": f"Unexpected error processing needle '{needle}': {str(e)}"})
+            results.append({"error": f"Unexpected error processing needle '{needle}': {e!s}"})
 
     return jsonify({"results": results}), 200

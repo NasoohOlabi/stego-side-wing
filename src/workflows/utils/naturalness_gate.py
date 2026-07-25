@@ -143,9 +143,7 @@ def _looks_like_fragment(text: str) -> bool:
     )
     if len(words) <= 7 and not has_verb:
         return True
-    if normalized.count("'") % 2 == 1 or normalized.count('"') % 2 == 1:
-        return True
-    return False
+    return bool(normalized.count("'") % 2 == 1 or normalized.count('"') % 2 == 1)
 
 
 @validate_call

@@ -56,9 +56,7 @@ def _author_matches(comment: dict[str, Any], sender_user_id: str) -> bool:
     if isinstance(author, str) and author.strip() == uid:
         return True
     author_id = comment.get("author_id")
-    if isinstance(author_id, str) and author_id.strip() == uid:
-        return True
-    return False
+    return bool(isinstance(author_id, str) and author_id.strip() == uid)
 
 
 def locate_sender_stego_comment(post: dict[str, Any], sender_user_id: str) -> dict[str, Any] | None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import math
 import random
@@ -83,7 +84,7 @@ def _lexical_quality_index(
 def _quality(text: str) -> dict[str, Any]:
     toks = _tokens(text)
     counts = Counter(toks)
-    bigrams = Counter(zip(toks, toks[1:], strict=False))
+    bigrams = Counter(itertools.pairwise(toks))
     unique_ratio = (len(counts) / len(toks)) if toks else 0.0
     repetition_ratio = 1.0 - unique_ratio if toks else 0.0
     max_bigram_repeat = max(bigrams.values()) if bigrams else 0

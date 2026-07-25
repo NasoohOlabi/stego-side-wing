@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -310,7 +311,7 @@ def _lexical_quality(text: str) -> float:
         return 0.0
     unique = len(set(tokens)) / len(tokens)
     repetition = 1.0 - unique
-    bigrams = list(zip(tokens, tokens[1:], strict=False))
+    bigrams = list(itertools.pairwise(tokens))
     max_repeat = max((bigrams.count(item) for item in set(bigrams)), default=1)
     bigram_component = 1.0 / max_repeat
     length_component = min(len(tokens) / 5, 1.0, 120 / len(tokens))

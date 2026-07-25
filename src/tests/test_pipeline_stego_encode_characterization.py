@@ -14,7 +14,7 @@ between run for real, then assert on the whole returned artifact. They exist to 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -136,7 +136,7 @@ def test_encode_succeeds_and_returns_the_expected_artifact_shape() -> None:
     assert isinstance(result["stego_text"], str) and result["stego_text"].strip()
 
     # The keys downstream consumers and saved artifacts depend on.
-    assert SUCCESS_KEYS <= set(result)
+    assert set(result) >= SUCCESS_KEYS
 
     audit = result["sender_audit"]
     assert audit["payload_carrier"] == "selection_channel"
@@ -190,7 +190,7 @@ def test_encode_returns_an_exception_result_when_generation_raises() -> None:
     """The retry loop's except arm: a generation failure becomes a result, not a raise."""
 
     class _BadJsonLLM:
-        last_call_metadata: dict[str, Any] = {"elapsed_ms": 1}
+        last_call_metadata: ClassVar[dict[str, Any]] = {"elapsed_ms": 1}
 
         def call_llm(self, prompt: str, **kwargs: Any) -> str:
             return "not json at all"
@@ -243,7 +243,7 @@ def test_encode_accepts_a_context_sharpened_candidate(monkeypatch: pytest.Monkey
     class _SharpeningLLM:
         """Returns drafts normally, and a distinctive revision when asked to revise."""
 
-        last_call_metadata: dict[str, Any] = {"elapsed_ms": 1}
+        last_call_metadata: ClassVar[dict[str, Any]] = {"elapsed_ms": 1}
 
         def call_llm(self, prompt: str, **kwargs: Any) -> str:
             if prompt.startswith("Revise the draft reply"):
@@ -274,7 +274,7 @@ def test_encode_accepts_a_context_sharpened_candidate(monkeypatch: pytest.Monkey
     assert result["succeeded"] is True
     assert result["stego_text"].startswith("SHARPENED")
     assert result["sender_audit"]["candidate_validation"]["acceptance_source"] == "context_sharpen"
-    assert SUCCESS_KEYS <= set(result)
+    assert set(result) >= SUCCESS_KEYS
 
 
 @pytest.mark.usefixtures("clear_workflow_capacity_env")

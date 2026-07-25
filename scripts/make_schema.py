@@ -22,7 +22,7 @@ def generalize_search_results(schema_dict):
             # Grab the schema of the first property found
             props = value["properties"]
             if props:
-                first_val = list(props.values())[0]
+                first_val = next(iter(props.values()))
                 # Transform to Record type
                 value["additionalProperties"] = first_val
                 value.pop("properties", None)

@@ -18,6 +18,10 @@ def searchGoogle(query: str, maxResults: int = 10) -> list[dict[str, Any]]:
     Search Google using the ScrapingDog API
     return list of the following type
 
+    The sample below is verbatim provider output; the angle quotation marks in
+    ``displayed_link`` are what Google actually returns for breadcrumbs, so they are not
+    replaced with ASCII.
+
         "title": "Meta CTO explains why the smart glasses demos ... - TechCrunch",
         "displayed_link": "https://techcrunch.com › 2025/09/19 › meta-cto-explains-why-the-smart-glasses-d...",
         "snippet": "Meta CTO Andrew Bosworth offered a postmortem on Meta's demo fails this week at its developer conference, where it showed off new smart ...",
@@ -57,4 +61,6 @@ def searchGoogle(query: str, maxResults: int = 10) -> list[dict[str, Any]]:
 
 if __name__ == "__main__":
     append_current_pid_to_log()
-    searchGoogle("Meta Ray‑Ban Display AR glasses gesture recognition failure at Meta Connect 2025")
+    # Plain ASCII hyphen: a non-breaking hyphen here would be sent verbatim to the
+    # search API and is invisible in review.
+    searchGoogle("Meta Ray-Ban Display AR glasses gesture recognition failure at Meta Connect 2025")

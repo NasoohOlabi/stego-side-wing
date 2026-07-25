@@ -31,10 +31,7 @@ _LOGRECORD_STD_KEYS = frozenset(
 
 
 def _iso_utc_z(dt: datetime) -> str:
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    else:
-        dt = dt.astimezone(UTC)
+    dt = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
     return dt.isoformat().replace("+00:00", "Z")
 
 
@@ -167,7 +164,9 @@ def configure_loguru_jsonl(
     if file_path is not None:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         _loguru_file_path = file_path.resolve()
-        _loguru_file_stream = open(_loguru_file_path, "a", encoding="utf-8")
+        # Intentionally not a context manager: the sink holds this handle for the life of
+        # the process and close_loguru_file_stream()/truncate_loguru_file() manage it.
+        _loguru_file_stream = open(_loguru_file_path, "a", encoding="utf-8")  # noqa: SIM115
 
         def _file_sink(message: Any) -> None:
             if _loguru_file_stream is None:

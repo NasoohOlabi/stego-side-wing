@@ -140,7 +140,7 @@ def search_bing(query: str, first: int = 1, count: int = 10) -> dict[str, list[d
             ]
         }
     except requests.RequestException as e:
-        raise ValueError(f"Bing search failed: {str(e)}") from e
+        raise ValueError(f"Bing search failed: {e!s}") from e
 
 
 def search_google(query: str, first: int = 1, count: int = 10) -> dict[str, list[dict[str, str]]]:

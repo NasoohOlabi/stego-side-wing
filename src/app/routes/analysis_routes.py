@@ -41,9 +41,9 @@ def process_file_endpoint():
         return jsonify(result)
     except (FileNotFoundError, ValueError) as e:
         status = 404 if isinstance(e, FileNotFoundError) else 400
-        return jsonify({"error": f"Error processing file: {str(e)}"}), status
+        return jsonify({"error": f"Error processing file: {e!s}"}), status
     except Exception as e:
-        return jsonify({"error": f"Error processing file: {str(e)}"}), 500
+        return jsonify({"error": f"Error processing file: {e!s}"}), 500
 
 
 @bp.route("/fetch_url_content", methods=["POST"])

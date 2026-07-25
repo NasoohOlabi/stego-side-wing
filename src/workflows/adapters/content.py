@@ -187,12 +187,9 @@ class ContentAdapter:
             try:
                 api_response = self.http.fetch(url)
             except Exception as e:
-                return FetchUrlResult(url=url, success=False, error=f"Fetch error: {str(e)}")
+                return FetchUrlResult(url=url, success=False, error=f"Fetch error: {e!s}")
         raw: Any = api_response
-        if not isinstance(raw, dict):
-            result_data = raw
-        else:
-            result_data = raw.get("result")
+        result_data = raw if not isinstance(raw, dict) else raw.get("result")
         result = self._normalize_result(url=url, result_data=result_data)
         if result.success and result.text:
             self._cache_content(url, api_response)

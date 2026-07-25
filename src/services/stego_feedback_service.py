@@ -162,7 +162,7 @@ def classify_failure(
     env = envelope or {}
     if any(marker in normalized for marker in INFRA_ERROR_MARKERS):
         return "infra_transient"
-    if "valid json" in normalized or "json" in normalized and "stego llm" in normalized:
+    if "valid json" in normalized or ("json" in normalized and "stego llm" in normalized):
         return "stego_invalid_json"
     if "context" in normalized and ("faithful" in normalized or "ground" in normalized):
         return "stego_contextuality_reject"

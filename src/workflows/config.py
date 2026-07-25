@@ -14,6 +14,7 @@ from infrastructure.config import (
 from infrastructure.config import (
     get_step_dirs as get_global_step_dirs,
 )
+from workflows.stages import ANGLES_STEP, DATA_LOAD_STEP, FINAL_STEP, RESEARCH_STEP
 
 
 class WorkflowConfig:
@@ -36,10 +37,10 @@ class WorkflowConfig:
         self.groq_api_key = get_env("GROQ_API_KEY")
 
         # Dataset directories (single-source from infrastructure.config/STEPS)
-        self.posts_directory, self.url_fetched_dir = get_global_step_dirs("filter-url-unresolved")
-        _, self.researched_dir = get_global_step_dirs("filter-researched")
-        _, self.angles_dir = get_global_step_dirs("angles-step")
-        _, self.output_results_dir = get_global_step_dirs("final-step")
+        self.posts_directory, self.url_fetched_dir = get_global_step_dirs(DATA_LOAD_STEP)
+        _, self.researched_dir = get_global_step_dirs(RESEARCH_STEP)
+        _, self.angles_dir = get_global_step_dirs(ANGLES_STEP)
+        _, self.output_results_dir = get_global_step_dirs(FINAL_STEP)
         self.url_cache_dir = (url_cache_dir or resolve_path("./datasets/url_cache")).resolve()
         self.research_terms_db_path = (
             research_terms_db_path

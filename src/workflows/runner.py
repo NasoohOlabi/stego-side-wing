@@ -41,6 +41,13 @@ from workflows.runner_validate_post import (
     validation_failure_summary_for_log,
     validation_outcome_from_report,
 )
+from workflows.stages import (
+    ANGLES_STEP,
+    CONTEXT_STAGE_STEPS,
+    CONTEXT_STAGES,
+    DATA_LOAD_STEP,
+    RESEARCH_STEP,
+)
 from workflows.utils.capacity_observability import log_workflow_capacity_observation
 from workflows.utils.protocol_utils import stable_hash
 
@@ -179,7 +186,7 @@ class WorkflowRunner:
     ) -> dict[str, Any]:
         return self.data_load.preview_post_id(
             post_id=post_id,
-            step="filter-url-unresolved",
+            step=DATA_LOAD_STEP,
             use_cache=use_cache,
         )
 
@@ -192,10 +199,10 @@ class WorkflowRunner:
         source_post: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         file_name = f"{post_id}.json"
-        post = source_post or self.backend.get_post_local(file_name, "filter-researched")
+        post = source_post or self.backend.get_post_local(file_name, RESEARCH_STEP)
         return self.research.preview_post(
             post=post,
-            step="filter-researched",
+            step=RESEARCH_STEP,
             force=True,
             use_terms_cache=use_terms_cache,
             persist_terms_cache=persist_terms_cache,
@@ -209,7 +216,7 @@ class WorkflowRunner:
         allow_fallback: bool = False,
     ) -> dict[str, Any]:
         file_name = f"{post_id}.json"
-        post = source_post or self.backend.get_post_local(file_name, "angles-step")
+        post = source_post or self.backend.get_post_local(file_name, ANGLES_STEP)
         return self.gen_angles.preview_post(post=post, allow_fallback=allow_fallback)
 
     def run_data_load(
@@ -227,7 +234,7 @@ class WorkflowRunner:
         )
         t0 = time.perf_counter()
         results = self.data_load.process_posts(
-            step="filter-url-unresolved",
+            step=DATA_LOAD_STEP,
             count=count,
             offset=offset,
             batch_size=batch_size,
@@ -277,7 +284,7 @@ class WorkflowRunner:
             {"stage": "research", "count": count, "offset": offset},
         )
         results = self.research.process_posts(
-            step="filter-researched",
+            step=RESEARCH_STEP,
             count=count,
             offset=offset,
             include_breakdown=include_breakdown,
@@ -412,7 +419,7 @@ class WorkflowRunner:
             try:
                 research_results = self.research.process_post_objects(
                     posts=data_results,
-                    step="filter-researched",
+                    step=RESEARCH_STEP,
                     disable_bing_fallback=True,
                 )
             except Exception as exc:
@@ -449,7 +456,7 @@ class WorkflowRunner:
             t_angles = time.perf_counter()
             angles_results = self.gen_angles.process_post_objects(
                 posts=research_results,
-                step="angles-step",
+                step=ANGLES_STEP,
             )
             angles_elapsed_ms = int((time.perf_counter() - t_angles) * 1000)
             angles_summary = dict(getattr(self.gen_angles, "_last_batch_summary", {}) or {})
@@ -670,7 +677,7 @@ class WorkflowRunner:
         )
         t0 = time.perf_counter()
         results = self.gen_angles.process_posts(
-            step="angles-step",
+            step=ANGLES_STEP,
             count=count,
             offset=offset,
             tag=tag,
@@ -1125,14 +1132,8 @@ class WorkflowRunner:
         trace_id = get_trace_id() or str(uuid4())
         log = _LOG.bind(trace_id=trace_id)
 
-        stage_steps = {
-            "data_load": "filter-url-unresolved",
-            "research": "filter-researched",
-            "gen_angles": "angles-step",
-        }
-
         baseline: dict[str, dict[str, Any]] = {}
-        for stage_name, step in stage_steps.items():
+        for stage_name, step in CONTEXT_STAGE_STEPS.items():
             path = self._artifact_path(step, post_id)
             if not path.exists():
                 raise FileNotFoundError(
@@ -1222,7 +1223,7 @@ class WorkflowRunner:
         steps_report: dict[str, dict[str, Any]] = {}
         valid = True
         upstream_failed = False
-        for stage_name, step in stage_steps.items():
+        for stage_name, step in CONTEXT_STAGE_STEPS.items():
             if upstream_failed:
                 steps_report[stage_name] = {
                     "step": step,
@@ -1292,12 +1293,12 @@ class WorkflowRunner:
         outcome, validation_explanation = validation_outcome_from_report(
             valid=valid,
             steps_report=steps_report,
-            stage_order=tuple(stage_steps.keys()),
+            stage_order=CONTEXT_STAGES,
         )
         failure_detail = validation_failure_summary_for_log(
             validation_outcome=outcome,
             steps_report=steps_report,
-            stage_order=tuple(stage_steps.keys()),
+            stage_order=CONTEXT_STAGES,
         ).model_dump(exclude_none=True)
 
         result = {
@@ -1344,7 +1345,7 @@ class WorkflowRunner:
         Returns:
             Tuple of (post_id, file_name)
         """
-        listing = self.backend.posts_list(step="filter-url-unresolved", count=1, offset=offset)
+        listing = self.backend.posts_list(step=DATA_LOAD_STEP, count=1, offset=offset)
         file_names = listing.get("fileNames", [])
         if not file_names:
             raise ValueError(
@@ -1575,7 +1576,7 @@ class WorkflowRunner:
             pipeline_substage="data_load",
             run_fn=lambda: self.data_load.process_post_id(
                 post_id=post_id,
-                step="filter-url-unresolved",
+                step=DATA_LOAD_STEP,
                 use_cache=use_fetch_cache,
             ),
         )
@@ -1587,7 +1588,7 @@ class WorkflowRunner:
             pipeline_substage="research",
             run_fn=lambda: self.research.process_post_id(
                 post_id=post_id,
-                step="filter-researched",
+                step=RESEARCH_STEP,
                 force=True,
                 use_terms_cache=use_terms_cache,
                 persist_terms_cache=persist_terms_cache,
@@ -1602,7 +1603,7 @@ class WorkflowRunner:
             pipeline_substage="gen_angles",
             run_fn=lambda: self.gen_angles.process_post_id(
                 post_id=post_id,
-                step="angles-step",
+                step=ANGLES_STEP,
                 allow_fallback=allow_angles_fallback,
             ),
         )
@@ -1875,7 +1876,7 @@ class WorkflowRunner:
         self,
         post_ids: list[str],
         *,
-        step: str = "angles-step",
+        step: str = ANGLES_STEP,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """
@@ -2086,9 +2087,44 @@ class WorkflowRunner:
         )
         return out
 
+    def _full_pipeline_done(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        results: list[dict],
+    ) -> list[dict]:
+        """Emit the terminal ``workflow_done`` for a full-pipeline run and hand back its results."""
+        self._emit(
+            on_progress,
+            "workflow_done",
+            {"workflow": "full", "processed_count": len(results)},
+        )
+        return results
+
+    def _full_pipeline_angle_researched(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        research_results: list[dict],
+    ) -> list[dict]:
+        """Explicit stage handoff: angle what was just researched, then finish the run."""
+        self._emit(
+            on_progress,
+            "stage_start",
+            {"stage": "gen-angles", "source": "research", "count": len(research_results)},
+        )
+        final_results = self.gen_angles.process_post_objects(
+            posts=research_results,
+            step=ANGLES_STEP,
+        )
+        self._emit(
+            on_progress,
+            "stage_done",
+            {"stage": "gen-angles", "processed_count": len(final_results)},
+        )
+        return self._full_pipeline_done(on_progress, final_results)
+
     def run_full_pipeline(
         self,
-        start_step: str = "filter-url-unresolved",
+        start_step: str = DATA_LOAD_STEP,
         count: int = 1,
         payload: str | None = None,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
@@ -2115,19 +2151,14 @@ class WorkflowRunner:
             },
         )
 
-        if start_step == "filter-url-unresolved":
+        if start_step == DATA_LOAD_STEP:
             data_results = self._call_with_optional_progress(
                 self.run_data_load,
                 on_progress,
                 count=count,
             )
             if not data_results:
-                self._emit(
-                    on_progress,
-                    "workflow_done",
-                    {"workflow": "full", "processed_count": 0},
-                )
-                return results
+                return self._full_pipeline_done(on_progress, results)
 
             # Explicit stage handoff: research what we just loaded.
             self._emit(
@@ -2137,7 +2168,7 @@ class WorkflowRunner:
             )
             research_results = self.research.process_post_objects(
                 posts=data_results,
-                step="filter-researched",
+                step=RESEARCH_STEP,
             )
             self._emit(
                 on_progress,
@@ -2145,80 +2176,25 @@ class WorkflowRunner:
                 {"stage": "research", "processed_count": len(research_results)},
             )
             if not research_results:
-                self._emit(
-                    on_progress,
-                    "workflow_done",
-                    {"workflow": "full", "processed_count": 0},
-                )
-                return results
+                return self._full_pipeline_done(on_progress, results)
+            return self._full_pipeline_angle_researched(on_progress, research_results)
 
-            # Explicit stage handoff: angle what we just researched.
-            self._emit(
-                on_progress,
-                "stage_start",
-                {"stage": "gen-angles", "source": "research", "count": len(research_results)},
-            )
-            final_results = self.gen_angles.process_post_objects(
-                posts=research_results,
-                step="angles-step",
-            )
-            self._emit(
-                on_progress,
-                "stage_done",
-                {"stage": "gen-angles", "processed_count": len(final_results)},
-            )
-            self._emit(
-                on_progress,
-                "workflow_done",
-                {"workflow": "full", "processed_count": len(final_results)},
-            )
-            return final_results
-
-        if start_step == "filter-researched":
+        if start_step == RESEARCH_STEP:
             research_results = self._call_with_optional_progress(
                 self.run_research,
                 on_progress,
                 count=count,
             )
             if not research_results:
-                self._emit(
-                    on_progress,
-                    "workflow_done",
-                    {"workflow": "full", "processed_count": 0},
-                )
-                return results
-            self._emit(
-                on_progress,
-                "stage_start",
-                {"stage": "gen-angles", "source": "research", "count": len(research_results)},
-            )
-            final_results = self.gen_angles.process_post_objects(
-                posts=research_results,
-                step="angles-step",
-            )
-            self._emit(
-                on_progress,
-                "stage_done",
-                {"stage": "gen-angles", "processed_count": len(final_results)},
-            )
-            self._emit(
-                on_progress,
-                "workflow_done",
-                {"workflow": "full", "processed_count": len(final_results)},
-            )
-            return final_results
+                return self._full_pipeline_done(on_progress, results)
+            return self._full_pipeline_angle_researched(on_progress, research_results)
 
-        if start_step == "angles-step":
+        if start_step == ANGLES_STEP:
             results = self._call_with_optional_progress(
                 self.run_gen_angles,
                 on_progress,
                 count=count,
             )
-            self._emit(
-                on_progress,
-                "workflow_done",
-                {"workflow": "full", "processed_count": len(results)},
-            )
-            return results
+            return self._full_pipeline_done(on_progress, results)
 
         raise ValueError(f"Unsupported start_step: {start_step}")

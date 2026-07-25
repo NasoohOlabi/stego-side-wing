@@ -17,6 +17,7 @@ from infrastructure.config import (
     get_workflow_tangent_db_builder,
     resolve_path,
 )
+from workflows.stages import PREP_RUN_STEPS
 from workflows.utils.tangent_db import tangent_db_config_from_env
 
 
@@ -42,12 +43,7 @@ def build_prep_run_manifest(*, run_id: str, notes: str = "") -> PrepRunManifest:
         raise ValueError("WORKFLOW_DATASET_ROOT is required for a prep-run manifest")
     step_dirs = {
         step: {"source": str(source), "dest": str(dest)}
-        for step in (
-            "filter-url-unresolved",
-            "filter-researched",
-            "angles-step",
-            "final-step",
-        )
+        for step in PREP_RUN_STEPS
         for source, dest in [get_step_dirs(step)]
     }
     tangent_cfg = tangent_db_config_from_env(get_workflow_angles_max_output())

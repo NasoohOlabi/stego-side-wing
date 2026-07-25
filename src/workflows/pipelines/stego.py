@@ -313,6 +313,90 @@ def _encode_success_result(
     return result
 
 
+def _encode_failure_result(
+    *,
+    stego_text: str,
+    post: dict[str, Any],
+    selected_angle: dict[str, Any],
+    selected_idx: Any,
+    retry_count: int,
+    tag: str | None,
+    sender_audit: dict[str, Any],
+    post_augmentation: dict[str, Any],
+    encoded_results: list[dict[str, Any]],
+    validation_details: dict[str, Any],
+    error_details: dict[str, Any],
+    breakdown: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Result for an encode whose retries were exhausted without a decodable candidate.
+
+    Both entry points report the same ``error``; they differ only in the reason text they
+    put in ``error_details`` and in the trailing fields they add. Key insertion order
+    mirrors what each path emitted before, so serialized artifacts are unchanged.
+    """
+    result: dict[str, Any] = {
+        "stego_text": stego_text,
+        "post": post,
+        "selected_angle": selected_angle,
+        "angle_index": selected_idx,
+        "succeeded": False,
+        "retry_count": retry_count,
+        "tag": tag,
+        "sender_audit": sender_audit,
+        "error": "Decoding validation failed",
+        "error_details": error_details,
+    }
+    if breakdown is not None:
+        result["breakdown"] = breakdown
+    result["validation_details"] = validation_details
+    result["embedding"] = post_augmentation
+    result["encoded_samples"] = encoded_results
+    if extra:
+        result.update(extra)
+    return result
+
+
+def _encode_exception_result(
+    *,
+    exc: Exception,
+    post: dict[str, Any],
+    selected_angle: dict[str, Any],
+    selected_idx: Any,
+    retry_count: int,
+    tag: str | None,
+    sender_audit: dict[str, Any],
+    post_augmentation: dict[str, Any],
+    reason: str,
+    breakdown: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Result for an encode attempt that raised after its retries were exhausted."""
+    result: dict[str, Any] = {
+        "stego_text": "",
+        "post": post,
+        "selected_angle": selected_angle,
+        "angle_index": selected_idx,
+        "succeeded": False,
+        "retry_count": retry_count,
+        "tag": tag,
+        "sender_audit": sender_audit,
+        "error": str(exc),
+        "error_details": {
+            "reason": reason,
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+            "selected_angle": _angle_summary(selected_angle),
+        },
+    }
+    if breakdown is not None:
+        result["breakdown"] = breakdown
+    result["embedding"] = post_augmentation
+    if extra:
+        result.update(extra)
+    return result
+
+
 def _diagnostic_bits_fields(bits: str, post_augmentation: dict[str, Any]) -> dict[str, Any]:
     """Extra result fields carried only by the binary-selection-bits diagnostic path."""
     return {
@@ -1856,22 +1940,20 @@ class StegoPipeline:
                         retry_count=retry_count,
                         timing_outcome="validation_exhausted",
                     )
-                    return {
-                        "stego_text": primary_texts[0] if primary_texts else "",
-                        "post": post,
-                        "selected_angle": selected_angle,
-                        "angle_index": selected_idx,
-                        "succeeded": False,
-                        "retry_count": retry_count,
-                        "tag": tag,
-                        "sender_audit": sender_audit,
-                        "error": "Decoding validation failed",
-                        "error_details": error_details,
-                        "breakdown": last_breakdown,
-                        "validation_details": validation_details,
-                        "embedding": post_augmentation,
-                        "encoded_samples": encoded_results,
-                    }
+                    return _encode_failure_result(
+                        stego_text=primary_texts[0] if primary_texts else "",
+                        post=post,
+                        selected_angle=selected_angle,
+                        selected_idx=selected_idx,
+                        retry_count=retry_count,
+                        tag=tag,
+                        sender_audit=sender_audit,
+                        post_augmentation=post_augmentation,
+                        encoded_results=encoded_results,
+                        validation_details=validation_details,
+                        error_details=error_details,
+                        breakdown=last_breakdown,
+                    )
                 retry_count += 1
             except Exception as exc:
                 _stego_log_bind("error").exception(
@@ -1891,25 +1973,18 @@ class StegoPipeline:
                         retry_count=retry_count,
                         timing_outcome="exception",
                     )
-                    return {
-                        "stego_text": "",
-                        "post": post,
-                        "selected_angle": selected_angle,
-                        "angle_index": selected_idx,
-                        "succeeded": False,
-                        "retry_count": retry_count,
-                        "tag": tag,
-                        "sender_audit": sender_audit,
-                        "error": str(exc),
-                        "error_details": {
-                            "reason": "Unexpected exception during stego encoding.",
-                            "exception_type": type(exc).__name__,
-                            "exception_message": str(exc),
-                            "selected_angle": _angle_summary(selected_angle),
-                        },
-                        "breakdown": last_breakdown,
-                        "embedding": post_augmentation,
-                    }
+                    return _encode_exception_result(
+                        exc=exc,
+                        post=post,
+                        selected_angle=selected_angle,
+                        selected_idx=selected_idx,
+                        retry_count=retry_count,
+                        tag=tag,
+                        sender_audit=sender_audit,
+                        post_augmentation=post_augmentation,
+                        reason="Unexpected exception during stego encoding.",
+                        breakdown=last_breakdown,
+                    )
                 retry_count += 1
 
         raise RuntimeError("Stego encode retry loop exited unexpectedly.")
@@ -2062,26 +2137,24 @@ class StegoPipeline:
                         retry_count=retry_count,
                         timing_outcome="diagnostic_validation_exhausted",
                     )
-                    return {
-                        "stego_text": primary_texts[0] if primary_texts else "",
-                        "post": post,
-                        "selected_angle": selected_angle,
-                        "angle_index": selected_idx,
-                        "succeeded": False,
-                        "retry_count": retry_count,
-                        "tag": tag,
-                        "sender_audit": sender_audit,
-                        "error": "Decoding validation failed",
-                        "error_details": {
+                    return _encode_failure_result(
+                        stego_text=primary_texts[0] if primary_texts else "",
+                        post=post,
+                        selected_angle=selected_angle,
+                        selected_idx=selected_idx,
+                        retry_count=retry_count,
+                        tag=tag,
+                        sender_audit=sender_audit,
+                        post_augmentation=post_augmentation,
+                        encoded_results=encoded_results,
+                        validation_details=validation_details,
+                        error_details={
                             "reason": "Diagnostic candidate did not decode to selected angle.",
                             "selected_angle": _angle_summary(selected_angle),
                             "candidate_results": validation_details.get("candidates", []),
                         },
-                        "validation_details": validation_details,
-                        "embedding": post_augmentation,
-                        "encoded_samples": encoded_results,
-                        **_diagnostic_bits_fields(bits, post_augmentation),
-                    }
+                        extra=_diagnostic_bits_fields(bits, post_augmentation),
+                    )
                 retry_count += 1
             except Exception as exc:
                 if retry_count >= resolved_max_retries:
@@ -2095,25 +2168,18 @@ class StegoPipeline:
                         retry_count=retry_count,
                         timing_outcome="diagnostic_exception",
                     )
-                    return {
-                        "stego_text": "",
-                        "post": post,
-                        "selected_angle": selected_angle,
-                        "angle_index": selected_idx,
-                        "succeeded": False,
-                        "retry_count": retry_count,
-                        "tag": tag,
-                        "sender_audit": sender_audit,
-                        "error": str(exc),
-                        "error_details": {
-                            "reason": "Unexpected exception during diagnostic stego encoding.",
-                            "exception_type": type(exc).__name__,
-                            "exception_message": str(exc),
-                            "selected_angle": _angle_summary(selected_angle),
-                        },
-                        "embedding": post_augmentation,
-                        **_diagnostic_bits_fields(bits, post_augmentation),
-                    }
+                    return _encode_exception_result(
+                        exc=exc,
+                        post=post,
+                        selected_angle=selected_angle,
+                        selected_idx=selected_idx,
+                        retry_count=retry_count,
+                        tag=tag,
+                        sender_audit=sender_audit,
+                        post_augmentation=post_augmentation,
+                        reason="Unexpected exception during diagnostic stego encoding.",
+                        extra=_diagnostic_bits_fields(bits, post_augmentation),
+                    )
                 retry_count += 1
 
         raise RuntimeError("Diagnostic stego encode retry loop exited unexpectedly.")

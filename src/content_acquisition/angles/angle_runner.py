@@ -27,6 +27,10 @@ from infrastructure.config import (
     resolve_workflow_llm_provider_and_model,
 )
 from infrastructure.json_logging import TAG_WORKFLOW, get_trace_id
+from infrastructure.retry_policy import (
+    RETRYABLE_TRANSPORT_MESSAGE_TOKENS,
+    RETRYABLE_TRANSPORT_NAME_TOKENS,
+)
 from workflows.adapters.llm import LLMAdapter
 from workflows.cache_context import get_angles_cache_dir
 from workflows.config import get_config
@@ -67,6 +71,9 @@ CONTEXT_RETRY_OVERLAP_CHARS = max(
     0, int(get_env("ANGLES_CONTEXT_RETRY_OVERLAP_CHARS", "5000") or "5000")
 )
 
+# Deliberately excludes 408, which workflows.adapters.llm does retry. Angle requests are
+# long-running, so a 408 here means the prompt is too big rather than a transient blip --
+# retrying it unchanged just burns the same timeout again. See infrastructure.retry_policy.
 _TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 _WORKFLOW_GOOGLE_CACHE_SUBDIR = "workflow_google"
@@ -76,28 +83,8 @@ _CONNECTIVITY_EXCEPTIONS: tuple[type[BaseException], ...] = (
     RequestsConnectionError,
     ChunkedEncodingError,
 )
-_WORKFLOW_TRANSPORT_NAME_TOKENS = frozenset(
-    {
-        "timeout",
-        "connection",
-        "connect",
-        "chunked",
-        "remoteprotocol",
-        "protocolerror",
-        "readerror",
-        "writeerror",
-        "disconnect",
-    }
-)
-_WORKFLOW_TRANSPORT_MESSAGE_TOKENS = frozenset(
-    {
-        "server disconnected without sending a response",
-        "remote end closed connection without response",
-        "connection reset by peer",
-        "connection aborted",
-        "broken pipe",
-    }
-)
+_WORKFLOW_TRANSPORT_NAME_TOKENS = RETRYABLE_TRANSPORT_NAME_TOKENS
+_WORKFLOW_TRANSPORT_MESSAGE_TOKENS = RETRYABLE_TRANSPORT_MESSAGE_TOKENS
 
 
 def _env_positive_int(name: str, default: int) -> int:

@@ -26,6 +26,10 @@ from infrastructure.config import (
     get_workflow_llm_backend,
 )
 from infrastructure.json_logging import get_trace_id
+from infrastructure.retry_policy import (
+    RETRYABLE_TRANSPORT_MESSAGE_TOKENS,
+    RETRYABLE_TRANSPORT_NAME_TOKENS,
+)
 from services.workflow_run_tracker import get_run_id
 from workflows.utils.protocol_utils import stable_hash
 
@@ -34,29 +38,11 @@ PROMPTS_LOG_PATH = REPO_ROOT / "logs" / f"stego_prompts_{PROMPTS_LOG_TIMESTAMP}.
 
 _LLM_ADAPTER_LOG = logger.bind(component="LLMAdapter")
 
+# Note this includes 408, which the angles caller deliberately omits; see
+# infrastructure.retry_policy for why the two tunings stay separate.
 _RETRYABLE_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
-_RETRYABLE_TRANSPORT_NAME_TOKENS = frozenset(
-    {
-        "timeout",
-        "connection",
-        "connect",
-        "chunked",
-        "remoteprotocol",
-        "protocolerror",
-        "readerror",
-        "writeerror",
-        "disconnect",
-    }
-)
-_RETRYABLE_TRANSPORT_MESSAGE_TOKENS = frozenset(
-    {
-        "server disconnected without sending a response",
-        "remote end closed connection without response",
-        "connection reset by peer",
-        "connection aborted",
-        "broken pipe",
-    }
-)
+_RETRYABLE_TRANSPORT_NAME_TOKENS = RETRYABLE_TRANSPORT_NAME_TOKENS
+_RETRYABLE_TRANSPORT_MESSAGE_TOKENS = RETRYABLE_TRANSPORT_MESSAGE_TOKENS
 
 
 def _llm_max_attempts() -> int:

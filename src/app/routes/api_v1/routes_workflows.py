@@ -1105,7 +1105,69 @@ def wf_run() -> Any:
 
         run_dispatch = _run_batch_angles
 
+    elif command == "stego-receiver-live":
+        live_sender_user_id, err = required_body_str(body, "sender_user_id")
+        if err:
+            return err
+        assert live_sender_user_id is not None
+        live_post_id, err = optional_body_str(body, "post_id")
+        if err:
+            return err
+        live_payload, err = optional_payload_field(body, "payload")
+        if err:
+            return err
+        live_tag, err = optional_body_str(body, "tag")
+        if err:
+            return err
+        live_list_offset, err = body_int(body, "list_offset", 1)
+        if err:
+            return err
+        assert live_list_offset is not None
+        live_sim_root_raw, err = optional_body_str(body, "simulation_root")
+        if err:
+            return err
+        live_simulation_root = Path(live_sim_root_raw).resolve() if live_sim_root_raw else None
+        live_compressed_full, err = optional_body_str(body, "compressed_bitstring")
+        if err:
+            return err
+        live_allow_fallback, err = body_bool(body, "allow_fallback", default=False)
+        if err:
+            return err
+        live_max_padding_bits, err = body_int(body, "max_padding_bits", 256)
+        if err:
+            return err
+        assert live_max_padding_bits is not None
+        if live_max_padding_bits < 0:
+            return fail("'max_padding_bits' must be non-negative", status=400)
+        live_max_post_attempts, err = body_int(body, "max_post_attempts", 25)
+        if err:
+            return err
+        assert live_max_post_attempts is not None
+        if live_max_post_attempts < 1:
+            return fail("'max_post_attempts' must be at least 1", status=400)
+
+        def _run_stego_receiver_live(
+            progress_cb: Callable[[str, dict[str, Any]], None] | None,
+        ) -> Any:
+            return runner.run_stego_receiver_live_sim(
+                live_sender_user_id,
+                post_id=live_post_id,
+                payload=live_payload,
+                tag=live_tag,
+                list_offset=live_list_offset,
+                simulation_root=live_simulation_root,
+                max_post_attempts=live_max_post_attempts,
+                allow_fallback=live_allow_fallback,
+                compressed_full=live_compressed_full,
+                max_padding_bits=live_max_padding_bits,
+                on_progress=progress_cb,
+            )
+
+        run_dispatch = _run_stego_receiver_live
+
     else:
+        # Only "full" reaches here now. Every other entry in WORKFLOW_COMMANDS has an
+        # explicit branch above, and unknown commands were rejected with 400 already.
         count, err = body_int(body, "count", 1)
         if err:
             return err

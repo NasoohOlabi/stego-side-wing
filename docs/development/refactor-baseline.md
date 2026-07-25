@@ -110,7 +110,19 @@ around it.
 | 0 — safety nets | 530 | 67% | golden characterization test, offline network guard, shared fakes |
 | 1 — dead code & dupes | 530 | 68% | 307 statements removed; `src/util` forks, dead stego seams, the invisible-carrier write helper, and the f0bcc9 debug scaffold all deleted |
 | 2 — layering & DI | 548 | 68% | `workflows -> services` crossings 12 → 3; ports + constructor injection added; `lint-imports` now gated in CI |
-| 3 — god objects (in progress) | 558 | 69% | `encode` 444 → 368 lines, `encode_binary_selection_bits` 244 → 195; `stego.py` now 88% covered |
+| 3 — god objects (partial) | 558 | 69% | `encode` 444 → 368 lines, `encode_binary_selection_bits` 244 → 195; `stego.py` now 88% covered |
+| 5 — errors (partial) | 574 | 69% | typed `workflows/errors.py` behind the existing message-based detectors |
+| 6 — guardrails (partial) | 588 | 69% | ruff ratcheted to SIM/C4/RUF/PT; `/workflows/run` dispatch bug found and fixed |
+
+### Bugs found while refactoring
+
+| Bug | Where |
+|---|---|
+| `config/pareto_variants.json` required by code but silently untracked (blanket `*.json` ignore) | `.gitignore` |
+| `POST /workflows/run` with `command="stego-receiver-live"` ran `run_full_pipeline` while echoing the requested command | `routes_workflows.wf_run` |
+| Non-breaking hyphen inside a live search query string | `integrations/scrapingdog_api.py` |
+| `infrastructure` imported `workflows` (bottom layer depending on an upper one) | `prep_run_manifest` |
+| Env-precedence test passed only on machines without a `.env` | `test_angle_runner_llm_retries` |
 
 ### Phase 3 — where it stands
 
@@ -133,11 +145,25 @@ matched by `classify_failure` in `stego_feedback_service` and asserted in
 The productive direction for these two methods is more named-phase extraction — pulling
 out the remaining prep and per-attempt blocks — not a shared loop.
 
-**Not started:** splitting `stego.py` and `runner.py` into packages (plan steps 3.2–3.4),
-the LLM provider strategy split (3.5), and the `wf_run` command registry (3.6). Of these,
-3.5 and 3.6 are the best next targets: both are mechanical, and both are already covered
-(`test_llm_adapter_retries` + `test_llm_redacted_thinking` for the providers, the
-`test_api_v1_*` suite for the routes).
+**Not started:** splitting `stego.py` and `runner.py` into packages (plan steps 3.2–3.4)
+and the LLM provider strategy split (3.5).
+
+For 3.5, note the four `_call_*` methods are *not* as similar as they look: the Gemini one
+rotates through multiple API keys and falls back from the SDK to REST, while the others are
+single-shot. A shared provider Protocol is still worth doing, but it is not a copy-paste
+collapse. It is well covered — `test_llm_adapter_retries` (10) plus
+`test_llm_redacted_thinking` (23).
+
+For 3.6, `wf_run` was not converted to a registry. Doing so means moving 13 parameter-parsing
+blocks into separate builders, and each returns both a dispatch closure and an early-return
+error response, so the registry signature is awkward. The concrete defect the registry was
+meant to prevent — a listed command with no branch — is now caught directly by
+`test_api_v1_workflow_run_dispatch.py`, which is the safety the restructure was for.
+
+**Phases 4 (Pydantic contracts) and 5.2–5.5 are untouched.** Note `workflows/contracts.py`
+still uses `@dataclass` with hand-rolled `to_dict`; its filter drops falsy-but-present values
+(`""`, `0`), not just `None`, so a naive `model_dump(exclude_none=True)` conversion would
+change artifact shape.
 
 ### Gate added in phase 2
 

@@ -120,12 +120,18 @@ class HttpBackendClient:
 class BackendAPIAdapter:
     """Facade that exposes one interface with explicit local/HTTP behavior."""
 
-    def __init__(self, base_url: str | None = None):
+    def __init__(
+        self,
+        base_url: str | None = None,
+        *,
+        local: LocalBackendClient | None = None,
+        http: HttpBackendClient | None = None,
+    ):
         self.config = get_config()
         resolved = base_url or self.config.base_url or "http://127.0.0.1:5001"
         self.base_url: str = resolved
-        self.local = LocalBackendClient(self.config)
-        self.http = HttpBackendClient(self.base_url)
+        self.local = local or LocalBackendClient(self.config)
+        self.http = http or HttpBackendClient(self.base_url)
 
     def _local_client(self) -> LocalBackendClient:
         """Backward-compatible lazy local client for __new__-constructed tests."""

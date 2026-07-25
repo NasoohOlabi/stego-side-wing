@@ -39,9 +39,14 @@ def _log_event(
 class DataLoadPipeline:
     """Loads each post's article body via URL fetch; holds backend and fetch pipeline clients."""
 
-    def __init__(self) -> None:
-        self.backend = BackendAPIAdapter()
-        self.fetch_pipeline = FetchUrlContentPipeline()
+    def __init__(
+        self,
+        *,
+        backend: BackendAPIAdapter | None = None,
+        fetch_pipeline: FetchUrlContentPipeline | None = None,
+    ) -> None:
+        self.backend = backend or BackendAPIAdapter()
+        self.fetch_pipeline = fetch_pipeline or FetchUrlContentPipeline()
         self._log = logger.bind(component="DataLoadPipeline")
 
     def _ensure_log(self) -> None:

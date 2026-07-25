@@ -53,15 +53,32 @@ class WorkflowRunner:
     with component ``WorkflowRunner`` without running ``__init__``.
     """
 
-    def __init__(self) -> None:
-        self.backend = BackendAPIAdapter()
-        self.data_load = DataLoadPipeline()
-        self.research = ResearchPipeline()
-        self.gen_angles = GenAnglesPipeline()
-        self.stego = StegoPipeline()
-        self.decode = DecodePipeline()
-        self.receiver = ReceiverPipeline()
-        self.gen_terms = GenSearchTermsPipeline()
+    def __init__(
+        self,
+        *,
+        backend: BackendAPIAdapter | None = None,
+        data_load: DataLoadPipeline | None = None,
+        research: ResearchPipeline | None = None,
+        gen_angles: GenAnglesPipeline | None = None,
+        stego: StegoPipeline | None = None,
+        decode: DecodePipeline | None = None,
+        receiver: ReceiverPipeline | None = None,
+        gen_terms: GenSearchTermsPipeline | None = None,
+    ) -> None:
+        """Every dependency is injectable; omitting one builds the production default.
+
+        Zero-argument construction is unchanged, so existing call sites and scripts keep
+        working -- the parameters exist so tests and the app factory can substitute fakes
+        without reaching for ``__new__``.
+        """
+        self.backend = backend or BackendAPIAdapter()
+        self.data_load = data_load or DataLoadPipeline()
+        self.research = research or ResearchPipeline()
+        self.gen_angles = gen_angles or GenAnglesPipeline()
+        self.stego = stego or StegoPipeline()
+        self.decode = decode or DecodePipeline()
+        self.receiver = receiver or ReceiverPipeline()
+        self.gen_terms = gen_terms or GenSearchTermsPipeline()
         # In-memory counters for data-load URL fetch failures by post id.
         # This resets when the API process restarts.
         self._fetch_fail_counts: dict[str, int] = {}

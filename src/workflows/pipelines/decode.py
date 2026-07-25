@@ -215,9 +215,14 @@ def _is_strict_decode_success_mode(mode: str) -> bool:
 class DecodePipeline:
     """Runs semantic shortlist + LLM decode to map stego text to a tangent index."""
 
-    def __init__(self) -> None:
-        self.backend = BackendAPIAdapter()
-        self.llm = LLMAdapter()
+    def __init__(
+        self,
+        *,
+        backend: BackendAPIAdapter | None = None,
+        llm: LLMAdapter | None = None,
+    ) -> None:
+        self.backend = backend or BackendAPIAdapter()
+        self.llm = llm or LLMAdapter()
         self._log = logger.bind(**_DECODE_LOG_BASE)
 
     def _find_angle_index(

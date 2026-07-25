@@ -562,10 +562,18 @@ class StegoPipeline:
     with component ``StegoPipeline`` without running ``__init__``.
     """
 
-    def __init__(self) -> None:
-        self.backend = BackendAPIAdapter()
-        self.llm = LLMAdapter()
-        self.decode_pipeline = DecodePipeline()
+    def __init__(
+        self,
+        *,
+        backend: BackendAPIAdapter | None = None,
+        llm: LLMAdapter | None = None,
+        decode_pipeline: DecodePipeline | None = None,
+    ) -> None:
+        self.backend = backend or BackendAPIAdapter()
+        self.llm = llm or LLMAdapter()
+        self.decode_pipeline = decode_pipeline or DecodePipeline()
+        # Not injectable: get_config() is ContextVar-aware so isolated_workflow_config can
+        # swap it per test/run. Capturing an injected instance would defeat that.
         self.config = get_config()
 
     def _load_default_payload_and_tag(self) -> tuple[str | None, str | None]:

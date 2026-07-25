@@ -189,9 +189,14 @@ class GenAnglesPipeline:
     config, and the last batch processing summary for observability and CLI/API callers.
     """
 
-    def __init__(self):
-        self.backend = BackendAPIAdapter()
-        self.llm = LLMAdapter()
+    def __init__(
+        self,
+        *,
+        backend: BackendAPIAdapter | None = None,
+        llm: LLMAdapter | None = None,
+    ) -> None:
+        self.backend = backend or BackendAPIAdapter()
+        self.llm = llm or LLMAdapter()
         self.config = get_config()
         self._last_batch_summary: dict[str, Any] = {}
 

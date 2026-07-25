@@ -82,11 +82,17 @@ def is_likely_google_quota_error(exc: BaseException) -> bool:
 class ResearchPipeline:
     """Owns backend, term generation, and URL fetch adapters; orchestrates research I/O."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        backend: BackendAPIAdapter | None = None,
+        gen_terms: GenSearchTermsPipeline | None = None,
+        fetch_content: FetchUrlContentPipeline | None = None,
+    ) -> None:
         self._log = logger.bind(component="ResearchPipeline")
-        self.backend = BackendAPIAdapter()
-        self.gen_terms = GenSearchTermsPipeline()
-        self.fetch_content = FetchUrlContentPipeline()
+        self.backend = backend or BackendAPIAdapter()
+        self.gen_terms = gen_terms or GenSearchTermsPipeline()
+        self.fetch_content = fetch_content or FetchUrlContentPipeline()
         self.last_research_breakdown_posts: list[dict[str, Any]] = []
 
     def _fetch_url_with_timeout_retries(

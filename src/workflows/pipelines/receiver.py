@@ -402,12 +402,19 @@ def _multi_frame_success(
 class ReceiverPipeline:
     """Orchestrates data-load, research, angles, and decode to recover a stego payload."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        data_load: DataLoadPipeline | None = None,
+        research: ResearchPipeline | None = None,
+        gen_angles: GenAnglesPipeline | None = None,
+        decode: DecodePipeline | None = None,
+    ) -> None:
         self._log = logger.bind(component="ReceiverPipeline")
-        self.data_load = DataLoadPipeline()
-        self.research = ResearchPipeline()
-        self.gen_angles = GenAnglesPipeline()
-        self.decode = DecodePipeline()
+        self.data_load = data_load or DataLoadPipeline()
+        self.research = research or ResearchPipeline()
+        self.gen_angles = gen_angles or GenAnglesPipeline()
+        self.decode = decode or DecodePipeline()
 
     def rebuild_context(
         self,

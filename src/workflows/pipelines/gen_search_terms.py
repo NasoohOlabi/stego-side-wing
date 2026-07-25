@@ -23,9 +23,9 @@ from workflows.utils.workflow_llm_prompts import format_gen_search_terms_user_pr
 class GenSearchTermsPipeline:
     """Generates and SQLite-caches LLM search terms per post for research."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, llm: LLMAdapter | None = None) -> None:
         self.config = get_config()
-        self.llm = LLMAdapter()
+        self.llm = llm or LLMAdapter()
         self._last_cache_error: str | None = None
         self._last_parse_mode: str | None = None
         self._log = logger.bind(component="GenSearchTermsPipeline")

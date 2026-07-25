@@ -24,8 +24,8 @@ def _url_host(url: str) -> str | None:
 class FetchUrlContentPipeline:
     """Runs URL fetches via ContentAdapter, validates text, and retries without cache when needed."""
 
-    def __init__(self) -> None:
-        self.content_adapter = ContentAdapter()
+    def __init__(self, *, content_adapter: ContentAdapter | None = None) -> None:
+        self.content_adapter = content_adapter or ContentAdapter()
 
     def _fetch_raw(self, url: str, use_cache: bool) -> FetchUrlResult:
         return self.content_adapter.fetch_url_content(url, use_cache=use_cache)

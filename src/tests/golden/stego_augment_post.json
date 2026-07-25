@@ -1,0 +1,124 @@
+{
+  "angleBits": "00",
+  "angleEmbedding": {
+    "TangentsDB": [
+      {
+        "category": "politics",
+        "idx": 0,
+        "source_quote": "vote was 7-2",
+        "tangent": "council margin"
+      },
+      {
+        "category": "infrastructure",
+        "idx": 1,
+        "source_quote": "start next spring",
+        "tangent": "construction timeline"
+      },
+      {
+        "category": "infrastructure",
+        "idx": 2,
+        "source_quote": "new transit line",
+        "tangent": "transit coverage"
+      }
+    ],
+    "bitsCount": 2,
+    "bitsUsed": "00",
+    "insufficientBits": false,
+    "remainingAngles": [
+      {
+        "category": "infrastructure",
+        "idx": 1,
+        "source_quote": "start next spring",
+        "tangent": "construction timeline"
+      },
+      {
+        "category": "infrastructure",
+        "idx": 2,
+        "source_quote": "new transit line",
+        "tangent": "transit coverage"
+      }
+    ],
+    "remainingBits": "00011101101101011001010110010101110100001000000110000101110100101000101100001010000010110111010101110011011101010110000101101100001000000111000001101100011000010110001101100101",
+    "selectedAngle": {
+      "category": "politics",
+      "idx": 0,
+      "source_quote": "vote was 7-2",
+      "tangent": "council margin"
+    },
+    "totalAnglesSelectedFirst": [
+      {
+        "category": "politics",
+        "idx": 0,
+        "source_quote": "vote was 7-2",
+        "tangent": "council margin"
+      },
+      {
+        "category": "infrastructure",
+        "idx": 1,
+        "source_quote": "start next spring",
+        "tangent": "construction timeline"
+      },
+      {
+        "category": "infrastructure",
+        "idx": 2,
+        "source_quote": "new transit line",
+        "tangent": "transit coverage"
+      }
+    ]
+  },
+  "commentBits": "10",
+  "commentEmbedding": {
+    "bitsCount": 2,
+    "bitsUsed": "10",
+    "context": {
+      "author": "op_user",
+      "id": "golden-post-1",
+      "permalink": null,
+      "selftext": "The vote was 7-2. Construction is expected to start next spring.",
+      "title": "City council approves the new transit line"
+    },
+    "insufficientBits": false,
+    "pickedCommentChain": [
+      {
+        "body": "Agreed, though the timeline seems optimistic.",
+        "id": "c1r1",
+        "name": "bob",
+        "parent_id": null,
+        "permalink": null
+      }
+    ],
+    "targetType": "comment"
+  },
+  "compression": {
+    "compressed": "100000011101101101011001010110010101110100001000000110000101110100101000101100001010000010110111010101110011011101010110000101101100001000000111000001101100011000010110001101100101",
+    "compressedLength": 180,
+    "method": "dictionary",
+    "originalLength": 184,
+    "payload": "meet at the usual place",
+    "ratio": 0.9782608695652174,
+    "references": [
+      {
+        "doc": null,
+        "idx": 0,
+        "len": 7
+      },
+      {
+        "doc": 2,
+        "idx": 11,
+        "len": 5
+      },
+      {
+        "doc": null,
+        "idx": 12,
+        "len": 11
+      }
+    ]
+  },
+  "fullEncodedBits": "1000",
+  "remainingBitsUnembedded": 176,
+  "selectionSignature": "1000",
+  "totalBitsEmbedded": 4,
+  "warnings": [
+    "Selection channel did not carry the full compressed payload; remaining bits require multi-post framing or audit-assisted recovery."
+  ]
+}

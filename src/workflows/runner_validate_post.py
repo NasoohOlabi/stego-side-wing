@@ -2,10 +2,130 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, validate_call
+
+from workflows.runner_diff_utils import collect_diff_paths, collect_mismatch_value_snippets
+
+
+def _skipped_step(step: str) -> dict[str, Any]:
+    return {
+        "step": step,
+        "comparison": "skipped",
+        "matches": None,
+        "changed_keys": [],
+        "changed_key_snippets": [],
+        "comparison_note": (
+            "Not compared: a previous stage failed during rerun, so this stage was skipped. "
+            "This is not a baseline-vs-rerun mismatch."
+        ),
+        "error": "Skipped because an upstream stage failed during rerun",
+    }
+
+
+def _failed_step(
+    *,
+    stage: str,
+    step: str,
+    error: str,
+    baseline: dict[str, Any],
+    protocol_report: dict[str, Any] | None,
+    summarize: Callable[[str, dict[str, Any]], dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "step": step,
+        "comparison": "rerun_failed",
+        "matches": None,
+        "changed_keys": [],
+        "changed_key_snippets": [],
+        "comparison_note": (
+            "Live rerun did not finish successfully, so the saved artifact was not compared "
+            "to a fresh rerun. Treat this as an execution/network/provider failure, not a "
+            "protocol drift mismatch."
+        ),
+        "error": error,
+        "baseline_summary": summarize(stage, baseline),
+        "protocol_report": protocol_report,
+    }
+
+
+def _compared_step(
+    *,
+    stage: str,
+    step: str,
+    baseline: dict[str, Any],
+    rerun: dict[str, Any],
+    protocol_report: dict[str, Any] | None,
+    summarize: Callable[[str, dict[str, Any]], dict[str, Any]],
+) -> tuple[dict[str, Any], bool]:
+    matches = baseline == rerun
+    return (
+        {
+            "step": step,
+            "comparison": "match" if matches else "mismatch",
+            "matches": matches,
+            "changed_keys": [] if matches else collect_diff_paths(baseline, rerun),
+            "changed_key_snippets": (
+                [] if matches else collect_mismatch_value_snippets(baseline, rerun)
+            ),
+            "comparison_note": (
+                "Saved artifact and live rerun are byte-for-byte equal."
+                if matches
+                else (
+                    "Mismatch: live rerun produced different JSON than the saved workflow artifact "
+                    "for this stage (see changed_keys and changed_key_snippets). This indicates "
+                    "protocol or data drift, not a failed rerun."
+                )
+            ),
+            "baseline_summary": summarize(stage, baseline),
+            "rerun_summary": summarize(stage, rerun),
+            "protocol_report": protocol_report,
+        },
+        matches,
+    )
+
+
+def build_steps_report(
+    *,
+    stage_steps: Mapping[str, str],
+    baseline: dict[str, dict[str, Any]],
+    rerun_payloads: dict[str, dict[str, Any]],
+    stage_errors: dict[str, str],
+    protocol_reports: dict[str, dict[str, Any]],
+    summarize: Callable[[str, dict[str, Any]], dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    """Compare each completed rerun and classify downstream skipped stages."""
+    report: dict[str, dict[str, Any]] = {}
+    valid = True
+    upstream_failed = False
+    for stage, step in stage_steps.items():
+        if upstream_failed:
+            report[stage] = _skipped_step(step)
+            valid = False
+        elif stage in stage_errors:
+            report[stage] = _failed_step(
+                stage=stage,
+                step=step,
+                error=stage_errors[stage],
+                baseline=baseline[stage],
+                protocol_report=protocol_reports.get(stage),
+                summarize=summarize,
+            )
+            valid = False
+            upstream_failed = True
+        else:
+            report[stage], matches = _compared_step(
+                stage=stage,
+                step=step,
+                baseline=baseline[stage],
+                rerun=rerun_payloads[stage],
+                protocol_report=protocol_reports.get(stage),
+                summarize=summarize,
+            )
+            valid = valid and matches
+    return report, valid
 
 
 def validation_outcome_from_report(

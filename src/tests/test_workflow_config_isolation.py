@@ -31,6 +31,7 @@ def test_content_adapter_reads_url_cache_from_get_config(tmp_path: Path) -> None
     cache_key = deterministic_hash_sha256(normalize_url(url))
     with isolated_workflow_config(cfg):
         cache_file = get_config().url_cache_dir / f"{cache_key}.json"
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(
             json.dumps({"result": {"text": "cached-body", "success": True}}),
             encoding="utf-8",

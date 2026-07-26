@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from app.app_factory import create_app
-from app.routes import api_v1_routes as routes
 
 
 @pytest.fixture
@@ -36,7 +35,9 @@ def _fake_run_research(*, include_breakdown: bool = False, **_kwargs):
 
 
 def test_workflows_run_research_include_breakdown(client, monkeypatch):
-    monkeypatch.setattr(routes.runner, "run_research", _fake_run_research)
+    monkeypatch.setattr(
+        client.application.config["WORKFLOW_RUNNER"], "run_research", _fake_run_research
+    )
     response = client.post(
         "/api/v1/workflows/run",
         json={
@@ -57,7 +58,9 @@ def test_workflows_run_research_include_breakdown(client, monkeypatch):
 
 
 def test_workflows_run_research_default_list_shape(client, monkeypatch):
-    monkeypatch.setattr(routes.runner, "run_research", _fake_run_research)
+    monkeypatch.setattr(
+        client.application.config["WORKFLOW_RUNNER"], "run_research", _fake_run_research
+    )
     response = client.post(
         "/api/v1/workflows/run",
         json={"command": "research", "count": 1, "stream": False},
@@ -67,7 +70,9 @@ def test_workflows_run_research_default_list_shape(client, monkeypatch):
 
 
 def test_workflows_research_include_breakdown(client, monkeypatch):
-    monkeypatch.setattr(routes.runner, "run_research", _fake_run_research)
+    monkeypatch.setattr(
+        client.application.config["WORKFLOW_RUNNER"], "run_research", _fake_run_research
+    )
     response = client.post(
         "/api/v1/workflows/research",
         json={"count": 1, "offset": 0, "stream": False, "include_breakdown": True},

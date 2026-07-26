@@ -14,7 +14,6 @@ def client():
 
 
 def test_double_process_new_post_sync_success(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     expected = {
         "post_id": "abc123",
@@ -26,7 +25,7 @@ def test_double_process_new_post_sync_success(client, monkeypatch):
     }
 
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "run_double_process_new_post",
         lambda on_progress=None, allow_angles_fallback=False, explicit_post_id=None: expected,
     )
@@ -42,14 +41,15 @@ def test_double_process_new_post_sync_success(client, monkeypatch):
 
 
 def test_double_process_new_post_streaming(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     def _run(on_progress=None, allow_angles_fallback=False, explicit_post_id=None):
         if on_progress:
             on_progress("stage_progress", {"stage": "double-process-new-post"})
         return {"post_id": "abc123"}
 
-    monkeypatch.setattr(api_v1_routes.runner, "run_double_process_new_post", _run)
+    monkeypatch.setattr(
+        client.application.config["WORKFLOW_RUNNER"], "run_double_process_new_post", _run
+    )
 
     response = client.post(
         "/api/v1/workflows/double-process-new-post",
@@ -63,7 +63,6 @@ def test_double_process_new_post_streaming(client, monkeypatch):
 
 
 def test_double_process_new_post_passes_explicit_post_id(client, monkeypatch):
-    from app.routes import api_v1_routes
     from app.routes.api_v1 import routes_workflows
 
     monkeypatch.setattr(routes_workflows, "try_read_double_process_claim", lambda: None)
@@ -77,7 +76,9 @@ def test_double_process_new_post_passes_explicit_post_id(client, monkeypatch):
             "source_file": f"{explicit_post_id or 'x'}.json",
         }
 
-    monkeypatch.setattr(api_v1_routes.runner, "run_double_process_new_post", _run)
+    monkeypatch.setattr(
+        client.application.config["WORKFLOW_RUNNER"], "run_double_process_new_post", _run
+    )
 
     response = client.post(
         "/api/v1/workflows/double-process-new-post",
@@ -88,7 +89,6 @@ def test_double_process_new_post_passes_explicit_post_id(client, monkeypatch):
 
 
 def test_double_process_new_post_claim_conflict_returns_400(client, monkeypatch):
-    from app.routes import api_v1_routes
     from app.routes.api_v1 import routes_workflows
 
     monkeypatch.setattr(
@@ -105,7 +105,9 @@ def test_double_process_new_post_claim_conflict_returns_400(client, monkeypatch)
     def _should_not_run(**kwargs):
         raise AssertionError("runner should not run when claim conflicts")
 
-    monkeypatch.setattr(api_v1_routes.runner, "run_double_process_new_post", _should_not_run)
+    monkeypatch.setattr(
+        client.application.config["WORKFLOW_RUNNER"], "run_double_process_new_post", _should_not_run
+    )
 
     response = client.post(
         "/api/v1/workflows/double-process-new-post",
@@ -119,7 +121,6 @@ def test_double_process_new_post_claim_conflict_returns_400(client, monkeypatch)
 
 
 def test_double_process_new_post_stale_claim_cleared_when_idle(client, monkeypatch):
-    from app.routes import api_v1_routes
     from app.routes.api_v1 import routes_workflows
     from workflows import runner_orchestration_utils as rou
 
@@ -140,7 +141,9 @@ def test_double_process_new_post_stale_claim_cleared_when_idle(client, monkeypat
             "source_file": f"{explicit_post_id or 'x'}.json",
         }
 
-    monkeypatch.setattr(api_v1_routes.runner, "run_double_process_new_post", _run)
+    monkeypatch.setattr(
+        client.application.config["WORKFLOW_RUNNER"], "run_double_process_new_post", _run
+    )
 
     response = client.post(
         "/api/v1/workflows/double-process-new-post",

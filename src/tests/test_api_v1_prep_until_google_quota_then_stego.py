@@ -22,7 +22,6 @@ def test_prep_until_google_quota_then_stego_requires_tag(client):
 
 
 def test_prep_until_google_quota_then_stego_sync_success(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     expected = {
         "succeeded": True,
@@ -33,7 +32,7 @@ def test_prep_until_google_quota_then_stego_sync_success(client, monkeypatch):
     }
 
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "run_prep_until_google_quota_then_stego",
         lambda **kwargs: expected,
     )
@@ -50,7 +49,6 @@ def test_prep_until_google_quota_then_stego_sync_success(client, monkeypatch):
 
 
 def test_prep_until_google_quota_then_stego_sync_no_quota_no_stego(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     expected = {
         "succeeded": True,
@@ -61,7 +59,7 @@ def test_prep_until_google_quota_then_stego_sync_no_quota_no_stego(client, monke
     }
 
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "run_prep_until_google_quota_then_stego",
         lambda **kwargs: expected,
     )
@@ -78,7 +76,6 @@ def test_prep_until_google_quota_then_stego_sync_no_quota_no_stego(client, monke
 
 
 def test_prep_until_google_quota_then_stego_streaming(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     def _run(**kwargs):
         on_progress = kwargs.get("on_progress")
@@ -107,7 +104,9 @@ def test_prep_until_google_quota_then_stego_streaming(client, monkeypatch):
             )
         return {"succeeded": True, "tag": "version_42"}
 
-    monkeypatch.setattr(api_v1_routes.runner, "run_prep_until_google_quota_then_stego", _run)
+    monkeypatch.setattr(
+        client.application.config["WORKFLOW_RUNNER"], "run_prep_until_google_quota_then_stego", _run
+    )
 
     response = client.post(
         "/api/v1/workflows/prep-until-google-quota-then-stego",

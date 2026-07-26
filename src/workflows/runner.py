@@ -23,13 +23,12 @@ from workflows.pipelines.gen_search_terms import GenSearchTermsPipeline
 from workflows.pipelines.receiver import ReceiverPipeline
 from workflows.pipelines.research import ResearchPipeline, is_likely_google_quota_error
 from workflows.pipelines.stego import StegoPipeline
-from workflows.runner_diff_utils import collect_diff_paths, collect_mismatch_value_snippets
+from workflows.runner_angles_determinism import evaluate_post as evaluate_angles_determinism_post
 from workflows.runner_orchestration_utils import (
     clear_double_process_claim,
     double_process_cache_base_root,
     is_receiver_data_load_failure,
     isolated_workflow_config_for_side,
-    normalized_angles_from_raw,
     persist_double_process_final_report,
     reconcile_stale_double_process_claim_vs_explicit,
     research_run_with_breakdown,
@@ -39,6 +38,7 @@ from workflows.runner_orchestration_utils import (
     write_double_process_claim,
 )
 from workflows.runner_validate_post import (
+    build_steps_report,
     validation_failure_summary_for_log,
     validation_outcome_from_report,
 )
@@ -869,6 +869,113 @@ class WorkflowRunner:
         )
         return results
 
+    def _run_one_stego(
+        self,
+        *,
+        post_id: str | None,
+        payload: str | None,
+        tag: str | None,
+        list_offset: int,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+    ) -> dict[str, Any]:
+        t0 = time.perf_counter()
+        result = self.stego.process_post(
+            post_id=post_id, payload=payload, tag=tag, list_offset=list_offset
+        )
+        self._emit(
+            on_progress,
+            "stage_done",
+            {
+                "stage": "stego",
+                "succeeded": bool(result.get("succeeded")),
+                "retry_count": int(result.get("retry_count", 0)),
+                "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+            },
+        )
+        return result
+
+    def _run_all_stego(
+        self,
+        *,
+        payload: str | None,
+        tag: str | None,
+        list_offset: int,
+        max_posts: int | None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+    ) -> dict[str, Any]:
+        results: list[dict[str, Any]] = []
+        success_count = failure_count = 0
+        seen_failed_post_ids: set[str] = set()
+        stop_reason = "no_unprocessed_posts"
+        t0 = time.perf_counter()
+        while max_posts is None or len(results) < max_posts:
+            try:
+                result = self.stego.process_post(
+                    post_id=None, payload=payload, tag=tag, list_offset=list_offset
+                )
+            except ValueError as exc:
+                if _is_no_unprocessed_posts(exc):
+                    break
+                raise
+            results.append(result)
+            post = result.get("post")
+            result_post_id = (
+                str(post.get("id"))
+                if isinstance(post, dict) and post.get("id") is not None
+                else None
+            )
+            succeeded = bool(result.get("succeeded"))
+            self._emit(
+                on_progress,
+                "stage_progress",
+                {
+                    "stage": "stego",
+                    "run_all": True,
+                    "processed_count": len(results),
+                    "post_id": result_post_id,
+                    "succeeded": succeeded,
+                    "retry_count": int(result.get("retry_count", 0)),
+                },
+            )
+            if succeeded:
+                success_count += 1
+                continue
+            failure_count += 1
+            if not result_post_id:
+                stop_reason = "failed_post_without_id"
+                break
+            if result_post_id in seen_failed_post_ids:
+                stop_reason = "repeat_failed_post"
+                break
+            seen_failed_post_ids.add(result_post_id)
+        else:
+            stop_reason = "max_posts_reached"
+        result = {
+            "run_all": True,
+            "tag": tag,
+            "list_offset": list_offset,
+            "max_posts": max_posts,
+            "processed_count": len(results),
+            "succeeded_count": success_count,
+            "failed_count": failure_count,
+            "stopped_reason": stop_reason,
+            "results": results,
+        }
+        self._emit(
+            on_progress,
+            "stage_done",
+            {
+                "stage": "stego",
+                "run_all": True,
+                "processed_count": len(results),
+                "succeeded_count": success_count,
+                "failed_count": failure_count,
+                "stopped_reason": stop_reason,
+                "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+            },
+        )
+        return result
+
     def run_stego(
         self,
         post_id: str | None = None,
@@ -897,110 +1004,20 @@ class WorkflowRunner:
             },
         )
         if not run_all:
-            t0 = time.perf_counter()
-            result = self.stego.process_post(
+            return self._run_one_stego(
                 post_id=post_id,
                 payload=payload,
                 tag=tag,
                 list_offset=list_offset,
+                on_progress=on_progress,
             )
-            elapsed_ms = int((time.perf_counter() - t0) * 1000)
-            self._emit(
-                on_progress,
-                "stage_done",
-                {
-                    "stage": "stego",
-                    "succeeded": bool(result.get("succeeded")),
-                    "retry_count": int(result.get("retry_count", 0)),
-                    "elapsed_ms": elapsed_ms,
-                },
-            )
-            return result
-
-        results: list[dict[str, Any]] = []
-        success_count = 0
-        failure_count = 0
-        seen_failed_post_ids: set[str] = set()
-        stop_reason = "no_unprocessed_posts"
-        t_run_all = time.perf_counter()
-
-        while True:
-            if max_posts_cap is not None and len(results) >= max_posts_cap:
-                stop_reason = "max_posts_reached"
-                break
-            try:
-                result = self.stego.process_post(
-                    post_id=None,
-                    payload=payload,
-                    tag=tag,
-                    list_offset=list_offset,
-                )
-            except ValueError as exc:
-                if _is_no_unprocessed_posts(exc):
-                    stop_reason = "no_unprocessed_posts"
-                    break
-                raise
-
-            results.append(result)
-            succeeded = bool(result.get("succeeded"))
-            post_obj = result.get("post")
-            post_id_value = (
-                str(post_obj.get("id"))
-                if isinstance(post_obj, dict) and post_obj.get("id") is not None
-                else None
-            )
-            self._emit(
-                on_progress,
-                "stage_progress",
-                {
-                    "stage": "stego",
-                    "run_all": True,
-                    "processed_count": len(results),
-                    "post_id": post_id_value,
-                    "succeeded": succeeded,
-                    "retry_count": int(result.get("retry_count", 0)),
-                },
-            )
-
-            if succeeded:
-                success_count += 1
-                continue
-
-            failure_count += 1
-            if not post_id_value:
-                stop_reason = "failed_post_without_id"
-                break
-            if post_id_value in seen_failed_post_ids:
-                stop_reason = "repeat_failed_post"
-                break
-            seen_failed_post_ids.add(post_id_value)
-
-        result = {
-            "run_all": True,
-            "tag": tag,
-            "list_offset": list_offset,
-            "max_posts": max_posts_cap,
-            "processed_count": len(results),
-            "succeeded_count": success_count,
-            "failed_count": failure_count,
-            "stopped_reason": stop_reason,
-            "results": results,
-        }
-        run_all_elapsed_ms = int((time.perf_counter() - t_run_all) * 1000)
-        self._emit(
-            on_progress,
-            "stage_done",
-            {
-                "stage": "stego",
-                "run_all": True,
-                "processed_count": len(results),
-                "succeeded_count": success_count,
-                "failed_count": failure_count,
-                "stopped_reason": stop_reason,
-                "elapsed_ms": run_all_elapsed_ms,
-            },
+        return self._run_all_stego(
+            payload=payload,
+            tag=tag,
+            list_offset=list_offset,
+            max_posts=max_posts_cap,
+            on_progress=on_progress,
         )
-        return result
 
     def run_decode(
         self,
@@ -1118,6 +1135,79 @@ class WorkflowRunner:
             payload_transform=payload_transform,
         )
 
+    @staticmethod
+    def _live_sim_exhausted_result(base: Path, skipped: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "succeeded": False,
+            "stage": "exhausted_attempts",
+            "error": "No post succeeded within max_post_attempts",
+            "stego": None,
+            "receiver": None,
+            "simulation": {"root": str(base)},
+            "skipped_posts": skipped,
+        }
+
+    @staticmethod
+    def _live_sim_skip_error(exc: Exception) -> str | None:
+        if is_receiver_data_load_failure(exc):
+            return "receiver_data_load"
+        if is_likely_google_quota_error(exc):
+            return "search_quota"
+        return None
+
+    def _run_live_sim_attempts(
+        self,
+        *,
+        uid: str,
+        post_id: str | None,
+        payload: str | None,
+        tag: str | None,
+        list_offset: int,
+        base: Path,
+        attempts: int,
+        allow_fallback: bool,
+        compressed_full: str | None,
+        max_padding_bits: int,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+    ) -> dict[str, Any]:
+        multi = post_id is None
+        skipped: list[dict[str, Any]] = []
+        for attempt_idx in range(attempts):
+            offset = list_offset + attempt_idx
+            try:
+                result = run_stego_receiver_live_sim_once(
+                    uid=uid,
+                    post_id=post_id,
+                    stego_list_offset=offset if multi else list_offset,
+                    payload=payload,
+                    tag=tag,
+                    base=base,
+                    attempt_idx=attempt_idx,
+                    multi_post=multi,
+                    allow_fallback=allow_fallback,
+                    compressed_full=compressed_full,
+                    max_padding_bits=max_padding_bits,
+                    on_progress=on_progress,
+                )
+            except Exception as exc:
+                stage = self._live_sim_skip_error(exc) if multi else None
+                if stage is None:
+                    raise
+                _LOG.info(
+                    "live_sim_skip_post stage={} attempt={} offset={} err={}",
+                    stage,
+                    attempt_idx,
+                    offset,
+                    str(exc)[:200],
+                )
+                skipped.append({"stage": stage, "list_offset": offset, "error": str(exc)})
+                continue
+            result["skipped_posts"] = list(skipped)
+            if result.get("succeeded") or not multi:
+                return result
+            skipped.append({"stage": "stego", "list_offset": offset, "stego": result.get("stego")})
+        return self._live_sim_exhausted_result(base, skipped)
+
     def run_stego_receiver_live_sim(
         self,
         sender_user_id: str,
@@ -1146,76 +1236,19 @@ class WorkflowRunner:
         base = base.resolve()
         multi = post_id is None
         attempts = max(1, max_post_attempts) if multi else 1
-        skipped: list[dict[str, Any]] = []
-
-        for attempt_idx in range(attempts):
-            stego_off = list_offset + attempt_idx
-            try:
-                one = run_stego_receiver_live_sim_once(
-                    uid=uid,
-                    post_id=post_id,
-                    stego_list_offset=stego_off if multi else list_offset,
-                    payload=payload,
-                    tag=tag,
-                    base=base,
-                    attempt_idx=attempt_idx,
-                    multi_post=multi,
-                    allow_fallback=allow_fallback,
-                    compressed_full=compressed_full,
-                    max_padding_bits=max_padding_bits,
-                    on_progress=on_progress,
-                )
-            except Exception as exc:
-                if multi and (
-                    is_receiver_data_load_failure(exc) or is_likely_google_quota_error(exc)
-                ):
-                    stage = (
-                        "receiver_data_load"
-                        if is_receiver_data_load_failure(exc)
-                        else "search_quota"
-                    )
-                    _LOG.info(
-                        "live_sim_skip_post stage={} attempt={} offset={} err={}",
-                        stage,
-                        attempt_idx,
-                        stego_off,
-                        str(exc)[:200],
-                    )
-                    skipped.append(
-                        {
-                            "stage": stage,
-                            "list_offset": stego_off,
-                            "error": str(exc),
-                        }
-                    )
-                    continue
-                raise
-
-            one["skipped_posts"] = list(skipped)
-            if one.get("succeeded"):
-                return one
-
-            if multi:
-                skipped.append(
-                    {
-                        "stage": "stego",
-                        "list_offset": stego_off,
-                        "stego": one.get("stego"),
-                    }
-                )
-                continue
-
-            return one
-
-        return {
-            "succeeded": False,
-            "stage": "exhausted_attempts",
-            "error": "No post succeeded within max_post_attempts",
-            "stego": None,
-            "receiver": None,
-            "simulation": {"root": str(base)},
-            "skipped_posts": skipped,
-        }
+        return self._run_live_sim_attempts(
+            uid=uid,
+            post_id=post_id,
+            payload=payload,
+            tag=tag,
+            list_offset=list_offset,
+            base=base,
+            attempts=attempts,
+            allow_fallback=allow_fallback,
+            compressed_full=compressed_full,
+            max_padding_bits=max_padding_bits,
+            on_progress=on_progress,
+        )
 
     def run_gen_search_terms(
         self,
@@ -1260,6 +1293,133 @@ class WorkflowRunner:
         )
         return terms
 
+    def _load_validation_baseline(self, post_id: str) -> dict[str, dict[str, Any]]:
+        baseline: dict[str, dict[str, Any]] = {}
+        for stage, step in CONTEXT_STAGE_STEPS.items():
+            path = self._artifact_path(step, post_id)
+            if not path.exists():
+                raise FileNotFoundError(f"Baseline artifact missing for stage '{stage}': {path}")
+            baseline[stage] = self._load_json(path)
+        return baseline
+
+    def _rerun_validation_protocol(
+        self,
+        *,
+        post_id: str,
+        use_terms_cache: bool,
+        persist_terms_cache: bool,
+        use_fetch_cache: bool,
+        allow_angles_fallback: bool,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+    ) -> tuple[
+        dict[str, dict[str, Any]],
+        dict[str, dict[str, Any]],
+        dict[str, str],
+    ]:
+        errors: dict[str, str] = {}
+        payloads: dict[str, dict[str, Any]] = {}
+        reports: dict[str, dict[str, Any]] = {}
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {"stage": "validate-post", "event": "rerun_data_load", "post_id": post_id},
+        )
+        try:
+            preview = self.preview_data_load_post(post_id=post_id, use_cache=use_fetch_cache)
+            payloads["data_load"], reports["data_load"] = preview["post"], preview["report"]
+            if not reports["data_load"].get("fetch_success"):
+                errors["data_load"] = str(
+                    reports["data_load"].get("error") or "data-load fetch failed"
+                )
+        except Exception as exc:
+            errors["data_load"] = str(exc)
+        if "data_load" not in errors:
+            self._emit(
+                on_progress,
+                "stage_progress",
+                {"stage": "validate-post", "event": "rerun_research", "post_id": post_id},
+            )
+            try:
+                preview = self.preview_research_post(
+                    post_id=post_id,
+                    source_post=payloads["data_load"],
+                    use_terms_cache=use_terms_cache,
+                    persist_terms_cache=persist_terms_cache,
+                    use_fetch_cache=use_fetch_cache,
+                )
+                payloads["research"], reports["research"] = preview["post"], preview["report"]
+                if reports["research"].get("error"):
+                    errors["research"] = str(reports["research"]["error"])
+            except Exception as exc:
+                errors["research"] = str(exc)
+        if "data_load" not in errors and "research" not in errors:
+            self._emit(
+                on_progress,
+                "stage_progress",
+                {"stage": "validate-post", "event": "rerun_gen_angles", "post_id": post_id},
+            )
+            try:
+                preview = self.preview_gen_angles_post(
+                    post_id=post_id,
+                    source_post=payloads["research"],
+                    allow_fallback=allow_angles_fallback,
+                )
+                payloads["gen_angles"], reports["gen_angles"] = (
+                    preview["post"],
+                    preview["report"],
+                )
+            except Exception as exc:
+                errors["gen_angles"] = str(exc)
+        return payloads, reports, errors
+
+    def _finalize_validation_report(
+        self,
+        *,
+        post_id: str,
+        valid: bool,
+        steps_report: dict[str, dict[str, Any]],
+        settings: dict[str, bool],
+        log: Any,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+    ) -> dict[str, Any]:
+        outcome, explanation = validation_outcome_from_report(
+            valid=valid,
+            steps_report=steps_report,
+            stage_order=CONTEXT_STAGES,
+        )
+        failure_detail = validation_failure_summary_for_log(
+            validation_outcome=outcome,
+            steps_report=steps_report,
+            stage_order=CONTEXT_STAGES,
+        ).model_dump(exclude_none=True)
+        result = {
+            "post_id": post_id,
+            "valid": valid,
+            "validation_outcome": outcome,
+            "validation_explanation": explanation,
+            "mode": "live_protocol_replay",
+            "settings": settings,
+            "steps": steps_report,
+        }
+        log.bind(
+            validation_outcome=outcome,
+            validation_explanation=explanation,
+            failure_detail=failure_detail,
+        ).info(
+            "validate_post post_id={} valid={} outcome={} use_terms_cache={} use_fetch_cache={}",
+            post_id,
+            valid,
+            outcome,
+            settings["use_terms_cache"],
+            settings["use_fetch_cache"],
+        )
+        self._emit(
+            on_progress,
+            "stage_done",
+            {"stage": "validate-post", "post_id": post_id, "valid": valid},
+        )
+        return result
+
     def validate_post_pipeline(
         self,
         post_id: str,
@@ -1285,80 +1445,21 @@ class WorkflowRunner:
         trace_id = get_trace_id() or str(uuid4())
         log = _LOG.bind(trace_id=trace_id)
 
-        baseline: dict[str, dict[str, Any]] = {}
-        for stage_name, step in CONTEXT_STAGE_STEPS.items():
-            path = self._artifact_path(step, post_id)
-            if not path.exists():
-                raise FileNotFoundError(
-                    f"Baseline artifact missing for stage '{stage_name}': {path}"
-                )
-            baseline[stage_name] = self._load_json(path)
+        baseline = self._load_validation_baseline(post_id)
 
         self._emit(
             on_progress,
             "stage_start",
             {"stage": "validate-post", "post_id": post_id},
         )
-        stage_errors: dict[str, str] = {}
-        rerun_payloads: dict[str, dict[str, Any]] = {}
-        protocol_reports: dict[str, dict[str, Any]] = {}
-
-        self._emit(
-            on_progress,
-            "stage_progress",
-            {"stage": "validate-post", "event": "rerun_data_load", "post_id": post_id},
+        rerun_payloads, protocol_reports, stage_errors = self._rerun_validation_protocol(
+            post_id=post_id,
+            use_terms_cache=use_terms_cache,
+            persist_terms_cache=persist_terms_cache,
+            use_fetch_cache=use_fetch_cache,
+            allow_angles_fallback=allow_angles_fallback,
+            on_progress=on_progress,
         )
-        try:
-            data_load_preview = self.preview_data_load_post(
-                post_id=post_id,
-                use_cache=use_fetch_cache,
-            )
-            rerun_payloads["data_load"] = data_load_preview["post"]
-            protocol_reports["data_load"] = data_load_preview["report"]
-            if not protocol_reports["data_load"].get("fetch_success"):
-                stage_errors["data_load"] = str(
-                    protocol_reports["data_load"].get("error") or "data-load fetch failed"
-                )
-        except Exception as exc:
-            stage_errors["data_load"] = str(exc)
-
-        if "data_load" not in stage_errors:
-            self._emit(
-                on_progress,
-                "stage_progress",
-                {"stage": "validate-post", "event": "rerun_research", "post_id": post_id},
-            )
-            try:
-                research_preview = self.preview_research_post(
-                    post_id=post_id,
-                    source_post=rerun_payloads["data_load"],
-                    use_terms_cache=use_terms_cache,
-                    persist_terms_cache=persist_terms_cache,
-                    use_fetch_cache=use_fetch_cache,
-                )
-                rerun_payloads["research"] = research_preview["post"]
-                protocol_reports["research"] = research_preview["report"]
-                if protocol_reports["research"].get("error"):
-                    stage_errors["research"] = str(protocol_reports["research"]["error"])
-            except Exception as exc:
-                stage_errors["research"] = str(exc)
-
-        if "data_load" not in stage_errors and "research" not in stage_errors:
-            self._emit(
-                on_progress,
-                "stage_progress",
-                {"stage": "validate-post", "event": "rerun_gen_angles", "post_id": post_id},
-            )
-            try:
-                angles_preview = self.preview_gen_angles_post(
-                    post_id=post_id,
-                    source_post=rerun_payloads["research"],
-                    allow_fallback=allow_angles_fallback,
-                )
-                rerun_payloads["gen_angles"] = angles_preview["post"]
-                protocol_reports["gen_angles"] = angles_preview["report"]
-            except Exception as exc:
-                stage_errors["gen_angles"] = str(exc)
 
         if (
             "gen_angles" not in stage_errors
@@ -1373,123 +1474,28 @@ class WorkflowRunner:
                 gen_angles_report=protocol_reports["gen_angles"],
             )
 
-        steps_report: dict[str, dict[str, Any]] = {}
-        valid = True
-        upstream_failed = False
-        for stage_name, step in CONTEXT_STAGE_STEPS.items():
-            if upstream_failed:
-                steps_report[stage_name] = {
-                    "step": step,
-                    "comparison": "skipped",
-                    "matches": None,
-                    "changed_keys": [],
-                    "changed_key_snippets": [],
-                    "comparison_note": (
-                        "Not compared: a previous stage failed during rerun, so this stage was skipped. "
-                        "This is not a baseline-vs-rerun mismatch."
-                    ),
-                    "error": "Skipped because an upstream stage failed during rerun",
-                }
-                valid = False
-                continue
+        steps_report, valid = build_steps_report(
+            stage_steps=CONTEXT_STAGE_STEPS,
+            baseline=baseline,
+            rerun_payloads=rerun_payloads,
+            stage_errors=stage_errors,
+            protocol_reports=protocol_reports,
+            summarize=self._summarize_stage_payload,
+        )
 
-            if stage_name in stage_errors:
-                steps_report[stage_name] = {
-                    "step": step,
-                    "comparison": "rerun_failed",
-                    "matches": None,
-                    "changed_keys": [],
-                    "changed_key_snippets": [],
-                    "comparison_note": (
-                        "Live rerun did not finish successfully, so the saved artifact was not compared "
-                        "to a fresh rerun. Treat this as an execution/network/provider failure, not a "
-                        "protocol drift mismatch."
-                    ),
-                    "error": stage_errors[stage_name],
-                    "baseline_summary": self._summarize_stage_payload(
-                        stage_name, baseline[stage_name]
-                    ),
-                    "protocol_report": protocol_reports.get(stage_name),
-                }
-                valid = False
-                upstream_failed = True
-                continue
-
-            rerun_payload = rerun_payloads[stage_name]
-            baseline_payload = baseline[stage_name]
-            matches = baseline_payload == rerun_payload
-            changed_keys = [] if matches else collect_diff_paths(baseline_payload, rerun_payload)
-            snippets = (
-                [] if matches else collect_mismatch_value_snippets(baseline_payload, rerun_payload)
-            )
-            steps_report[stage_name] = {
-                "step": step,
-                "comparison": "match" if matches else "mismatch",
-                "matches": matches,
-                "changed_keys": changed_keys,
-                "changed_key_snippets": snippets,
-                "comparison_note": (
-                    "Saved artifact and live rerun are byte-for-byte equal."
-                    if matches
-                    else (
-                        "Mismatch: live rerun produced different JSON than the saved workflow artifact "
-                        "for this stage (see changed_keys and changed_key_snippets). This indicates "
-                        "protocol or data drift, not a failed rerun."
-                    )
-                ),
-                "baseline_summary": self._summarize_stage_payload(stage_name, baseline_payload),
-                "rerun_summary": self._summarize_stage_payload(stage_name, rerun_payload),
-                "protocol_report": protocol_reports.get(stage_name),
-            }
-            valid = valid and matches
-
-        outcome, validation_explanation = validation_outcome_from_report(
+        return self._finalize_validation_report(
+            post_id=post_id,
             valid=valid,
             steps_report=steps_report,
-            stage_order=CONTEXT_STAGES,
-        )
-        failure_detail = validation_failure_summary_for_log(
-            validation_outcome=outcome,
-            steps_report=steps_report,
-            stage_order=CONTEXT_STAGES,
-        ).model_dump(exclude_none=True)
-
-        result = {
-            "post_id": post_id,
-            "valid": valid,
-            "validation_outcome": outcome,
-            "validation_explanation": validation_explanation,
-            "mode": "live_protocol_replay",
-            "settings": {
+            settings={
                 "use_terms_cache": use_terms_cache,
                 "persist_terms_cache": persist_terms_cache,
                 "use_fetch_cache": use_fetch_cache,
                 "allow_angles_fallback": allow_angles_fallback,
             },
-            "steps": steps_report,
-        }
-        log.bind(
-            validation_outcome=outcome,
-            validation_explanation=validation_explanation,
-            failure_detail=failure_detail,
-        ).info(
-            "validate_post post_id={} valid={} outcome={} use_terms_cache={} use_fetch_cache={}",
-            post_id,
-            valid,
-            outcome,
-            use_terms_cache,
-            use_fetch_cache,
+            log=log,
+            on_progress=on_progress,
         )
-        self._emit(
-            on_progress,
-            "stage_done",
-            {
-                "stage": "validate-post",
-                "post_id": post_id,
-                "valid": valid,
-            },
-        )
-        return result
 
     def _select_next_new_post(self, offset: int = 0) -> tuple[str, str]:
         """
@@ -1774,6 +1780,168 @@ class WorkflowRunner:
             },
         }
 
+    def _run_double_process_pass(
+        self,
+        *,
+        post_id: str,
+        file_name: str,
+        pass_num: int,
+        cache_mode: str,
+        config: Any,
+        allow_angles_fallback: bool,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+    ) -> dict[str, Any]:
+        start_event = "pass_1_cached_start" if pass_num == 1 else "pass_2_validation_start"
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {
+                "stage": "double-process-new-post",
+                "event": start_event,
+                "post_id": post_id,
+            },
+        )
+        started = time.perf_counter()
+        while True:
+            try:
+                with isolated_workflow_config(config):
+                    result = self._run_three_stage_post(
+                        post_id=post_id,
+                        use_terms_cache=True,
+                        persist_terms_cache=True,
+                        use_fetch_cache=True,
+                        allow_angles_fallback=allow_angles_fallback,
+                        on_progress=on_progress,
+                        pass_num=pass_num,
+                        cache_mode=cache_mode,
+                    )
+                if pass_num == 1:
+                    self._clear_fetch_failure(post_id)
+                break
+            except Exception as exc:
+                if not self._is_data_load_fetch_failure(exc):
+                    raise
+                failure_count = self._record_fetch_failure(post_id)
+                self._emit(
+                    on_progress,
+                    "stage_progress",
+                    {
+                        "stage": "double-process-new-post",
+                        "event": "fetch_failed",
+                        "pass": pass_num,
+                        "post_id": post_id,
+                        "file_name": file_name,
+                        "failure_count": failure_count,
+                    },
+                )
+                _LOG.info(
+                    "double_process_new_post pass {} fetch failed post_id={} attempt={}; retrying",
+                    pass_num,
+                    post_id,
+                    failure_count,
+                )
+                time.sleep(1.0)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        self._emit(
+            on_progress,
+            "stage_progress",
+            {
+                "stage": "double-process-new-post",
+                "event": f"pass_{pass_num}_finished",
+                "post_id": post_id,
+                "pass": pass_num,
+                "cache_mode": cache_mode,
+                "elapsed_ms": elapsed_ms,
+            },
+        )
+        _LOG.bind(post_id=post_id, pass_num=pass_num, elapsed_ms=elapsed_ms).info(
+            "workflow_progress_double_process_pass_finished"
+        )
+        result["settings"]["cache_profile"] = cache_mode
+        result["settings"]["cache_paths"] = workflow_cache_paths(config)
+        return result
+
+    def _double_process_success(
+        self,
+        *,
+        post_id: str,
+        file_name: str,
+        first_pass: dict[str, Any],
+        second_pass: dict[str, Any],
+        report_root: Path,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+    ) -> dict[str, Any]:
+        comparison = {
+            stage: first_pass["steps"][stage]["hash"] == second_pass["steps"][stage]["hash"]
+            for stage in ("data_load", "research", "gen_angles")
+        }
+        result = {
+            "mode": "double_process_new_post",
+            "succeeded": True,
+            "comparison_completed": True,
+            "post_id": post_id,
+            "source_file": file_name,
+            "passes": {
+                "pass_1_cached": first_pass,
+                "pass_2_validation": second_pass,
+            },
+            "stage_hash_match": comparison,
+        }
+        _LOG.info(
+            "double_process_new_post post_id={} data_load_match={} research_match={} gen_angles_match={}",
+            post_id,
+            comparison["data_load"],
+            comparison["research"],
+            comparison["gen_angles"],
+        )
+        self._emit(
+            on_progress,
+            "workflow_done",
+            {
+                "workflow": "double-process-new-post",
+                "post_id": post_id,
+                "succeeded": True,
+                "comparison_completed": True,
+                "stage_hash_match": comparison,
+            },
+        )
+        result["report_path"] = persist_double_process_final_report(report_root, result)
+        return result
+
+    def _double_process_failure(
+        self,
+        *,
+        post_id: str,
+        file_name: str,
+        exc: Exception,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+    ) -> dict[str, Any]:
+        failure: dict[str, Any] = {
+            "mode": "double_process_new_post",
+            "succeeded": False,
+            "comparison_completed": False,
+            "post_id": post_id,
+            "source_file": file_name,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        }
+        failure["report_path"] = persist_double_process_final_report(
+            double_process_cache_base_root(), failure
+        )
+        _LOG.bind(post_id=post_id, file_name=file_name).exception("double_process_new_post_failed")
+        self._emit(
+            on_progress,
+            "workflow_done",
+            {
+                "workflow": "double-process-new-post",
+                "post_id": post_id,
+                "succeeded": False,
+                "comparison_completed": False,
+                "error_type": failure["error_type"],
+            },
+        )
+        return failure
+
     def run_double_process_new_post(
         self,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
@@ -1822,203 +1990,43 @@ class WorkflowRunner:
             pass1_cfg = isolated_workflow_config_for_side(dp_base, "pass_1")
             pass2_cfg = isolated_workflow_config_for_side(dp_base, "pass_2")
 
-            self._emit(
-                on_progress,
-                "stage_progress",
-                {
-                    "stage": "double-process-new-post",
-                    "event": "pass_1_cached_start",
-                    "post_id": post_id,
-                },
+            first_pass = self._run_double_process_pass(
+                post_id=post_id,
+                file_name=file_name,
+                pass_num=1,
+                cache_mode="pass_1",
+                config=pass1_cfg,
+                allow_angles_fallback=allow_angles_fallback,
+                on_progress=on_progress,
             )
-            t_pass1 = time.perf_counter()
-            while True:
-                try:
-                    with isolated_workflow_config(pass1_cfg):
-                        first_pass = self._run_three_stage_post(
-                            post_id=post_id,
-                            use_terms_cache=True,
-                            persist_terms_cache=True,
-                            use_fetch_cache=True,
-                            allow_angles_fallback=allow_angles_fallback,
-                            on_progress=on_progress,
-                            pass_num=1,
-                            cache_mode="pass_1",
-                        )
-                    self._clear_fetch_failure(post_id)
-                    break
-                except Exception as exc:
-                    if not self._is_data_load_fetch_failure(exc):
-                        raise
-                    fail_count = self._record_fetch_failure(post_id)
-                    self._emit(
-                        on_progress,
-                        "stage_progress",
-                        {
-                            "stage": "double-process-new-post",
-                            "event": "fetch_failed",
-                            "pass": 1,
-                            "post_id": post_id,
-                            "file_name": file_name,
-                            "failure_count": fail_count,
-                        },
-                    )
-                    _LOG.info(
-                        "double_process_new_post pass 1 fetch failed post_id={} attempt={}; retrying",
-                        post_id,
-                        fail_count,
-                    )
-                    time.sleep(1.0)
 
-            pass1_total_ms = int((time.perf_counter() - t_pass1) * 1000)
-            self._emit(
-                on_progress,
-                "stage_progress",
-                {
-                    "stage": "double-process-new-post",
-                    "event": "pass_1_finished",
-                    "post_id": post_id,
-                    "pass": 1,
-                    "cache_mode": "pass_1",
-                    "elapsed_ms": pass1_total_ms,
-                },
+            second_pass = self._run_double_process_pass(
+                post_id=post_id,
+                file_name=file_name,
+                pass_num=2,
+                cache_mode="pass_2",
+                config=pass2_cfg,
+                allow_angles_fallback=allow_angles_fallback,
+                on_progress=on_progress,
             )
-            _LOG.bind(post_id=post_id, pass_num=1, elapsed_ms=pass1_total_ms).info(
-                "workflow_progress_double_process_pass_finished"
-            )
-            first_pass["settings"]["cache_profile"] = "pass_1"
-            first_pass["settings"]["cache_paths"] = workflow_cache_paths(pass1_cfg)
 
-            self._emit(
-                on_progress,
-                "stage_progress",
-                {
-                    "stage": "double-process-new-post",
-                    "event": "pass_2_validation_start",
-                    "post_id": post_id,
-                },
+            result = self._double_process_success(
+                post_id=post_id,
+                file_name=file_name,
+                first_pass=first_pass,
+                second_pass=second_pass,
+                report_root=dp_base,
+                on_progress=on_progress,
             )
-            t_pass2 = time.perf_counter()
-            while True:
-                try:
-                    with isolated_workflow_config(pass2_cfg):
-                        second_pass = self._run_three_stage_post(
-                            post_id=post_id,
-                            use_terms_cache=True,
-                            persist_terms_cache=True,
-                            use_fetch_cache=True,
-                            allow_angles_fallback=allow_angles_fallback,
-                            on_progress=on_progress,
-                            pass_num=2,
-                            cache_mode="pass_2",
-                        )
-                    break
-                except Exception as exc:
-                    if not self._is_data_load_fetch_failure(exc):
-                        raise
-                    fail_count = self._record_fetch_failure(post_id)
-                    self._emit(
-                        on_progress,
-                        "stage_progress",
-                        {
-                            "stage": "double-process-new-post",
-                            "event": "fetch_failed",
-                            "pass": 2,
-                            "post_id": post_id,
-                            "file_name": file_name,
-                            "failure_count": fail_count,
-                        },
-                    )
-                    _LOG.info(
-                        "double_process_new_post pass 2 fetch failed post_id={} attempt={}; retrying",
-                        post_id,
-                        fail_count,
-                    )
-                    time.sleep(1.0)
-
-            pass2_total_ms = int((time.perf_counter() - t_pass2) * 1000)
-            self._emit(
-                on_progress,
-                "stage_progress",
-                {
-                    "stage": "double-process-new-post",
-                    "event": "pass_2_finished",
-                    "post_id": post_id,
-                    "pass": 2,
-                    "cache_mode": "pass_2",
-                    "elapsed_ms": pass2_total_ms,
-                },
-            )
-            _LOG.bind(post_id=post_id, pass_num=2, elapsed_ms=pass2_total_ms).info(
-                "workflow_progress_double_process_pass_finished"
-            )
-            second_pass["settings"]["cache_profile"] = "pass_2"
-            second_pass["settings"]["cache_paths"] = workflow_cache_paths(pass2_cfg)
-
-            comparison = {
-                stage: first_pass["steps"][stage]["hash"] == second_pass["steps"][stage]["hash"]
-                for stage in ("data_load", "research", "gen_angles")
-            }
-            result = {
-                "mode": "double_process_new_post",
-                "succeeded": True,
-                "comparison_completed": True,
-                "post_id": post_id,
-                "source_file": file_name,
-                "passes": {
-                    "pass_1_cached": first_pass,
-                    "pass_2_validation": second_pass,
-                },
-                "stage_hash_match": comparison,
-            }
-            _LOG.info(
-                "double_process_new_post post_id={} data_load_match={} research_match={} gen_angles_match={}",
-                post_id,
-                comparison["data_load"],
-                comparison["research"],
-                comparison["gen_angles"],
-            )
-            self._emit(
-                on_progress,
-                "workflow_done",
-                {
-                    "workflow": "double-process-new-post",
-                    "post_id": post_id,
-                    "succeeded": True,
-                    "comparison_completed": True,
-                    "stage_hash_match": comparison,
-                },
-            )
-            result["report_path"] = persist_double_process_final_report(dp_base, result)
             completed = True
             return result
         except Exception as exc:
-            dp_base = double_process_cache_base_root()
-            failure: dict[str, Any] = {
-                "mode": "double_process_new_post",
-                "succeeded": False,
-                "comparison_completed": False,
-                "post_id": post_id,
-                "source_file": file_name,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-            }
-            failure["report_path"] = persist_double_process_final_report(dp_base, failure)
-            _LOG.bind(post_id=post_id, file_name=file_name).exception(
-                "double_process_new_post_failed"
+            return self._double_process_failure(
+                post_id=post_id,
+                file_name=file_name,
+                exc=exc,
+                on_progress=on_progress,
             )
-            self._emit(
-                on_progress,
-                "workflow_done",
-                {
-                    "workflow": "double-process-new-post",
-                    "post_id": post_id,
-                    "succeeded": False,
-                    "comparison_completed": False,
-                    "error_type": failure["error_type"],
-                },
-            )
-            return failure
         finally:
             if completed:
                 clear_double_process_claim()
@@ -2032,202 +2040,33 @@ class WorkflowRunner:
         step: str = ANGLES_STEP,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
-        """
-        Empirically test whether two fresh angle runs (no angles disk cache) match.
-
-        Loads each post from ``step``, builds the same text dictionary as gen_angles,
-        runs ``analyze_angles_from_texts(..., use_cache=False)`` twice, and compares
-        normalized angle lists (same rules as production preview_post).
-        """
-        from content_acquisition.angles.angle_runner import analyze_angles_from_texts
-
+        """Compare two fresh uncached angle generations for each requested post."""
         if not post_ids:
             raise ValueError("post_ids must contain at least one post id")
-
         self._emit(
             on_progress,
             "workflow_start",
-            {
-                "workflow": "batch-angles-determinism",
-                "step": step,
-                "post_count": len(post_ids),
-            },
+            {"workflow": "batch-angles-determinism", "step": step, "post_count": len(post_ids)},
         )
 
-        row_results: list[dict[str, Any]] = []
+        def emit(event: str, payload: dict[str, Any]) -> None:
+            self._emit(on_progress, event, payload)
 
-        for post_id_raw in post_ids:
-            if not post_id_raw.strip():
-                row_results.append(
-                    {
-                        "post_id": post_id_raw,
-                        "error": "invalid post_id",
-                        "identical": None,
-                    }
-                )
-                continue
-
-            stem = Path(post_id_raw.strip()).stem
-            file_name = f"{stem}.json"
-            self._emit(
-                on_progress,
-                "stage_progress",
-                {
-                    "stage": "batch-angles-determinism",
-                    "event": "post_start",
-                    "post_id": stem,
-                    "source_file": file_name,
-                },
+        rows = [
+            evaluate_angles_determinism_post(
+                post_id, step=step, backend=self.backend, gen_angles=self.gen_angles, emit=emit
             )
-
-            try:
-                post = self.backend.get_post_local(file_name, step)
-            except Exception as exc:
-                row_results.append(
-                    {
-                        "post_id": stem,
-                        "source_file": file_name,
-                        "error": str(exc),
-                        "identical": None,
-                    }
-                )
-                self._emit(
-                    on_progress,
-                    "stage_progress",
-                    {
-                        "stage": "batch-angles-determinism",
-                        "event": "post_error",
-                        "post_id": stem,
-                        "error": str(exc),
-                    },
-                )
-                continue
-
-            if hasattr(self.gen_angles, "build_dictionary_bundle_for_post"):
-                dictionary_bundle = self.gen_angles.build_dictionary_bundle_for_post(post)
-                dictionary = list(dictionary_bundle["texts"])
-                dictionary_report = dict(dictionary_bundle["report"])
-            else:
-                dictionary = list(self.gen_angles.build_dictionary_for_post(post))
-                dictionary_report = {
-                    "dictionary_id": stable_hash(dictionary),
-                    "texts_hash": stable_hash(dictionary),
-                    "raw_entry_count": len(dictionary),
-                    "source_counts": {},
-                    "truncated_sources": [],
-                    "capacity_applied": False,
-                }
-            input_hash = dictionary_report["texts_hash"]
-
-            if not dictionary:
-                row = {
-                    "post_id": stem,
-                    "source_file": file_name,
-                    "input_text_blocks": 0,
-                    "input_hash": input_hash,
-                    "dictionary_id": dictionary_report["dictionary_id"],
-                    "dictionary_raw_count": dictionary_report["raw_entry_count"],
-                    "dictionary_source_counts": dictionary_report["source_counts"],
-                    "dictionary_truncated_sources": dictionary_report["truncated_sources"],
-                    "dictionary_capacity_applied": dictionary_report["capacity_applied"],
-                    "error": "no text blocks for angles input",
-                    "identical": None,
-                }
-                row_results.append(row)
-                self._emit(
-                    on_progress,
-                    "stage_progress",
-                    {
-                        "stage": "batch-angles-determinism",
-                        "event": "post_done",
-                        **row,
-                    },
-                )
-                continue
-
-            try:
-                raw_a = analyze_angles_from_texts(dictionary, use_cache=False)
-                raw_b = analyze_angles_from_texts(dictionary, use_cache=False)
-            except Exception as exc:
-                row = {
-                    "post_id": stem,
-                    "source_file": file_name,
-                    "input_text_blocks": len(dictionary),
-                    "input_hash": input_hash,
-                    "dictionary_id": dictionary_report["dictionary_id"],
-                    "dictionary_raw_count": dictionary_report["raw_entry_count"],
-                    "dictionary_source_counts": dictionary_report["source_counts"],
-                    "dictionary_truncated_sources": dictionary_report["truncated_sources"],
-                    "dictionary_capacity_applied": dictionary_report["capacity_applied"],
-                    "error": str(exc),
-                    "identical": None,
-                }
-                row_results.append(row)
-                self._emit(
-                    on_progress,
-                    "stage_progress",
-                    {
-                        "stage": "batch-angles-determinism",
-                        "event": "post_error",
-                        "post_id": stem,
-                        "error": str(exc),
-                    },
-                )
-                continue
-
-            norm_a = normalized_angles_from_raw(raw_a)
-            norm_b = normalized_angles_from_raw(raw_b)
-            h1 = stable_hash(norm_a)
-            h2 = stable_hash(norm_b)
-            identical = norm_a == norm_b
-
-            row = {
-                "post_id": stem,
-                "source_file": file_name,
-                "input_text_blocks": len(dictionary),
-                "input_hash": input_hash,
-                "dictionary_id": dictionary_report["dictionary_id"],
-                "dictionary_raw_count": dictionary_report["raw_entry_count"],
-                "dictionary_source_counts": dictionary_report["source_counts"],
-                "dictionary_truncated_sources": dictionary_report["truncated_sources"],
-                "dictionary_capacity_applied": dictionary_report["capacity_applied"],
-                "run_1_count": len(norm_a),
-                "run_2_count": len(norm_b),
-                "run_1_hash": h1,
-                "run_2_hash": h2,
-                "identical": identical,
-            }
-            row_results.append(row)
-            _LOG.info(
-                "batch_angles_determinism post_id={} identical={} run_1_count={} run_2_count={}",
-                stem,
-                identical,
-                len(norm_a),
-                len(norm_b),
-            )
-            self._emit(
-                on_progress,
-                "stage_progress",
-                {
-                    "stage": "batch-angles-determinism",
-                    "event": "post_done",
-                    "post_id": stem,
-                    "identical": identical,
-                    "run_1_hash": h1,
-                    "run_2_hash": h2,
-                },
-            )
-
-        tested_ok = [r for r in row_results if r.get("error") is None]
-        all_identical = bool(tested_ok) and all(r.get("identical") is True for r in tested_ok)
-
-        out = {
+            for post_id in post_ids
+        ]
+        successful = [row for row in rows if row.get("error") is None]
+        all_identical = bool(successful) and all(row.get("identical") is True for row in successful)
+        result = {
             "mode": "batch_angles_determinism",
             "step": step,
             "posts_requested": len(post_ids),
-            "posts_succeeded": len(tested_ok),
+            "posts_succeeded": len(successful),
             "all_identical": all_identical,
-            "results": row_results,
+            "results": rows,
         }
         self._emit(
             on_progress,
@@ -2235,10 +2074,10 @@ class WorkflowRunner:
             {
                 "workflow": "batch-angles-determinism",
                 "all_identical": all_identical,
-                "posts_succeeded": len(tested_ok),
+                "posts_succeeded": len(successful),
             },
         )
-        return out
+        return result
 
     def _full_pipeline_done(
         self,

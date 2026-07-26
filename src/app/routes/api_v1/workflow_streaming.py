@@ -11,7 +11,7 @@ from collections.abc import Callable
 from contextvars import Token
 from typing import Any
 
-from flask import Response, request, stream_with_context
+from flask import Response, current_app, request, stream_with_context
 
 from app.routes.api_v1.constants import TRUE_VALUES
 from infrastructure.json_logging import bind_trace_id, reset_trace_id
@@ -127,6 +127,7 @@ def stream_workflow(
     events: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
     done = threading.Event()
     run_id = register_run(command, "stream")
+    app = current_app._get_current_object()  # type: ignore[reportAttributeAccessIssue]
 
     def emit(event: str, payload: dict[str, Any]) -> None:
         events.put((event, payload))
@@ -161,7 +162,8 @@ def stream_workflow(
 
             try:
                 emit("status", {"phase": "started", "command": command, "run_id": run_id})
-                result = executor(emit)
+                with app.app_context():
+                    result = executor(emit)
                 elapsed_ms = int((time.perf_counter() - stream_started) * 1000)
                 log.info(
                     "workflow_stream_complete",

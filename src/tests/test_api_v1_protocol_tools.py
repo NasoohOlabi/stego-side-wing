@@ -12,15 +12,14 @@ def client():
 
 
 def test_protocol_gen_terms_endpoint(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     monkeypatch.setattr(
-        api_v1_routes.runner.backend,
+        client.application.config["WORKFLOW_RUNNER"].backend,
         "get_post_local",
         lambda post_filename, step: {"id": "abc", "title": "hello", "url": "https://example.com"},
     )
     monkeypatch.setattr(
-        api_v1_routes.runner.gen_terms,
+        client.application.config["WORKFLOW_RUNNER"].gen_terms,
         "preview_generation",
         lambda **kwargs: {"post_id": kwargs["post_id"], "terms": ["a", "b"], "used_cache": False},
     )
@@ -37,15 +36,14 @@ def test_protocol_gen_terms_endpoint(client, monkeypatch):
 
 
 def test_protocol_gen_terms_endpoint_preserves_failure_metadata(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     monkeypatch.setattr(
-        api_v1_routes.runner.backend,
+        client.application.config["WORKFLOW_RUNNER"].backend,
         "get_post_local",
         lambda post_filename, step: {"id": "abc", "title": "hello", "url": "https://example.com"},
     )
     monkeypatch.setattr(
-        api_v1_routes.runner.gen_terms,
+        client.application.config["WORKFLOW_RUNNER"].gen_terms,
         "preview_generation",
         lambda **kwargs: {
             "post_id": kwargs["post_id"],
@@ -75,10 +73,9 @@ def test_protocol_gen_terms_endpoint_preserves_failure_metadata(client, monkeypa
 
 
 def test_protocol_research_preview_endpoint(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "preview_data_load_post",
         lambda post_id, use_cache=False: {
             "post": {"id": post_id, "selftext": "x"},
@@ -86,7 +83,7 @@ def test_protocol_research_preview_endpoint(client, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "preview_research_post",
         lambda post_id, source_post=None, **kwargs: {
             "post": {"id": post_id, "search_results": ["r1"]},
@@ -106,10 +103,9 @@ def test_protocol_research_preview_endpoint(client, monkeypatch):
 
 
 def test_protocol_angles_preview_endpoint(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "preview_data_load_post",
         lambda post_id, use_cache=False: {
             "post": {"id": post_id, "selftext": "x"},
@@ -117,7 +113,7 @@ def test_protocol_angles_preview_endpoint(client, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "preview_research_post",
         lambda post_id, source_post=None, **kwargs: {
             "post": {"id": post_id, "search_results": ["r1"]},
@@ -125,7 +121,7 @@ def test_protocol_angles_preview_endpoint(client, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "preview_gen_angles_post",
         lambda post_id, source_post=None, **kwargs: {
             "post": {

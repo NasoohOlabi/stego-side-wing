@@ -12,7 +12,6 @@ def client():
 
 
 def test_batch_angles_determinism_sync_success(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     expected = {
         "mode": "batch_angles_determinism",
@@ -23,7 +22,7 @@ def test_batch_angles_determinism_sync_success(client, monkeypatch):
     }
 
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "run_batch_angles_determinism",
         lambda post_ids, step="angles-step", on_progress=None: expected,
     )
@@ -39,14 +38,15 @@ def test_batch_angles_determinism_sync_success(client, monkeypatch):
 
 
 def test_batch_angles_determinism_streaming(client, monkeypatch):
-    from app.routes import api_v1_routes
 
     def _run(post_ids, step="angles-step", on_progress=None):
         if on_progress:
             on_progress("stage_progress", {"stage": "batch-angles-determinism"})
         return {"mode": "batch_angles_determinism", "results": []}
 
-    monkeypatch.setattr(api_v1_routes.runner, "run_batch_angles_determinism", _run)
+    monkeypatch.setattr(
+        client.application.config["WORKFLOW_RUNNER"], "run_batch_angles_determinism", _run
+    )
 
     response = client.post(
         "/api/v1/workflows/batch-angles-determinism",

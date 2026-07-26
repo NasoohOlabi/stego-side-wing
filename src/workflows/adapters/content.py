@@ -223,6 +223,7 @@ class ContentAdapter:
         cache_key = deterministic_hash_sha256(normalized_url)
         cache_file = get_config().url_cache_dir / f"{cache_key}.json"
         try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(api_response, f, indent=2, ensure_ascii=False)
         except Exception:

@@ -60,7 +60,6 @@ class WorkflowConfig:
             self.researched_dir,
             self.angles_dir,
             self.output_results_dir,
-            self.url_cache_dir,
             self.angles_cache_dir,
         ]:
             dir_path.mkdir(parents=True, exist_ok=True)

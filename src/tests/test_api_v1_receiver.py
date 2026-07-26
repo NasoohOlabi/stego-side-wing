@@ -20,10 +20,8 @@ def test_receiver_requires_post_and_sender(client):
 
 
 def test_receiver_sync_ok(client, monkeypatch):
-    from app.routes import api_v1_routes
-
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "run_receiver",
         lambda post, sender_user_id, **kwargs: {
             "succeeded": True,
@@ -47,14 +45,12 @@ def test_receiver_sync_ok(client, monkeypatch):
 
 
 def test_receiver_stream_has_run_id_and_trace(client, monkeypatch):
-    from app.routes import api_v1_routes
-
     def _run(post, sender_user_id, on_progress=None, **kwargs):
         if on_progress:
             on_progress("receiver.locate_comment", {"post_id": "p1"})
         return {"succeeded": True, "payload": "x"}
 
-    monkeypatch.setattr(api_v1_routes.runner, "run_receiver", _run)
+    monkeypatch.setattr(client.application.config["WORKFLOW_RUNNER"], "run_receiver", _run)
 
     r = client.post(
         "/api/v1/workflows/receiver",
@@ -77,8 +73,6 @@ def test_receiver_stream_has_run_id_and_trace(client, monkeypatch):
 
 
 def test_receiver_stream_forwards_structured_log_extras(client, monkeypatch):
-    from app.routes import api_v1_routes
-
     def _run(post, sender_user_id, on_progress=None, **kwargs):
         logging.getLogger("workflows.test").info(
             "structured log from test",
@@ -92,7 +86,7 @@ def test_receiver_stream_forwards_structured_log_extras(client, monkeypatch):
             on_progress("receiver.locate_comment", {"post_id": "p1"})
         return {"succeeded": True, "payload": "x"}
 
-    monkeypatch.setattr(api_v1_routes.runner, "run_receiver", _run)
+    monkeypatch.setattr(client.application.config["WORKFLOW_RUNNER"], "run_receiver", _run)
 
     r = client.post(
         "/api/v1/workflows/receiver",

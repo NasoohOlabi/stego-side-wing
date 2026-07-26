@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 
 from app.app_factory import create_app
-from app.routes.api_v1 import runner_access
 from app.routes.api_v1.constants import WORKFLOW_COMMANDS
 
 # Runner method each command must reach, and a minimal valid body for it.
@@ -59,7 +58,7 @@ def test_each_command_reaches_its_own_runner_method(
     # Record which runner method the route actually invokes.
     for candidate, _ in COMMAND_DISPATCH.values():
         monkeypatch.setattr(
-            runner_access.runner,
+            client.application.config["WORKFLOW_RUNNER"],
             candidate,
             (lambda name: lambda *a, **k: called.append(name) or {"ok": True})(candidate),
             raising=False,

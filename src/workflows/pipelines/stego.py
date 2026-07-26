@@ -2,6 +2,7 @@
 
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -29,21 +30,24 @@ from workflows.pipelines.stego_anchor_text import (
     is_synthetic_anchor_text as _is_synthetic_anchor_text,
 )
 from workflows.pipelines.stego_anchor_text import (
-    with_selected_angle_anchor_variants as _with_selected_angle_anchor_variants,
+    with_selected_angle_anchor_variants as _with_selected_angle_anchor_variants,  # noqa: F401
 )
 from workflows.pipelines.stego_audit import (
     sender_audit_from_post as _sender_audit_from_post,
 )
+from workflows.pipelines.stego_candidates import StegoCandidateEngine
 from workflows.pipelines.stego_comment_tree import (
     append_comment_to_tree as _append_comment_to_tree,
 )
 from workflows.pipelines.stego_comment_tree import clone_post as _clone_post
-from workflows.pipelines.stego_comment_tree import planned_parent_id as _planned_parent_id
-from workflows.pipelines.stego_contextuality import contextuality_gate as _contextuality_gate
+from workflows.pipelines.stego_contextuality import (
+    contextuality_gate as _contextuality_gate,  # noqa: F401
+)
 from workflows.pipelines.stego_extractive import (
     extractive_angle_matches as _extractive_angle_matches,
 )
 from workflows.pipelines.stego_extractive import extractive_stego_text as _extractive_stego_text
+from workflows.pipelines.stego_multiframe import plan_payload_frames as _plan_payload_frames
 from workflows.pipelines.stego_results import angle_summary as _angle_summary
 from workflows.pipelines.stego_results import (
     candidate_validation_audit as _candidate_validation_audit,
@@ -61,12 +65,8 @@ from workflows.utils.output_results_shape import (
     assert_valid_n8n_stego_artifact,
     n8n_save_object_body,
 )
-from workflows.utils.protocol_utils import stable_hash
 from workflows.utils.stego_codec import (
     augment_post as codec_augment_post,
-)
-from workflows.utils.stego_codec import (
-    augment_post_with_recoverable_selection_bits as codec_augment_post_with_recoverable_selection_bits,
 )
 from workflows.utils.stego_codec import (
     augment_post_with_selection_bits as codec_augment_post_with_selection_bits,
@@ -75,15 +75,12 @@ from workflows.utils.stego_codec import (
     build_dictionary as codec_build_dictionary,
 )
 from workflows.utils.stego_codec import (
-    build_multi_frame_stream,
-    comment_selection_index,
+    compress_payload as codec_compress_payload,
+)
+from workflows.utils.stego_codec import (
     flatten_comments,
     from_binary_utf8,
     protect_payload,
-    selection_channel_capacity_report,
-)
-from workflows.utils.stego_codec import (
-    compress_payload as codec_compress_payload,
 )
 from workflows.utils.workflow_llm_prompts import stego_encode_prompts_for_style
 
@@ -334,125 +331,15 @@ class StegoPipeline:
             "payload_bits": compressed_bits,
         }
 
-    def _multi_frame_slots(
-        self,
-        posts: list[dict[str, Any]],
-        max_frames_per_post: int,
-    ) -> list[dict[str, Any]]:
-        if max_frames_per_post <= 0:
-            return []
-        slots: list[dict[str, Any]] = []
-        for post_index, post in enumerate(posts):
-            capacity_report = selection_channel_capacity_report(post)
-            capacity = int(capacity_report["recoverable_capacity_bits"])
-            if capacity <= 0:
-                continue
-            slots.extend(
-                {
-                    "post": post,
-                    "post_index": post_index,
-                    "capacity": capacity,
-                    "capacity_report": capacity_report,
-                }
-                for _ in range(max_frames_per_post)
-            )
-        return slots
-
-    def _planned_frame(
-        self, slot: dict[str, Any], frame_index: int, stream_bits: str, cursor: int
-    ) -> dict[str, Any]:
-        post = slot["post"]
-        capacity = slot["capacity"]
-        frame_bits = stream_bits[cursor : cursor + capacity]
-        augmentation = codec_augment_post_with_recoverable_selection_bits(frame_bits, post)
-        parent_id = _planned_parent_id(augmentation)
-        frame_end = min(cursor + capacity, len(stream_bits))
-        return {
-            "post_index": slot["post_index"],
-            "frame_index": frame_index,
-            "frame_bits": frame_bits,
-            "bit_start": cursor,
-            "bit_end": frame_end,
-            "capacity": capacity,
-            "capacity_report": slot["capacity_report"],
-            "bits_used": frame_end - cursor,
-            "padding_bits": max(0, capacity - (frame_end - cursor)),
-            "post_id": post.get("id"),
-            "parent_id": parent_id,
-            "comment_selection_index": comment_selection_index(post, parent_id),
-            "selected_angle_index": augmentation.get("angleEmbedding", {})
-            .get("selectedAngle", {})
-            .get("idx"),
-            "selection_bits": {
-                "comment_bits": augmentation.get("commentBits", ""),
-                "angle_bits": augmentation.get("angleBits", ""),
-            },
-            "embedding_plan": augmentation,
-        }
-
     def plan_payload_frames(
         self,
         payload: str,
         posts: list[dict[str, Any]],
         max_frames_per_post: int = 3,
     ) -> dict[str, Any]:
-        prepared = self._prepare_multi_frame_payload_bits(payload)
-        payload_bits = prepared["payload_bits"]
-        slots = self._multi_frame_slots(posts, max_frames_per_post)
-        available_capacity = sum(int(slot["capacity"]) for slot in slots)
-        selected: dict[str, Any] | None = None
-        selected_count = 0
-        capacity = 0
-        for count, slot in enumerate(slots, start=1):
-            capacity += int(slot["capacity"])
-            candidate = build_multi_frame_stream(payload_bits, count)
-            if capacity >= len(candidate["stream_bits"]):
-                selected, selected_count = candidate, count
-                break
-        if selected is None:
-            required = len(
-                build_multi_frame_stream(payload_bits, max(1, len(slots)))["stream_bits"]
-            )
-            return {
-                "succeeded": False,
-                "payload": payload,
-                "message_id": stable_hash(prepared["protected_payload"]),
-                "frame_count": 0,
-                "posts_used": 0,
-                "frames": [],
-                "prepared_payload": prepared,
-                "remaining_bits": payload_bits,
-                "available_capacity_bits": available_capacity,
-                "required_capacity_bits": required,
-                "error": "Insufficient multi-frame capacity for compact payload stream",
-            }
-        stream_bits = selected["stream_bits"]
-        frames: list[dict[str, Any]] = []
-        cursor = 0
-        for frame_index, slot in enumerate(slots[:selected_count]):
-            frames.append(self._planned_frame(slot, frame_index, stream_bits, cursor))
-            cursor += int(slot["capacity"])
-        posts_used = len({frame["post_id"] for frame in frames})
-        return {
-            "succeeded": True,
-            "payload": payload,
-            "message_id": stable_hash(prepared["protected_payload"]),
-            "frame_count": len(frames),
-            "posts_used": posts_used,
-            "frames": frames,
-            "recovery_meta": {
-                "payload_transform": prepared["payload_transform"],
-                "protocol": "multi_frame_count_length_v1",
-                "ordering_source": "sender_frame_order",
-                "stream_bit_length": len(stream_bits),
-                "control_bit_length": len(selected["control_bits"]),
-                "payload_bit_length": len(payload_bits),
-                "available_capacity_bits": available_capacity,
-            },
-            "prepared_payload": prepared,
-            "remaining_bits": "",
-            "error": None,
-        }
+        return _plan_payload_frames(
+            payload, self._prepare_multi_frame_payload_bits(payload), posts, max_frames_per_post
+        )
 
     def encode_payload_frames(
         self,
@@ -789,28 +676,26 @@ class StegoPipeline:
         Shared by both encode entry points: the payload path and the diagnostic
         binary-selection-bits path drive generation identically.
         """
-        encoded_results: list[dict[str, Any]] = []
-        for sample_index, sample in enumerate(samples):
-            texts = self._generate_stego_texts(
-                sample=sample,
-                comment_embedding=post_augmentation["commentEmbedding"],
-                prompt_style=prompt_style,
-                sample_index=sample_index,
-                encode_run_id=encode_run_id,
-                llm_timings=llm_timings,
-            )
-            if _eq_angle(sample, selected_angle):
-                texts = _with_selected_angle_anchor_variants(texts, selected_angle)
-            encoded_results.append(
-                {
-                    "category": sample.get("category"),
-                    "source_quote": sample.get("source_quote"),
-                    "tangent": sample.get("tangent"),
-                    "prompt_style": prompt_style,
-                    "texts": texts,
-                }
-            )
-        return encoded_results
+        return self._candidate_engine().generate_groups(
+            samples=samples,
+            post_augmentation=post_augmentation,
+            selected_angle=selected_angle,
+            prompt_style=prompt_style,
+            encode_run_id=encode_run_id,
+            llm_timings=llm_timings,
+        )
+
+    def _candidate_engine(
+        self,
+        *,
+        evaluate_groups: Callable[..., dict[str, Any]] | None = None,
+    ) -> StegoCandidateEngine:
+        return StegoCandidateEngine(
+            generate_texts=self._generate_stego_texts,
+            revise_candidate=self._revise_candidate_text_contextually,
+            decode_candidate=self._decode_candidate,
+            evaluate_groups=evaluate_groups,
+        )
 
     def _sharpen_until_accepted(
         self,
@@ -829,36 +714,15 @@ class StegoPipeline:
         ``None`` if no revision was accepted. Appends the winning group to
         ``encoded_results`` so the caller reports it among the generated samples.
         """
-        for promising_candidate in validation.get("promising_candidates") or []:
-            group_idx = int(promising_candidate.get("group_index", 0))
-            source_group = encoded_results[group_idx]
-            sharpened_text = self._revise_candidate_text_contextually(
-                candidate_text=str(promising_candidate.get("text", "")),
-                sample=source_group,
-                comment_embedding=post_augmentation["commentEmbedding"],
-                encode_run_id=encode_run_id,
-                sample_index=group_idx,
-                llm_timings=llm_timings,
-            )
-            sharpened_group = {
-                "category": source_group.get("category"),
-                "source_quote": source_group.get("source_quote"),
-                "tangent": source_group.get("tangent"),
-                "prompt_style": "natural_sharpened",
-                "texts": [sharpened_text],
-                "generation_mode": "context_sharpen",
-            }
-            sharpen_validation = self._evaluate_candidate_groups(
-                encoded_results=[sharpened_group],
-                tangents_db=tangents_db,
-                selected_angle=selected_angle,
-                post_augmentation=post_augmentation,
-                encode_run_id=encode_run_id,
-            )
-            if sharpen_validation.get("succeeded"):
-                encoded_results.append(sharpened_group)
-                return sharpen_validation.get("accepted_candidate") or {}, sharpen_validation
-        return None
+        return self._candidate_engine(evaluate_groups=self._evaluate_candidate_groups).sharpen(
+            validation=validation,
+            encoded_results=encoded_results,
+            tangents_db=tangents_db,
+            selected_angle=selected_angle,
+            post_augmentation=post_augmentation,
+            encode_run_id=encode_run_id,
+            llm_timings=llm_timings,
+        )
 
     def _decode_candidate(
         self,
@@ -901,135 +765,26 @@ class StegoPipeline:
         encode_run_id: str = "",
     ) -> dict[str, Any]:
         t_eval = time.perf_counter()
-        selected_idx = selected_angle.get("idx")
-        evaluations: list[dict[str, Any]] = []
-        for group_idx, group in enumerate(encoded_results):
-            texts = group.get("texts", [])
-            if not isinstance(texts, list):
-                continue
-            few_shots = [item for idx, item in enumerate(encoded_results) if idx != group_idx]
-            for candidate_idx, text in enumerate(texts):
-                if not _is_non_empty_string(text):
-                    continue
-                strict_decoded_idx, strict_ms = self._decode_candidate(
-                    text=text,
-                    few_shots=few_shots,
-                    tangents_db=tangents_db,
-                    strict_mode=True,
-                )
-                relaxed_decoded_idx = strict_decoded_idx
-                relaxed_ms = strict_ms
-                if strict_decoded_idx is None:
-                    relaxed_decoded_idx, relaxed_ms = self._decode_candidate(
-                        text=text,
-                        few_shots=few_shots,
-                        tangents_db=tangents_db,
-                        strict_mode=False,
-                    )
-                decoded_obj = None
-                if isinstance(relaxed_decoded_idx, int) and 0 <= relaxed_decoded_idx < len(
-                    tangents_db
-                ):
-                    decoded_obj = tangents_db[relaxed_decoded_idx]
-                context_gate = _contextuality_gate(
-                    text,
-                    post_augmentation=post_augmentation,
-                    sample=group,
-                    selected_angle=selected_angle,
-                )
-                exact_strict_match = strict_decoded_idx == selected_idx
-                exact_relaxed_match = relaxed_decoded_idx == selected_idx
-                distance_bucket = self._candidate_distance_bucket(relaxed_decoded_idx, selected_idx)
-                rejection_reasons = list(context_gate["reasons"])
-                if not exact_strict_match:
-                    if distance_bucket == "adjacent":
-                        rejection_reasons.append("adjacent_angle_mismatch")
-                    elif exact_relaxed_match:
-                        rejection_reasons.append("weak_decoder_mode")
-                    else:
-                        rejection_reasons.append("decode_mismatch")
-                evaluations.append(
-                    {
-                        "group_index": group_idx,
-                        "candidate_index": candidate_idx,
-                        "text": text,
-                        "text_preview": _text_preview(text),
-                        "prompt_style": group.get("prompt_style"),
-                        "sample_category": group.get("category"),
-                        "sample_tangent": group.get("tangent"),
-                        "strict_decoded_index": strict_decoded_idx,
-                        "decoded_index": relaxed_decoded_idx,
-                        "decoded_angle": _angle_summary(decoded_obj),
-                        "distance_bucket": distance_bucket,
-                        "strict_decode_ms": strict_ms,
-                        "relaxed_decode_ms": relaxed_ms,
-                        "context_gate": context_gate,
-                        "matches_selected_angle": exact_relaxed_match,
-                        "accepted": exact_strict_match and context_gate["passes"],
-                        "rejection_reasons": rejection_reasons,
-                    }
-                )
-        evaluations.sort(
-            key=lambda item: (
-                0 if item["accepted"] else 1,
-                0 if item["context_gate"]["passes"] else 1,
-                # The deterministic anchor is useful only when no natural
-                # candidate decodes. Prefer an equally decodable model reply
-                # even if its vocabulary is richer than the copied phrase.
-                1 if _is_synthetic_anchor_text(str(item["text"])) else 0,
-                0
-                if item["distance_bucket"] == "exact"
-                else (1 if item["distance_bucket"] == "adjacent" else 2),
-                len(item["context_gate"]["unsupported_tokens"]),
-                item["group_index"],
-                item["candidate_index"],
-            )
+        result = self._candidate_engine().evaluate(
+            encoded_results=encoded_results,
+            tangents_db=tangents_db,
+            selected_angle=selected_angle,
+            post_augmentation=post_augmentation,
         )
-        accepted = next((item for item in evaluations if item["accepted"]), None)
-        promising_candidates = [
-            item
-            for item in evaluations
-            if item["distance_bucket"] in {"exact", "adjacent"} or item["matches_selected_angle"]
-        ][:3]
-        promising = promising_candidates[0] if promising_candidates else None
-        eval_ms = _elapsed_ms_since(t_eval)
+        candidate_count = len(result["validationDetails"]["candidates"])
+        elapsed_ms = _elapsed_ms_since(t_eval)
         _stego_log_bind("timing", timing_phase="cross_validate").bind(
             stego_encode_run_id=encode_run_id,
-            elapsed_ms=eval_ms,
-            candidate_count=len(evaluations),
-            succeeded=accepted is not None,
+            elapsed_ms=elapsed_ms,
+            candidate_count=candidate_count,
+            succeeded=result["succeeded"],
         ).info(
             "elapsed_ms={} candidate_count={} succeeded={}",
-            eval_ms,
-            len(evaluations),
-            accepted is not None,
+            elapsed_ms,
+            candidate_count,
+            result["succeeded"],
         )
-        return {
-            "succeeded": accepted is not None,
-            "accepted_candidate": accepted,
-            "promising_candidate": promising,
-            "promising_candidates": promising_candidates,
-            "validationDetails": {
-                "selected_angle": _angle_summary(selected_angle),
-                "candidates": [
-                    {
-                        "group_index": item["group_index"],
-                        "candidate_index": item["candidate_index"],
-                        "decoded_index": item["decoded_index"],
-                        "strict_decoded_index": item["strict_decoded_index"],
-                        "decoded_angle": item["decoded_angle"],
-                        "distance_bucket": item["distance_bucket"],
-                        "matches_selected_angle": item["matches_selected_angle"],
-                        "accepted": item["accepted"],
-                        "rejection_reasons": item["rejection_reasons"],
-                        "text_preview": item["text_preview"],
-                        "is_synthetic_anchor": _is_synthetic_anchor_text(str(item["text"])),
-                        "context_gate": item["context_gate"],
-                    }
-                    for item in evaluations
-                ],
-            },
-        }
+        return result
 
     def _revise_candidate_text_contextually(
         self,

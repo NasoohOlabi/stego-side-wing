@@ -20,7 +20,6 @@ def client():
 def test_workflows_run_gen_angles_calls_same_runner_as_dedicated_route(
     client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from app.routes import api_v1_routes
 
     calls: list[str] = []
 
@@ -28,7 +27,9 @@ def test_workflows_run_gen_angles_calls_same_runner_as_dedicated_route(
         calls.append("gen_angles")
         return {"ok": True}
 
-    monkeypatch.setattr(api_v1_routes.runner, "run_gen_angles", _run_gen_angles)
+    monkeypatch.setattr(
+        client.application.config["WORKFLOW_RUNNER"], "run_gen_angles", _run_gen_angles
+    )
 
     r1 = client.post(
         "/api/v1/workflows/gen-angles",
@@ -52,7 +53,6 @@ def test_workflows_run_gen_angles_calls_same_runner_as_dedicated_route(
 def test_workflows_run_prep_until_google_quota_then_stego_calls_same_runner_as_dedicated_route(
     client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from app.routes import api_v1_routes
 
     calls: list[str] = []
 
@@ -61,7 +61,7 @@ def test_workflows_run_prep_until_google_quota_then_stego_calls_same_runner_as_d
         return {"succeeded": True, "tag": "version_42"}
 
     monkeypatch.setattr(
-        api_v1_routes.runner,
+        client.application.config["WORKFLOW_RUNNER"],
         "run_prep_until_google_quota_then_stego",
         _run_prep,
     )

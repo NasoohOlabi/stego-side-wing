@@ -3,7 +3,7 @@
 Re-exports symbols that tests monkeypatch on this module (see ``src/tests/test_api_v1_*``).
 """
 
-from app.routes.api_v1 import bp, init_workflow_runner, runner
+from app.routes.api_v1 import bp, init_workflow_runner
 from infrastructure.json_logging import clear_api_log_file, get_api_log_file_stats
 from services.recent_updates_service import get_recent_git_updates
 from services.stego_metrics_service import (
@@ -35,7 +35,6 @@ __all__ = [
     "run_divergence_metrics",
     "run_perplexity_metrics",
     "run_single_post_metrics",
-    "runner",
     "save_workflow_llm_prompts_to_path",
     "workflow_llm_prompts_path",
 ]

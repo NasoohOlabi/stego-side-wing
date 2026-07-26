@@ -10,6 +10,6 @@ from app.routes.api_v1 import (
     routes_workflows,  # noqa: F401
 )
 from app.routes.api_v1.blueprint import bp
-from app.routes.api_v1.runner_access import init_workflow_runner, runner
+from app.routes.api_v1.runner_access import init_workflow_runner
 
-__all__ = ["bp", "init_workflow_runner", "runner"]
+__all__ = ["bp", "init_workflow_runner"]

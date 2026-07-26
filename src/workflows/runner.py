@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict
 
 from infrastructure.json_logging import get_trace_id
 from infrastructure.workflow_run_tracker import has_active_run_for_command
@@ -63,6 +64,24 @@ def _is_no_unprocessed_posts(exc: Exception) -> bool:
     if isinstance(exc, NoUnprocessedPostsError):
         return True
     return "No unprocessed posts found" in str(exc)
+
+
+class _PrepBatchOutcome(BaseModel):
+    """What one prep iteration contributed to the totals, and why the loop should stop.
+
+    ``stop_reason`` is ``None`` while the loop should keep going. ``quota_detected`` is set
+    only by the Google-search-quota stop, because that is the one stop reason that hands off
+    to the stego phase rather than ending the run.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    data_load_processed: int = 0
+    research_processed: int = 0
+    gen_angles_processed: int = 0
+    gen_angles_failed: int = 0
+    stop_reason: str | None = None
+    quota_detected: bool = False
 
 
 class WorkflowRunner:
@@ -330,210 +349,359 @@ class WorkflowRunner:
         )
         return payload_out
 
-    def run_prep_until_google_quota_then_stego(
+    def _emit_prep_stage_done(
         self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
         *,
-        tag: str,
-        batch_count: int = 1,
-        batch_size: int = 5,
-        payload: str | None = None,
-        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+        iteration: int,
+        stage: str,
+        processed_count: int,
+        elapsed_ms: int,
+        failed_count: int | None = None,
+    ) -> None:
+        """Emit one ``prep_stage_done``; ``failed_count`` is only carried by the angles stage."""
+        payload: dict[str, Any] = {
+            "phase": "prep",
+            "iteration": iteration,
+            "stage": stage,
+            "processed_count": processed_count,
+        }
+        if failed_count is not None:
+            payload["failed_count"] = failed_count
+        payload["elapsed_ms"] = elapsed_ms
+        self._emit(on_progress, "prep_stage_done", payload)
+
+    def _emit_prep_batch_summary(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        *,
+        iteration: int,
+        outcome: "_PrepBatchOutcome",
+    ) -> None:
+        """Emit the per-iteration ``prep_batch_summary``. Not emitted when quota stops the batch."""
+        self._emit(
+            on_progress,
+            "prep_batch_summary",
+            {
+                "phase": "prep",
+                "iteration": iteration,
+                "data_load_processed": outcome.data_load_processed,
+                "research_processed": outcome.research_processed,
+                "gen_angles_processed": outcome.gen_angles_processed,
+                "gen_angles_failed": outcome.gen_angles_failed,
+                "prepared_posts_in_batch": outcome.gen_angles_processed,
+                "produced_prepared_posts": outcome.gen_angles_processed > 0,
+            },
+        )
+
+    def _run_prep_data_load_stage(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        *,
+        iteration: int,
+        batch_count: int,
+        batch_size: int,
+    ) -> list[dict[str, Any]]:
+        """Load one batch of posts and report how long it took."""
+        t0 = time.perf_counter()
+        results = self.run_data_load(count=batch_count, offset=0, batch_size=batch_size)
+        self._emit_prep_stage_done(
+            on_progress,
+            iteration=iteration,
+            stage="data-load",
+            processed_count=len(results),
+            elapsed_ms=int((time.perf_counter() - t0) * 1000),
+        )
+        return results
+
+    def _run_prep_research_stage(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        *,
+        iteration: int,
+        posts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]] | None:
+        """Research one batch. Returns ``None`` once Google search quota is hit.
+
+        A quota error is the designed stop signal for the prep phase, so it is reported and
+        swallowed. Every other failure propagates.
+        """
+        t0 = time.perf_counter()
+        try:
+            results = self.research.process_post_objects(
+                posts=posts,
+                step=RESEARCH_STEP,
+                disable_bing_fallback=True,
+            )
+        except Exception as exc:
+            if not is_likely_google_quota_error(exc):
+                raise
+            self._emit(
+                on_progress,
+                "quota_detected",
+                {
+                    "phase": "prep",
+                    "iteration": iteration,
+                    "stage": "research",
+                    "message": str(exc),
+                },
+            )
+            return None
+        self._emit_prep_stage_done(
+            on_progress,
+            iteration=iteration,
+            stage="research",
+            processed_count=len(results),
+            elapsed_ms=int((time.perf_counter() - t0) * 1000),
+        )
+        return results
+
+    def _run_prep_angles_stage(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        *,
+        iteration: int,
+        posts: list[dict[str, Any]],
+    ) -> tuple[int, int]:
+        """Generate angles for one batch; returns ``(processed_count, failed_count)``."""
+        t0 = time.perf_counter()
+        results = self.gen_angles.process_post_objects(posts=posts, step=ANGLES_STEP)
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        summary = dict(getattr(self.gen_angles, "_last_batch_summary", {}) or {})
+        processed = len(results)
+        failed = int(summary.get("failed_count", 0) or 0)
+        self._emit_prep_stage_done(
+            on_progress,
+            iteration=iteration,
+            stage="gen-angles",
+            processed_count=processed,
+            failed_count=failed,
+            elapsed_ms=elapsed_ms,
+        )
+        return processed, failed
+
+    def _run_prep_batch(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        *,
+        iteration: int,
+        batch_count: int,
+        batch_size: int,
+    ) -> "_PrepBatchOutcome":
+        """Run data-load → research → angles once, reporting what it did and whether to stop."""
+        data_results = self._run_prep_data_load_stage(
+            on_progress,
+            iteration=iteration,
+            batch_count=batch_count,
+            batch_size=batch_size,
+        )
+        if not data_results:
+            outcome = _PrepBatchOutcome(stop_reason="no_more_posts")
+            self._emit_prep_batch_summary(on_progress, iteration=iteration, outcome=outcome)
+            return outcome
+
+        research_results = self._run_prep_research_stage(
+            on_progress,
+            iteration=iteration,
+            posts=data_results,
+        )
+        if research_results is None:
+            return _PrepBatchOutcome(
+                data_load_processed=len(data_results),
+                stop_reason="google_search_quota_detected",
+                quota_detected=True,
+            )
+
+        angles_processed, angles_failed = self._run_prep_angles_stage(
+            on_progress,
+            iteration=iteration,
+            posts=research_results,
+        )
+        outcome = _PrepBatchOutcome(
+            data_load_processed=len(data_results),
+            research_processed=len(research_results),
+            gen_angles_processed=angles_processed,
+            gen_angles_failed=angles_failed,
+        )
+        self._emit_prep_batch_summary(on_progress, iteration=iteration, outcome=outcome)
+        return outcome
+
+    def _run_prep_phase(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        *,
+        batch_count: int,
+        batch_size: int,
     ) -> dict[str, Any]:
-        prep_iterations = 0
-        prep_totals = {
+        """Prepare posts batch after batch until the corpus runs dry or Google quota is hit."""
+        totals = {
             "data_load_processed": 0,
             "research_processed": 0,
             "gen_angles_processed": 0,
             "gen_angles_failed": 0,
             "prepared_posts": 0,
         }
-        quota_detected = False
-        prep_stop_reason = "unknown"
-        phase_transition: dict[str, Any] | None = None
-
-        self._emit(
-            on_progress,
-            "workflow_start",
-            {
-                "workflow": "prep-until-google-quota-then-stego",
-                "tag": tag,
-                "payload_provided": bool(payload),
-                "batch_count": batch_count,
-                "batch_size": batch_size,
-            },
-        )
-        self._emit(on_progress, "phase_start", {"phase": "prep"})
-
+        iterations = 0
         while True:
-            prep_iterations += 1
+            iterations += 1
             self._emit(
                 on_progress,
                 "prep_batch_start",
                 {
                     "phase": "prep",
-                    "iteration": prep_iterations,
+                    "iteration": iterations,
                     "batch_count": batch_count,
                     "batch_size": batch_size,
                 },
             )
-
-            t_data = time.perf_counter()
-            data_results = self.run_data_load(
-                count=batch_count,
-                offset=0,
+            outcome = self._run_prep_batch(
+                on_progress,
+                iteration=iterations,
+                batch_count=batch_count,
                 batch_size=batch_size,
             )
-            data_elapsed_ms = int((time.perf_counter() - t_data) * 1000)
-            data_processed = len(data_results)
-            prep_totals["data_load_processed"] += data_processed
-            self._emit(
-                on_progress,
-                "prep_stage_done",
-                {
-                    "phase": "prep",
-                    "iteration": prep_iterations,
-                    "stage": "data-load",
-                    "processed_count": data_processed,
-                    "elapsed_ms": data_elapsed_ms,
-                },
-            )
-            if not data_results:
-                prep_stop_reason = "no_more_posts"
-                self._emit(
-                    on_progress,
-                    "prep_batch_summary",
-                    {
-                        "phase": "prep",
-                        "iteration": prep_iterations,
-                        "data_load_processed": 0,
-                        "research_processed": 0,
-                        "gen_angles_processed": 0,
-                        "gen_angles_failed": 0,
-                        "prepared_posts_in_batch": 0,
-                        "produced_prepared_posts": False,
-                    },
-                )
+            totals["data_load_processed"] += outcome.data_load_processed
+            totals["research_processed"] += outcome.research_processed
+            totals["gen_angles_processed"] += outcome.gen_angles_processed
+            totals["gen_angles_failed"] += outcome.gen_angles_failed
+            totals["prepared_posts"] += outcome.gen_angles_processed
+            if outcome.stop_reason is not None:
                 break
+        return {
+            "iterations": iterations,
+            **totals,
+            "quota_detected": outcome.quota_detected,
+            "stop_reason": outcome.stop_reason,
+        }
 
-            t_research = time.perf_counter()
-            try:
-                research_results = self.research.process_post_objects(
-                    posts=data_results,
-                    step=RESEARCH_STEP,
-                    disable_bing_fallback=True,
+    def _emit_stego_batch_summary(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        *,
+        processed_count: int,
+        succeeded_count: int,
+        failed_count: int,
+        stop_reason: str | None = None,
+    ) -> None:
+        """Emit ``stego_batch_summary``; ``stop_reason`` only appears on the terminal emit."""
+        payload: dict[str, Any] = {
+            "phase": "stego",
+            "processed_count": processed_count,
+            "succeeded_count": succeeded_count,
+            "failed_count": failed_count,
+        }
+        if stop_reason is not None:
+            payload["stop_reason"] = stop_reason
+        self._emit(on_progress, "stego_batch_summary", payload)
+
+    @staticmethod
+    def _stego_result_post_id(result: dict[str, Any]) -> str | None:
+        """Pull the post id out of a stego result, or ``None`` when it carries no usable id."""
+        post_obj = result.get("post")
+        if isinstance(post_obj, dict) and post_obj.get("id") is not None:
+            return str(post_obj.get("id"))
+        return None
+
+    def _next_stego_result(self, *, tag: str, payload: str | None) -> dict[str, Any] | None:
+        """Stego the next prepared post, or ``None`` once the queue is empty.
+
+        An empty queue is the normal end of a drain, so it is translated out of the
+        ``ValueError`` the pipeline raises. Any other ``ValueError`` is a real fault.
+        """
+        try:
+            return self.stego.process_post(
+                post_id=None,
+                payload=payload,
+                tag=tag,
+                list_offset=0,
+            )
+        except ValueError as exc:
+            if _is_no_unprocessed_posts(exc):
+                return None
+            raise
+
+    def _drain_prepared_posts(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        *,
+        tag: str,
+        payload: str | None,
+    ) -> tuple[list[dict[str, Any]], int, int, str]:
+        """Stego every prepared post until the queue empties or a post fails twice.
+
+        Returns ``(results, succeeded_count, failed_count, stop_reason)``.
+        """
+        results: list[dict[str, Any]] = []
+        succeeded_count = 0
+        failed_count = 0
+        seen_failed_post_ids: set[str] = set()
+        while True:
+            result = self._next_stego_result(tag=tag, payload=payload)
+            if result is None:
+                return results, succeeded_count, failed_count, "no_unprocessed_posts"
+
+            results.append(result)
+            post_id_value = self._stego_result_post_id(result)
+            succeeded = bool(result.get("succeeded"))
+            self._emit(
+                on_progress,
+                "stego_post_done",
+                {
+                    "phase": "stego",
+                    "post_id": post_id_value,
+                    "succeeded": succeeded,
+                    "retry_count": int(result.get("retry_count", 0)),
+                    "processed_count": len(results),
+                },
+            )
+
+            if succeeded:
+                succeeded_count += 1
+            else:
+                failed_count += 1
+                stop_reason = self._stego_failure_stop_reason(
+                    post_id_value,
+                    seen_failed_post_ids,
                 )
-            except Exception as exc:
-                if is_likely_google_quota_error(exc):
-                    quota_detected = True
-                    prep_stop_reason = "google_search_quota_detected"
-                    self._emit(
+                if stop_reason is not None:
+                    self._emit_stego_batch_summary(
                         on_progress,
-                        "quota_detected",
-                        {
-                            "phase": "prep",
-                            "iteration": prep_iterations,
-                            "stage": "research",
-                            "message": str(exc),
-                        },
+                        processed_count=len(results),
+                        succeeded_count=succeeded_count,
+                        failed_count=failed_count,
+                        stop_reason=stop_reason,
                     )
-                    break
-                raise
-            research_elapsed_ms = int((time.perf_counter() - t_research) * 1000)
-            research_processed = len(research_results)
-            prep_totals["research_processed"] += research_processed
-            self._emit(
+                    return results, succeeded_count, failed_count, stop_reason
+
+            self._emit_stego_batch_summary(
                 on_progress,
-                "prep_stage_done",
-                {
-                    "phase": "prep",
-                    "iteration": prep_iterations,
-                    "stage": "research",
-                    "processed_count": research_processed,
-                    "elapsed_ms": research_elapsed_ms,
-                },
+                processed_count=len(results),
+                succeeded_count=succeeded_count,
+                failed_count=failed_count,
             )
 
-            t_angles = time.perf_counter()
-            angles_results = self.gen_angles.process_post_objects(
-                posts=research_results,
-                step=ANGLES_STEP,
-            )
-            angles_elapsed_ms = int((time.perf_counter() - t_angles) * 1000)
-            angles_summary = dict(getattr(self.gen_angles, "_last_batch_summary", {}) or {})
-            angles_processed = len(angles_results)
-            angles_failed = int(angles_summary.get("failed_count", 0) or 0)
-            prep_totals["gen_angles_processed"] += angles_processed
-            prep_totals["gen_angles_failed"] += angles_failed
-            prep_totals["prepared_posts"] += angles_processed
-            self._emit(
-                on_progress,
-                "prep_stage_done",
-                {
-                    "phase": "prep",
-                    "iteration": prep_iterations,
-                    "stage": "gen-angles",
-                    "processed_count": angles_processed,
-                    "failed_count": angles_failed,
-                    "elapsed_ms": angles_elapsed_ms,
-                },
-            )
-            produced_prepared_posts = angles_processed > 0
-            self._emit(
-                on_progress,
-                "prep_batch_summary",
-                {
-                    "phase": "prep",
-                    "iteration": prep_iterations,
-                    "data_load_processed": data_processed,
-                    "research_processed": research_processed,
-                    "gen_angles_processed": angles_processed,
-                    "gen_angles_failed": angles_failed,
-                    "prepared_posts_in_batch": angles_processed,
-                    "produced_prepared_posts": produced_prepared_posts,
-                },
-            )
-            if not produced_prepared_posts:
-                continue
+    @staticmethod
+    def _stego_failure_stop_reason(post_id_value: str | None, seen: set[str]) -> str | None:
+        """Decide whether a failed post ends the drain; records the id when it does not.
 
-        prep_result = {
-            "iterations": prep_iterations,
-            "data_load_processed": prep_totals["data_load_processed"],
-            "research_processed": prep_totals["research_processed"],
-            "gen_angles_processed": prep_totals["gen_angles_processed"],
-            "gen_angles_failed": prep_totals["gen_angles_failed"],
-            "prepared_posts": prep_totals["prepared_posts"],
-            "quota_detected": quota_detected,
-            "stop_reason": prep_stop_reason,
-        }
-        self._emit(on_progress, "phase_done", {"phase": "prep", **prep_result})
+        An id-less failure cannot be deduplicated, and a second failure of the same post means
+        the queue is not draining -- either way, continuing would spin.
+        """
+        if not post_id_value:
+            return "failed_post_without_id"
+        if post_id_value in seen:
+            return "repeat_failed_post"
+        seen.add(post_id_value)
+        return None
 
-        if not quota_detected:
-            stego_result = {
-                "run_all": True,
-                "tag": tag,
-                "list_offset": 0,
-                "processed_count": 0,
-                "succeeded_count": 0,
-                "failed_count": 0,
-                "stopped_reason": "not_started_quota_not_detected",
-                "results": [],
-                "elapsed_ms": 0,
-            }
-            return {
-                "succeeded": True,
-                "tag": tag,
-                "prep": prep_result,
-                "stego": stego_result,
-                "phase_transition": None,
-            }
-
-        phase_transition = {
-            "from_phase": "prep",
-            "to_phase": "stego",
-            "reason": "google_search_quota_detected",
-        }
-        self._emit(on_progress, "phase_transition", phase_transition)
-
+    def _run_stego_phase(
+        self,
+        on_progress: Callable[[str, dict[str, Any]], None] | None,
+        *,
+        tag: str,
+        payload: str | None,
+    ) -> dict[str, Any]:
+        """Run the post-quota stego phase over everything prep managed to prepare."""
         self._emit(on_progress, "phase_start", {"phase": "stego"})
         self._emit(
             on_progress,
@@ -544,103 +712,22 @@ class WorkflowRunner:
                 "list_offset": 0,
             },
         )
-
-        stego_results: list[dict[str, Any]] = []
-        succeeded_count = 0
-        failed_count = 0
-        seen_failed_post_ids: set[str] = set()
-        stego_stop_reason = "no_unprocessed_posts"
-        t_stego = time.perf_counter()
-        while True:
-            try:
-                result = self.stego.process_post(
-                    post_id=None,
-                    payload=payload,
-                    tag=tag,
-                    list_offset=0,
-                )
-            except ValueError as exc:
-                if _is_no_unprocessed_posts(exc):
-                    stego_stop_reason = "no_unprocessed_posts"
-                    break
-                raise
-
-            stego_results.append(result)
-            succeeded = bool(result.get("succeeded"))
-            post_obj = result.get("post")
-            post_id_value = (
-                str(post_obj.get("id"))
-                if isinstance(post_obj, dict) and post_obj.get("id") is not None
-                else None
-            )
-            retry_count = int(result.get("retry_count", 0))
-            self._emit(
-                on_progress,
-                "stego_post_done",
-                {
-                    "phase": "stego",
-                    "post_id": post_id_value,
-                    "succeeded": succeeded,
-                    "retry_count": retry_count,
-                    "processed_count": len(stego_results),
-                },
-            )
-
-            if succeeded:
-                succeeded_count += 1
-            else:
-                failed_count += 1
-                if not post_id_value:
-                    stego_stop_reason = "failed_post_without_id"
-                    self._emit(
-                        on_progress,
-                        "stego_batch_summary",
-                        {
-                            "phase": "stego",
-                            "processed_count": len(stego_results),
-                            "succeeded_count": succeeded_count,
-                            "failed_count": failed_count,
-                            "stop_reason": stego_stop_reason,
-                        },
-                    )
-                    break
-                if post_id_value in seen_failed_post_ids:
-                    stego_stop_reason = "repeat_failed_post"
-                    self._emit(
-                        on_progress,
-                        "stego_batch_summary",
-                        {
-                            "phase": "stego",
-                            "processed_count": len(stego_results),
-                            "succeeded_count": succeeded_count,
-                            "failed_count": failed_count,
-                            "stop_reason": stego_stop_reason,
-                        },
-                    )
-                    break
-                seen_failed_post_ids.add(post_id_value)
-
-            self._emit(
-                on_progress,
-                "stego_batch_summary",
-                {
-                    "phase": "stego",
-                    "processed_count": len(stego_results),
-                    "succeeded_count": succeeded_count,
-                    "failed_count": failed_count,
-                },
-            )
-
+        t0 = time.perf_counter()
+        results, succeeded_count, failed_count, stop_reason = self._drain_prepared_posts(
+            on_progress,
+            tag=tag,
+            payload=payload,
+        )
         stego_result = {
             "run_all": True,
             "tag": tag,
             "list_offset": 0,
-            "processed_count": len(stego_results),
+            "processed_count": len(results),
             "succeeded_count": succeeded_count,
             "failed_count": failed_count,
-            "stopped_reason": stego_stop_reason,
-            "results": stego_results,
-            "elapsed_ms": int((time.perf_counter() - t_stego) * 1000),
+            "stopped_reason": stop_reason,
+            "results": results,
+            "elapsed_ms": int((time.perf_counter() - t0) * 1000),
         }
         self._emit(
             on_progress,
@@ -654,11 +741,77 @@ class WorkflowRunner:
                 "elapsed_ms": stego_result["elapsed_ms"],
             },
         )
+        return stego_result
+
+    @staticmethod
+    def _stego_phase_not_started(tag: str) -> dict[str, Any]:
+        """The stego block reported when prep finished without ever hitting quota."""
+        return {
+            "run_all": True,
+            "tag": tag,
+            "list_offset": 0,
+            "processed_count": 0,
+            "succeeded_count": 0,
+            "failed_count": 0,
+            "stopped_reason": "not_started_quota_not_detected",
+            "results": [],
+            "elapsed_ms": 0,
+        }
+
+    def run_prep_until_google_quota_then_stego(
+        self,
+        *,
+        tag: str,
+        batch_count: int = 1,
+        batch_size: int = 5,
+        payload: str | None = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """Prepare posts until Google search quota runs out, then stego what was prepared.
+
+        Quota exhaustion is the intended hand-off signal, not an error: prep uses the search
+        budget, and the stego phase needs none of it. If prep stops for any other reason the
+        stego phase never starts.
+        """
+        self._emit(
+            on_progress,
+            "workflow_start",
+            {
+                "workflow": "prep-until-google-quota-then-stego",
+                "tag": tag,
+                "payload_provided": bool(payload),
+                "batch_count": batch_count,
+                "batch_size": batch_size,
+            },
+        )
+        self._emit(on_progress, "phase_start", {"phase": "prep"})
+        prep_result = self._run_prep_phase(
+            on_progress,
+            batch_count=batch_count,
+            batch_size=batch_size,
+        )
+        self._emit(on_progress, "phase_done", {"phase": "prep", **prep_result})
+
+        if not prep_result["quota_detected"]:
+            return {
+                "succeeded": True,
+                "tag": tag,
+                "prep": prep_result,
+                "stego": self._stego_phase_not_started(tag),
+                "phase_transition": None,
+            }
+
+        phase_transition = {
+            "from_phase": "prep",
+            "to_phase": "stego",
+            "reason": "google_search_quota_detected",
+        }
+        self._emit(on_progress, "phase_transition", phase_transition)
         return {
             "succeeded": True,
             "tag": tag,
             "prep": prep_result,
-            "stego": stego_result,
+            "stego": self._run_stego_phase(on_progress, tag=tag, payload=payload),
             "phase_transition": phase_transition,
         }
 

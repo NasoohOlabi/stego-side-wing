@@ -1,14 +1,12 @@
 """Steganographic encoding pipeline with n8n parity logic."""
 
 import json
-import re
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
-from pydantic import validate_call
 
 from infrastructure.config import (
     get_workflow_encoding_secret,
@@ -27,11 +25,38 @@ from workflows.config import get_config
 from workflows.contracts import PostAugmentation, SenderAudit
 from workflows.errors import NoUnprocessedPostsError
 from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
-from workflows.utils import stego_codec
-from workflows.utils.naturalness_gate import (
-    comment_plausibility_gate,
-    naturalness_gate_enabled,
+from workflows.pipelines.stego_anchor_text import (
+    is_synthetic_anchor_text as _is_synthetic_anchor_text,
 )
+from workflows.pipelines.stego_anchor_text import (
+    with_selected_angle_anchor_variants as _with_selected_angle_anchor_variants,
+)
+from workflows.pipelines.stego_audit import (
+    sender_audit_from_post as _sender_audit_from_post,
+)
+from workflows.pipelines.stego_comment_tree import (
+    append_comment_to_tree as _append_comment_to_tree,
+)
+from workflows.pipelines.stego_comment_tree import clone_post as _clone_post
+from workflows.pipelines.stego_comment_tree import planned_parent_id as _planned_parent_id
+from workflows.pipelines.stego_contextuality import contextuality_gate as _contextuality_gate
+from workflows.pipelines.stego_extractive import (
+    extractive_angle_matches as _extractive_angle_matches,
+)
+from workflows.pipelines.stego_extractive import extractive_stego_text as _extractive_stego_text
+from workflows.pipelines.stego_results import angle_summary as _angle_summary
+from workflows.pipelines.stego_results import (
+    candidate_validation_audit as _candidate_validation_audit,
+)
+from workflows.pipelines.stego_results import decoded_indices as _decoded_indices
+from workflows.pipelines.stego_results import (
+    diagnostic_bits_fields as _diagnostic_bits_fields,
+)
+from workflows.pipelines.stego_results import encode_exception_result as _encode_exception_result
+from workflows.pipelines.stego_results import encode_failure_result as _encode_failure_result
+from workflows.pipelines.stego_results import encode_success_result as _encode_success_result
+from workflows.utils import stego_codec
+from workflows.utils.naturalness_gate import naturalness_gate_enabled
 from workflows.utils.output_results_shape import (
     assert_valid_n8n_stego_artifact,
     n8n_save_object_body,
@@ -48,9 +73,6 @@ from workflows.utils.stego_codec import (
 )
 from workflows.utils.stego_codec import (
     build_dictionary as codec_build_dictionary,
-)
-from workflows.utils.stego_codec import (
-    build_dictionary_report as codec_build_dictionary_report,
 )
 from workflows.utils.stego_codec import (
     build_multi_frame_stream,
@@ -76,80 +98,6 @@ STEGO_WORKFLOW_ID = "27rZrYtywu3k9e7Q"
 STEGO_DEFAULT_OFFSET = 1
 STEGO_LLM_MODEL = DECODE_LLM_MODEL
 _STEGO_LOG = logger.bind(component="StegoPipeline")
-_STOPWORDS = {
-    "a",
-    "about",
-    "all",
-    "an",
-    "and",
-    "are",
-    "as",
-    "at",
-    "be",
-    "because",
-    "but",
-    "by",
-    "for",
-    "from",
-    "get",
-    "gets",
-    "got",
-    "had",
-    "has",
-    "have",
-    "he",
-    "her",
-    "him",
-    "his",
-    "i",
-    "if",
-    "in",
-    "into",
-    "is",
-    "it",
-    "its",
-    "just",
-    "like",
-    "me",
-    "more",
-    "my",
-    "no",
-    "not",
-    "of",
-    "on",
-    "or",
-    "our",
-    "out",
-    "she",
-    "so",
-    "that",
-    "the",
-    "their",
-    "them",
-    "there",
-    "they",
-    "this",
-    "to",
-    "too",
-    "was",
-    "we",
-    "were",
-    "what",
-    "when",
-    "with",
-    "would",
-    "you",
-    "your",
-}
-_GENERIC_EDITORIAL_PATTERNS = (
-    "the bigger issue",
-    "the lesson here",
-    "at the end of the day",
-    "what keeps sticking with me",
-    "zoom out",
-    "this is really about",
-    "wake up call",
-)
 
 
 def _elapsed_ms_since(t0: float) -> int:
@@ -217,18 +165,6 @@ def _eq_angle(lhs: dict[str, Any] | None, rhs: dict[str, Any] | None) -> bool:
     )
 
 
-def _angle_summary(angle: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(angle, dict):
-        return None
-    return {
-        "idx": angle.get("idx"),
-        "category": angle.get("category"),
-        "tangent": angle.get("tangent"),
-        "source_quote": angle.get("source_quote"),
-        "source_document": angle.get("source_document"),
-    }
-
-
 def _anchor_comment_body(post_augmentation: PostAugmentation | None) -> str:
     if not isinstance(post_augmentation, dict):
         return ""
@@ -261,436 +197,6 @@ def _prompt_style_for_attempt(configured_style: str, retry_count: int) -> str:
     if configured_style == "natural_then_anchor_retry":
         return "guided_natural" if retry_count == 0 else "anchored"
     return configured_style
-
-
-@validate_call
-def _decoded_indices(validation_details: dict[str, Any]) -> list[Any]:
-    """Decoded angle index per evaluated candidate, in evaluation order."""
-    candidates = validation_details.get("candidates", [])
-    if not isinstance(candidates, list):
-        return []
-    return [item.get("decoded_index") for item in candidates]
-
-
-@validate_call
-def _candidate_validation_audit(
-    accepted_candidate: dict[str, Any], *, acceptance_source: str
-) -> dict[str, Any]:
-    """Sender-audit record describing which candidate was accepted and how."""
-    return {
-        "acceptance_source": acceptance_source,
-        "group_index": accepted_candidate.get("group_index"),
-        "candidate_index": accepted_candidate.get("candidate_index"),
-        "decoded_index": accepted_candidate.get("decoded_index"),
-        "strict_decoded_index": accepted_candidate.get("strict_decoded_index"),
-    }
-
-
-def _encode_success_result(
-    *,
-    stego_text: str,
-    post: dict[str, Any],
-    selected_angle: dict[str, Any],
-    selected_idx: Any,
-    retry_count: int,
-    tag: str | None,
-    sender_audit: SenderAudit,
-    post_augmentation: PostAugmentation,
-    encoded_results: list[dict[str, Any]],
-    validation_details: dict[str, Any] | None,
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Successful encode artifact, shared by the payload and diagnostic entry points.
-
-    ``extra`` carries the diagnostic-only fields the binary-selection-bits path adds.
-    """
-    result: dict[str, Any] = {
-        "stego_text": stego_text,
-        "post": post,
-        "selected_angle": selected_angle,
-        "angle_index": selected_idx,
-        "succeeded": True,
-        "retry_count": retry_count,
-        "tag": tag,
-        "sender_audit": sender_audit,
-        "embedding": post_augmentation,
-        "encoded_samples": encoded_results,
-        "decoded_indices": _decoded_indices(validation_details or {}),
-        "validation_details": validation_details,
-    }
-    if extra:
-        result.update(extra)
-    return result
-
-
-def _encode_failure_result(
-    *,
-    stego_text: str,
-    post: dict[str, Any],
-    selected_angle: dict[str, Any],
-    selected_idx: Any,
-    retry_count: int,
-    tag: str | None,
-    sender_audit: SenderAudit,
-    post_augmentation: PostAugmentation,
-    encoded_results: list[dict[str, Any]],
-    validation_details: dict[str, Any],
-    error_details: dict[str, Any],
-    breakdown: dict[str, Any] | None = None,
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Result for an encode whose retries were exhausted without a decodable candidate.
-
-    Both entry points report the same ``error``; they differ only in the reason text they
-    put in ``error_details`` and in the trailing fields they add. Key insertion order
-    mirrors what each path emitted before, so serialized artifacts are unchanged.
-    """
-    result: dict[str, Any] = {
-        "stego_text": stego_text,
-        "post": post,
-        "selected_angle": selected_angle,
-        "angle_index": selected_idx,
-        "succeeded": False,
-        "retry_count": retry_count,
-        "tag": tag,
-        "sender_audit": sender_audit,
-        "error": "Decoding validation failed",
-        "error_details": error_details,
-    }
-    if breakdown is not None:
-        result["breakdown"] = breakdown
-    result["validation_details"] = validation_details
-    result["embedding"] = post_augmentation
-    result["encoded_samples"] = encoded_results
-    if extra:
-        result.update(extra)
-    return result
-
-
-def _encode_exception_result(
-    *,
-    exc: Exception,
-    post: dict[str, Any],
-    selected_angle: dict[str, Any],
-    selected_idx: Any,
-    retry_count: int,
-    tag: str | None,
-    sender_audit: SenderAudit,
-    post_augmentation: PostAugmentation,
-    reason: str,
-    breakdown: dict[str, Any] | None = None,
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Result for an encode attempt that raised after its retries were exhausted."""
-    result: dict[str, Any] = {
-        "stego_text": "",
-        "post": post,
-        "selected_angle": selected_angle,
-        "angle_index": selected_idx,
-        "succeeded": False,
-        "retry_count": retry_count,
-        "tag": tag,
-        "sender_audit": sender_audit,
-        "error": str(exc),
-        "error_details": {
-            "reason": reason,
-            "exception_type": type(exc).__name__,
-            "exception_message": str(exc),
-            "selected_angle": _angle_summary(selected_angle),
-        },
-    }
-    if breakdown is not None:
-        result["breakdown"] = breakdown
-    result["embedding"] = post_augmentation
-    if extra:
-        result.update(extra)
-    return result
-
-
-def _diagnostic_bits_fields(bits: str, post_augmentation: PostAugmentation) -> dict[str, Any]:
-    """Extra result fields carried only by the binary-selection-bits diagnostic path."""
-    return {
-        "binary_selection_bits": bits,
-        "comment_bits": post_augmentation.get("commentBits", ""),
-        "angle_bits": post_augmentation.get("angleBits", ""),
-        "compression_skipped": True,
-        "payload_transform_skipped": True,
-    }
-
-
-def _tokenize_content_words(text: str) -> list[str]:
-    return [
-        token
-        for token in re.findall(r"[A-Za-z][A-Za-z0-9'-]+", text.lower())
-        if len(token) >= 4 and token not in _STOPWORDS
-    ]
-
-
-def _context_support_texts(
-    post_augmentation: PostAugmentation | None,
-    sample: dict[str, Any] | None,
-    selected_angle: dict[str, Any],
-) -> list[str]:
-    texts: list[str] = []
-    if isinstance(sample, dict):
-        for key in ("best_match", "source_quote", "tangent", "category"):
-            value = sample.get(key)
-            if isinstance(value, str) and value.strip():
-                texts.append(value)
-    for key in ("source_quote", "tangent", "category"):
-        value = selected_angle.get(key)
-        if isinstance(value, str) and value.strip():
-            texts.append(value)
-    if isinstance(post_augmentation, dict):
-        comment_embedding = post_augmentation.get("commentEmbedding", {})
-        context = comment_embedding.get("context", {})
-        for key in ("title", "selftext"):
-            value = context.get(key)
-            if isinstance(value, str) and value.strip():
-                texts.append(value)
-        picked_chain = comment_embedding.get("pickedCommentChain", [])
-        if isinstance(picked_chain, list):
-            for comment in picked_chain:
-                if not isinstance(comment, dict):
-                    continue
-                body = comment.get("body")
-                if isinstance(body, str) and body.strip():
-                    texts.append(body)
-    return texts
-
-
-def _contextuality_gate(
-    text: str,
-    *,
-    post_augmentation: PostAugmentation | None,
-    sample: dict[str, Any] | None,
-    selected_angle: dict[str, Any],
-) -> dict[str, Any]:
-    normalized = " ".join(text.split()).lower()
-    support_vocab = set(
-        _tokenize_content_words(
-            " ".join(_context_support_texts(post_augmentation, sample, selected_angle))
-        )
-    )
-    candidate_tokens = _tokenize_content_words(text)
-    overlap = [token for token in candidate_tokens if token in support_vocab]
-    unsupported = [token for token in candidate_tokens if token not in support_vocab]
-    generic_patterns = [pattern for pattern in _GENERIC_EDITORIAL_PATTERNS if pattern in normalized]
-    has_supported_phrase = False
-    for value in (
-        selected_angle.get("source_quote"),
-        selected_angle.get("tangent"),
-        sample.get("best_match") if isinstance(sample, dict) else None,
-    ):
-        if isinstance(value, str):
-            phrase_tokens = _tokenize_content_words(value)
-            if phrase_tokens and any(token in set(overlap) for token in phrase_tokens):
-                has_supported_phrase = True
-                break
-    reasons: list[str] = []
-    if generic_patterns:
-        reasons.append("generic_editorial_tone")
-    if not overlap:
-        reasons.append("no_context_overlap")
-    if len(unsupported) >= 5 and len(overlap) < 2:
-        reasons.append("unsupported_topic_drift")
-    if not has_supported_phrase and len(overlap) < 2:
-        reasons.append("weak_selected_angle_grounding")
-    plausibility = {"enabled": False, "passes": True, "reasons": []}
-    if naturalness_gate_enabled():
-        plausibility = {"enabled": True, **comment_plausibility_gate(text)}
-        plausibility_reasons = plausibility.get("reasons", [])
-        if isinstance(plausibility_reasons, list):
-            reasons.extend(str(reason) for reason in plausibility_reasons)
-    return {
-        "passes": not reasons,
-        "overlap_tokens": overlap[:12],
-        "unsupported_tokens": unsupported[:12],
-        "generic_patterns": generic_patterns,
-        "plausibility": plausibility,
-        "reasons": reasons,
-    }
-
-
-def _clean_angle_anchor_text(value: Any) -> str:
-    if not isinstance(value, str):
-        return ""
-    text = " ".join(value.split())
-    if not text:
-        return ""
-    json_values = re.findall(
-        r'"(?:title|summary|source_quote|tangent)"\s*:\s*"([^"]+)"',
-        text,
-    )
-    if json_values:
-        titles = re.findall(r'"title"\s*:\s*"([^"]+)"', text)
-        text = titles[0] if titles else max(json_values, key=len)
-    text = re.sub(r"[\[\]{}]", " ", text)
-    text = re.sub(r'"\s*,?\s*"(?:summary|title|error|key_points)"\s*:\s*', " ", text)
-    text = " ".join(text.strip(" ,.:;\"'").split())
-    if len(text) > 180:
-        text = text[:180].rsplit(" ", 1)[0].strip()
-    return text
-
-
-def _selected_angle_anchor_phrase(selected_angle: dict[str, Any]) -> str:
-    source_quote = _clean_angle_anchor_text(selected_angle.get("source_quote"))
-    if len(_tokenize_content_words(source_quote)) >= 2:
-        return source_quote
-    tangent = _clean_angle_anchor_text(selected_angle.get("tangent"))
-    if len(_tokenize_content_words(tangent)) >= 2:
-        return tangent
-    return ""
-
-
-def _with_selected_angle_anchor_variants(
-    texts: list[str],
-    selected_angle: dict[str, Any],
-) -> list[str]:
-    phrase = _selected_angle_anchor_phrase(selected_angle)
-    if not phrase:
-        return texts
-    phrase_tokens = set(_tokenize_content_words(phrase))
-    if not phrase_tokens:
-        return texts
-    for text in texts:
-        if len(phrase_tokens & set(_tokenize_content_words(text))) >= min(3, len(phrase_tokens)):
-            return texts
-    if len(phrase.split()) <= 8:
-        anchored = f"I can see why people keep coming back to {phrase}."
-    else:
-        anchored = f"{phrase}. I can see why people keep coming back to that point."
-    anchored = " ".join(anchored.split())
-    if len(anchored) > 260:
-        anchored = anchored[:260].rsplit(" ", 1)[0].strip()
-    if anchored and anchored not in texts:
-        return [*texts, anchored]
-    return texts
-
-
-def _is_synthetic_anchor_text(text: str) -> bool:
-    """Identify the deterministic decode-assistance fallback, not a model reply."""
-    normalized = " ".join(text.split()).lower()
-    return "i can see why people keep coming back to" in normalized
-
-
-def _extractive_candidate_texts(post: dict[str, Any]) -> list[str]:
-    bodies = []
-    for comment in flatten_comments(post.get("comments", [])):
-        body = comment.get("body")
-        if isinstance(body, str) and body.strip():
-            bodies.append(body.strip())
-    selftext = post.get("selftext", "")
-    if isinstance(selftext, str) and selftext.strip():
-        bodies.append(selftext.strip())
-    return bodies
-
-
-def _extractive_stego_text(post: dict[str, Any], selected_angle: dict[str, Any]) -> str:
-    candidates = _extractive_candidate_texts(post)
-    for candidate in candidates:
-        if _extractive_angle_matches(candidate, selected_angle):
-            return "\n".join(candidates)
-    return ""
-
-
-def _extractive_angle_matches(candidate_text: str, selected_angle: dict[str, Any]) -> bool:
-    for key in ("source_quote", "tangent"):
-        value = selected_angle.get(key)
-        if isinstance(value, str) and value.strip() and value.strip() in candidate_text:
-            return True
-    return False
-
-
-def _tangent_db_report_field(post: dict[str, Any]) -> dict[str, Any]:
-    """Echo the persisted v1 tangent-DB build report into the audit when the post carries one."""
-    report = post.get("tangent_db_report")
-    return {"tangent_db_report": report} if isinstance(report, dict) else {}
-
-
-def _sender_audit_from_post(
-    post: dict[str, Any], post_augmentation: PostAugmentation
-) -> SenderAudit:
-    dictionary_report = codec_build_dictionary_report(post)
-    tangents_db = list(post_augmentation.get("angleEmbedding", {}).get("TangentsDB", []))
-    search_results = list(post.get("search_results", []) or [])
-    selected_urls_hashes = [stable_hash(item) for item in search_results]
-    compression = dict(post_augmentation.get("compression", {}))
-    # A dict literal with a trailing ``**`` spread can't be checked structurally against a
-    # TypedDict, so pyright falls back to inferring a plain dict here -- cast documents the
-    # contract without changing how the dict is actually built.
-    return cast(
-        SenderAudit,
-        {
-            "dictionary_id": dictionary_report["dictionary_id"],
-            "dictionary_hash": dictionary_report["texts_hash"],
-            "dictionary_count": dictionary_report["entry_count"],
-            "angles_hash": stable_hash(tangents_db),
-            "angles_count": len(tangents_db),
-            "selected_url_hashes": selected_urls_hashes,
-            "selected_urls_hash": stable_hash(selected_urls_hashes),
-            "selected_angle_index": post_augmentation.get("angleEmbedding", {})
-            .get("selectedAngle", {})
-            .get("idx"),
-            "compression": {
-                "method": compression.get("method"),
-                "compressed": compression.get("compressed"),
-                "compressed_length": compression.get("compressedLength"),
-                "original_length": compression.get("originalLength"),
-                "compressed_hash": stable_hash(compression.get("compressed", "")),
-            },
-            "selection_signature": post_augmentation.get("selectionSignature"),
-            "comment_bits": post_augmentation.get("commentBits"),
-            "angle_bits": post_augmentation.get("angleBits"),
-            **_tangent_db_report_field(post),
-        },
-    )
-
-
-def _clone_post(post: dict[str, Any]) -> dict[str, Any]:
-    return json.loads(json.dumps(post))
-
-
-def _append_comment_to_tree(
-    comments: list[dict[str, Any]],
-    comment: dict[str, Any],
-    parent_id: str | None,
-) -> list[dict[str, Any]]:
-    updated, _ = _append_comment_to_tree_with_flag(comments, comment, parent_id)
-    return updated
-
-
-def _append_comment_to_tree_with_flag(
-    comments: list[dict[str, Any]],
-    comment: dict[str, Any],
-    parent_id: str | None,
-) -> tuple[list[dict[str, Any]], bool]:
-    if not parent_id:
-        return [*comments, comment], True
-    out: list[dict[str, Any]] = []
-    inserted = False
-    for raw in comments:
-        node = dict(raw)
-        replies = list(node.get("replies", []) or [])
-        current_id = str(node.get("id", ""))
-        if current_id == parent_id or current_id.split("_", 1)[-1] == parent_id:
-            node["replies"] = [*replies, comment]
-            inserted = True
-        else:
-            node["replies"], child_inserted = _append_comment_to_tree_with_flag(
-                replies, comment, parent_id
-            )
-            inserted = inserted or child_inserted
-        out.append(node)
-    return (out, True) if inserted else (list(comments), False)
-
-
-def _planned_parent_id(post_augmentation: PostAugmentation) -> str | None:
-    chain = post_augmentation.get("commentEmbedding", {}).get("pickedCommentChain", [])
-    if not isinstance(chain, list) or not chain:
-        return None
-    parent_id = chain[-1].get("id")
-    return str(parent_id) if isinstance(parent_id, str) and parent_id else None
 
 
 def _log_encode_timing_complete(

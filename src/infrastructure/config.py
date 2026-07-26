@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import dotenv
+from pydantic import BaseModel, ConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 ENV_FILE_PATH = REPO_ROOT / ".env"
@@ -146,63 +147,91 @@ DEFAULT_WORKFLOW_CRAWL4AI_PAGE_TIMEOUT_MS = 45_000
 WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED = 10_000_000
 DEFAULT_WORKFLOW_CAPACITY_LIMITS_ENABLED = False
 
-WORKFLOW_ENCODING_PROFILES: dict[WorkflowEncodingProfile, dict[str, object]] = {
-    "balanced": {
-        "capacity_profile": "mid",
-        "capacity_limits_enabled": False,
-        "angles_generation_mode": "model",
-        "stego_generation_mode": "model",
-        "payload_transform": "plain",
-        "stego_prompt_style": "natural",
-        "stego_sample_angle_count": 1,
-        "stego_default_max_retries": 6,
-        "decode_semantic_top_n": 20,
-        "decode_llm_max_tries": 5,
-        "stego_llm_temperature": 0.7,
-        "decode_strict_default": False,
-    },
-    "robustness": {
-        "capacity_profile": "mid",
-        "capacity_limits_enabled": True,
-        "angles_generation_mode": "extractive_zero_kld",
-        "stego_generation_mode": "extractive_zero_kld",
-        "payload_transform": "plain",
-        "stego_prompt_style": "anchored",
-        "stego_sample_angle_count": 6,
-        "stego_default_max_retries": 8,
-        "decode_semantic_top_n": 40,
-        "decode_llm_max_tries": 7,
-        "stego_llm_temperature": 0.45,
-        "decode_strict_default": False,
-    },
-    "capacity": {
-        "capacity_profile": "high",
-        "capacity_limits_enabled": True,
-        "angles_generation_mode": "extractive_zero_kld",
-        "stego_generation_mode": "extractive_zero_kld",
-        "payload_transform": "plain",
-        "stego_prompt_style": "natural",
-        "stego_sample_angle_count": 4,
-        "stego_default_max_retries": 4,
-        "decode_semantic_top_n": 24,
-        "decode_llm_max_tries": 5,
-        "stego_llm_temperature": 0.7,
-        "decode_strict_default": False,
-    },
-    "security": {
-        "capacity_profile": "high",
-        "capacity_limits_enabled": True,
-        "angles_generation_mode": "extractive_zero_kld",
-        "stego_generation_mode": "extractive_zero_kld",
-        "payload_transform": "secure_compact_v2",
-        "stego_prompt_style": "anchored",
-        "stego_sample_angle_count": 5,
-        "stego_default_max_retries": 6,
-        "decode_semantic_top_n": 32,
-        "decode_llm_max_tries": 7,
-        "stego_llm_temperature": 0.55,
-        "decode_strict_default": True,
-    },
+
+class WorkflowEncodingProfileSettings(BaseModel):
+    """One named sender/receiver behavior profile (``WORKFLOW_ENCODING_PROFILE=...``).
+
+    Frozen: profiles are fixed presets selected by name at read time, not runtime-mutable
+    state. Validating these at module-import time (rather than leaving them as a raw
+    ``dict[str, object]``) catches a wrong-typed or missing field in any of the four
+    presets immediately instead of silently propagating ``None``/wrong-type values into
+    ``_workflow_encoding_int_default``/``_workflow_encoding_float_default``, which used to
+    coerce or fall back rather than fail.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    capacity_profile: WorkflowCapacityProfile
+    capacity_limits_enabled: bool
+    angles_generation_mode: WorkflowAnglesGenerationMode
+    stego_generation_mode: WorkflowStegoGenerationMode
+    payload_transform: WorkflowPayloadTransform
+    stego_prompt_style: WorkflowStegoPromptStyle
+    stego_sample_angle_count: int
+    stego_default_max_retries: int
+    decode_semantic_top_n: int
+    decode_llm_max_tries: int
+    stego_llm_temperature: float
+    decode_strict_default: bool
+
+
+WORKFLOW_ENCODING_PROFILES: dict[WorkflowEncodingProfile, WorkflowEncodingProfileSettings] = {
+    "balanced": WorkflowEncodingProfileSettings(
+        capacity_profile="mid",
+        capacity_limits_enabled=False,
+        angles_generation_mode="model",
+        stego_generation_mode="model",
+        payload_transform="plain",
+        stego_prompt_style="natural",
+        stego_sample_angle_count=1,
+        stego_default_max_retries=6,
+        decode_semantic_top_n=20,
+        decode_llm_max_tries=5,
+        stego_llm_temperature=0.7,
+        decode_strict_default=False,
+    ),
+    "robustness": WorkflowEncodingProfileSettings(
+        capacity_profile="mid",
+        capacity_limits_enabled=True,
+        angles_generation_mode="extractive_zero_kld",
+        stego_generation_mode="extractive_zero_kld",
+        payload_transform="plain",
+        stego_prompt_style="anchored",
+        stego_sample_angle_count=6,
+        stego_default_max_retries=8,
+        decode_semantic_top_n=40,
+        decode_llm_max_tries=7,
+        stego_llm_temperature=0.45,
+        decode_strict_default=False,
+    ),
+    "capacity": WorkflowEncodingProfileSettings(
+        capacity_profile="high",
+        capacity_limits_enabled=True,
+        angles_generation_mode="extractive_zero_kld",
+        stego_generation_mode="extractive_zero_kld",
+        payload_transform="plain",
+        stego_prompt_style="natural",
+        stego_sample_angle_count=4,
+        stego_default_max_retries=4,
+        decode_semantic_top_n=24,
+        decode_llm_max_tries=5,
+        stego_llm_temperature=0.7,
+        decode_strict_default=False,
+    ),
+    "security": WorkflowEncodingProfileSettings(
+        capacity_profile="high",
+        capacity_limits_enabled=True,
+        angles_generation_mode="extractive_zero_kld",
+        stego_generation_mode="extractive_zero_kld",
+        payload_transform="secure_compact_v2",
+        stego_prompt_style="anchored",
+        stego_sample_angle_count=5,
+        stego_default_max_retries=6,
+        decode_semantic_top_n=32,
+        decode_llm_max_tries=7,
+        stego_llm_temperature=0.55,
+        decode_strict_default=True,
+    ),
 }
 
 WORKFLOW_ENCODING_PROFILE_ALIASES: dict[str, WorkflowEncodingProfile] = {
@@ -252,7 +281,7 @@ def get_workflow_encoding_profile() -> WorkflowEncodingProfile:
 
 
 def _workflow_encoding_default(key: str) -> object:
-    return WORKFLOW_ENCODING_PROFILES[get_workflow_encoding_profile()][key]
+    return getattr(WORKFLOW_ENCODING_PROFILES[get_workflow_encoding_profile()], key)
 
 
 def _workflow_encoding_int_default(key: str, fallback: int) -> int:

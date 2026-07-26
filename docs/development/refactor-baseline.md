@@ -18,13 +18,14 @@ Run from the repo root **in PowerShell** — `uv run pytest` fails under Git Bas
 uv run python -m ruff check src scripts; uv run python -m ruff format --check src scripts; uv run python -m pyright; uv run python -m pytest -q
 ```
 
-| Gate | Baseline |
-|---|---|
-| `ruff check src scripts` | clean |
-| `ruff format --check src scripts` | clean (243 files) |
-| `pyright` | 0 errors, 0 warnings |
-| `pytest -q` | 523 passed |
-| Coverage (non-test `src/`) | **67%** — 12,611 statements, 4,180 missed |
+| Gate | At baseline (commit `1f9d773`) | Current (after all landed phases) |
+|---|---|---|
+| `ruff check src scripts` | clean | clean |
+| `ruff format --check src scripts` | clean (243 files) | clean |
+| `pyright` | 0 errors, 0 warnings | 0 errors, 0 warnings |
+| `import-linter` | n/a (added phase 2.5) | 3 contracts kept, 0 broken |
+| `pytest -q` | 523 passed | 618 passed |
+| Coverage (non-test `src/`) | 67% — 12,611 statements, 4,180 missed | 71% — 12,493 statements, 3,568 missed |
 
 **Scope note — the gate is `src scripts`, not `.`.** Running bare `ruff check .` also picks
 up `extreact_searched_values.py`, a tracked one-off script at the repo root, which fails with
@@ -50,18 +51,31 @@ uv run python -m pytest -q --cov --cov-report=term
 | `src/tests/` | 86 | 11,372 |
 | `scripts/*.py` | 50 | 9,924 |
 
-Largest modules — the refactor targets:
+Largest modules — the refactor targets — at baseline vs. current:
 
-| Lines | Path |
-|---|---|
-| 2342 | `src/workflows/pipelines/stego.py` |
-| 2249 | `src/workflows/runner.py` |
-| 1281 | `src/workflows/utils/stego_codec.py` |
-| 1189 | `src/content_acquisition/angles/angle_runner.py` |
-| 1146 | `src/app/routes/api_v1/routes_workflows.py` |
-| 1122 | `src/workflows/adapters/llm.py` |
+| Baseline lines | Current lines | Path |
+|---|---|---|
+| 2342 | 1874 | `src/workflows/pipelines/stego.py` |
+| 2249 | 2353 | `src/workflows/runner.py` |
+| 1281 | 1287 | `src/workflows/utils/stego_codec.py` |
+| 1189 | 1175 | `src/content_acquisition/angles/angle_runner.py` |
+| 1146 | 1209 | `src/app/routes/api_v1/routes_workflows.py` |
+| 1122 | 1050 | `src/workflows/adapters/llm.py` |
 
-236 of 1044 functions exceed the 25-line limit in `.cursor/rules/maintainability.mdc`.
+236 of 1044 functions exceeded the 25-line limit in `.cursor/rules/maintainability.mdc` at
+baseline; not re-measured since (would need to re-run the same census script this number
+came from).
+
+**`runner.py` grew despite decomposition, and that's expected, not a regression.** Only
+one of its six oversized methods was decomposed
+(`run_prep_until_google_quota_then_stego`, plan step 3.3) — it went 332 lines → ~40 lines
+of orchestration plus 12 new named-phase private methods (each with its own signature and
+one-line docstring), a net addition of signature/docstring overhead across more, smaller
+functions. Per-function quality improved (worst function 332 → ~70 lines) and two
+previously-uncovered failure paths gained test coverage; the file total did not shrink
+because the other five oversized methods (883 lines' worth, see refactor-plan.md 3.3) are
+still undecomposed. `stego.py` shrank because six *entire* pure-function clusters moved
+to sibling files rather than being decomposed in place.
 
 ## Environment caveat
 
@@ -86,6 +100,10 @@ silently changes behaviour.
 | `llm.py` vs `angle_runner.py` retry loops | Independently tuned: 3 vs 6 attempts, 1.0/30.0 s vs 1.5/60.0 s backoff, and `angle_runner` deliberately does not retry HTTP 408. Angle extraction sends far larger prompts. Only the transport-fault token sets were genuinely shared (now in `infrastructure/retry_policy.py`). |
 | The five `data_load → research → gen_angles` sequences (plan step 3.4) | They run the same three stages through **three different pipeline APIs**: `preview_post` (receiver, non-persisting, returns `{post, report}`), `process_post_id` (double-process, per id), and `process_post_objects`/`process_posts` (batch). Failure policy differs too — the prep loop breaks on a Google quota error, `run_full_pipeline` returns early on an empty batch, and `ReceiverPipeline.rebuild_context` **raises** on data-load failure because the receiver has no useful degraded mode. Progress emits differ in event name and payload at all five sites. One `run_context_stages(...)` would need flags for API family, per-stage kwargs, emit contract and failure policy — a worse read than the five sites, and it would put receiver failure semantics behind a parameter. What *was* genuinely shared is now in `workflows/stages.py`; see the note below. |
 | scripts' `_read_json`/`_write_json` vs `infrastructure/cache.py` | `read_json_cache` is a **cache** helper: it swallows every exception and returns `None`. The scripts must fail loudly — several validate the payload is a dict and raise. Swapping them would let benchmark scripts silently proceed on unreadable input. The scripts' `_write_json` variants also disagree with each other on `ensure_ascii` (True vs False), which changes output bytes for non-ASCII text. |
+| `llm.py`'s 4-provider dispatch as a `providers/` sub-package (plan step 3.5) | ~15 test sites monkeypatch module-level names directly: `workflows.adapters.llm.requests.post`, `.genai.Client`, `._genai_generate_text`. Moving those into sub-modules means either a re-export shim (breaks the moment a provider module captures a direct function reference at its own import time, since the patch only ever touches `llm.py`'s copy of the name) or a circular re-import through `llm.py` — real risk for a change meant to be behavior-preserving. Landed the actual defect instead: `call_llm`'s if/elif is a `_PROVIDER_CALLERS` dict lookup now; the four `_call_*` method bodies are untouched. |
+| `PostAugmentation`/`SenderAudit` as Pydantic `BaseModel`s (plan step 4.2) | Both dicts are mutated in place across `StegoPipeline.encode`/`encode_binary_selection_bits` (~350 lines each) — `sender_audit` gains ~10 fields after construction (timings, candidate validation, diagnostic flags), `post_augmentation` gains `senderAudit`. A frozen or validated model would force restructuring both methods' control flow as a side effect of typing their contract, before either has its own decomposition pass (3.2, still open for the piece that touches this code). Used `TypedDict` instead — zero runtime footprint, but pyright now checks ~90 call sites against a fixed key set. |
+| `@validate_call` on all 8 phase-3.1 extractions (plan step 4.4) | Applied to all 8, ran the full suite, found two real breaks: (1) `_generate_candidate_groups`/`_sharpen_until_accepted` take `llm_timings` as a mutate-by-reference output parameter — `validate_call` reconstructs a new validated list, so the caller stopped seeing appends (`sender_audit["llm_timings"]` went permanently empty; caught by `test_pipeline_stego_encode_characterization.py` and two context-sharpen tests). (2) The other four take `post_augmentation: PostAugmentation`, whose required fields are only guaranteed by real construction — the test suite's established convention of mocking `pipeline._augment_post` to return a deliberately partial dict (dozens of sites across `test_pipeline_stego.py` and friends) fails strict validation at that boundary. Kept on the two functions that match the shape of the other 43 pre-existing `@validate_call` sites: `_decoded_indices`, `_candidate_validation_audit`. |
+| `infrastructure/config.py` as a `pydantic-settings` `BaseSettings` model (plan step 5.4) | Nearly every one of the 50 getters re-reads `os.environ`/`.env` live on **every call**, not once at construction — confirmed by grep: `test_workflow_capacity_config.py` alone has 30+ `monkeypatch.setenv(...)` sites that call a getter immediately afterward with no re-instantiation step anywhere in the suite. `pydantic-settings`' idiomatic pattern is a `BaseSettings` instance built once; supporting this repo's live-reload test pattern would mean re-instantiating on every access, at which point it is not simpler than what exists. Several getters also distinguish process-env-only reads from `.env`-fallback reads (`_workflow_env_raw`), a per-field distinction `BaseSettings`' default env-file loading does not make cleanly. No code changed. |
 
 ## Deferred: removing the import-time runner singleton
 
@@ -115,6 +133,29 @@ Two things must land before this is worth attempting:
 
 Until then the singleton stays, and the import-linter contract keeps the layering honest
 around it.
+
+**Re-investigated, still blocked.** Confirmed the count precisely: 8 (not ~10)
+`test_api_v1_*.py` files patch `api_v1_routes.runner`. Full removal needs the routes
+themselves to stop importing `runner` as a module-level name and instead fetch it via
+`current_app`/`g` — `routes_tools.py` and `routes_workflows.py` both do
+`from app.routes.api_v1.runner_access import runner` and call `runner.<method>` directly
+at dozens of call sites each, so this is route-layer dependency injection across two large
+files, not a small patch.
+
+Attempting only the smaller half (item 1 above, moving `mkdir` out of
+`WorkflowConfig.__init__`) surfaced a real landmine: `workflows/adapters/content.py`'s
+`_cache_content` writes to `get_config().url_cache_dir / f"{cache_key}.json"` with **no
+defensive `mkdir` of its own**, and the write is wrapped in a bare `except Exception:
+pass`. Removing the eager mkdir without adding a guard at that call site would make URL
+content caching silently no-op forever — every write would raise `FileNotFoundError`,
+swallowed invisibly. (The four other directories `WorkflowConfig.__init__` creates —
+`posts_directory`/`url_fetched_dir`/`researched_dir`/`angles_dir`/`output_results_dir` via
+`workflow_backend_client.save_post_local`, `research_terms_db_path` via
+`gen_search_terms._init_cache_db`, `angles_cache_dir` via `angle_runner.py` — all already
+have their own defensive `mkdir` at their real write sites, so only `url_cache_dir` is at
+risk.) Not fixed: doing half of item 1 without item 2 does not unblock the plan's actual
+goal (an injectable, non-import-time-constructed runner), so no code changed here this
+pass.
 
 ## Phase outcomes
 

@@ -13,10 +13,11 @@ import math
 import secrets
 import zlib
 from itertools import product
-from typing import Any
+from typing import Any, cast
 
 from pydantic import validate_call
 
+from workflows.contracts import PostAugmentation
 from workflows.utils.text_utils import (
     build_post_text_dictionary,
     build_post_text_dictionary_report,
@@ -737,7 +738,7 @@ def _selection_embedding_fields(bits: str, post: dict[str, Any]) -> dict[str, An
     }
 
 
-def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
+def augment_post(payload: str, post: dict[str, Any]) -> PostAugmentation:
     dictionary = build_dictionary(post)
     compression = compress_payload(payload, dictionary)
     warnings: list[str] = []
@@ -753,15 +754,21 @@ def augment_post(payload: str, post: dict[str, Any]) -> dict[str, Any]:
             "remaining bits require multi-post framing or audit-assisted recovery."
         )
 
-    return {
-        "compression": compression,
-        **selection,
-        "remainingBitsUnembedded": remaining_channel_bits,
-        "warnings": warnings,
-    }
+    # A dict literal with a trailing ``**`` spread can't be checked structurally against a
+    # TypedDict, so pyright falls back to inferring a plain dict here -- cast documents the
+    # contract without changing how the dict is actually built.
+    return cast(
+        PostAugmentation,
+        {
+            "compression": compression,
+            **selection,
+            "remainingBitsUnembedded": remaining_channel_bits,
+            "warnings": warnings,
+        },
+    )
 
 
-def augment_post_with_selection_bits(bits: str, post: dict[str, Any]) -> dict[str, Any]:
+def augment_post_with_selection_bits(bits: str, post: dict[str, Any]) -> PostAugmentation:
     """Diagnostic-only augmentation from already prepared selection-channel bits."""
     if set(bits) - {"0", "1"}:
         raise ValueError("Selection bits must contain only '0' and '1'")
@@ -769,24 +776,27 @@ def augment_post_with_selection_bits(bits: str, post: dict[str, Any]) -> dict[st
     selection = _selection_embedding_fields(bits, post)
     selection.pop("_remainingBitsUnembedded")
 
-    return {
-        "compression": {
-            "method": "diagnostic_binary_selection_bits",
-            "payload": bits,
-            "compressed": bits,
-            "compressedLength": len(bits),
-            "originalLength": len(bits),
-            "ratio": 1.0,
-            "references": [],
-            "compressionSkipped": True,
+    return cast(
+        PostAugmentation,
+        {
+            "compression": {
+                "method": "diagnostic_binary_selection_bits",
+                "payload": bits,
+                "compressed": bits,
+                "compressedLength": len(bits),
+                "originalLength": len(bits),
+                "ratio": 1.0,
+                "references": [],
+                "compressionSkipped": True,
+            },
+            **selection,
+            "diagnostic": {
+                "binary_selection_bits": bits,
+                "compression_skipped": True,
+                "payload_transform_skipped": True,
+            },
         },
-        **selection,
-        "diagnostic": {
-            "binary_selection_bits": bits,
-            "compression_skipped": True,
-            "payload_transform_skipped": True,
-        },
-    }
+    )
 
 
 def selection_channel_capacity(post: dict[str, Any]) -> int:
@@ -830,7 +840,9 @@ def _canonical_channel_bits(bits: str, safe_width: int, physical_width: int) -> 
     return format(value, f"0{physical_width}b") if physical_width else "", remaining
 
 
-def augment_post_with_recoverable_selection_bits(bits: str, post: dict[str, Any]) -> dict[str, Any]:
+def augment_post_with_recoverable_selection_bits(
+    bits: str, post: dict[str, Any]
+) -> PostAugmentation:
     """Embed bits through only one-to-one comment and angle selection states."""
     comment_safe_width = _recoverable_width(comment_selection_choice_count(post))
     nested_angles = _nested_angle_groups(post.get("angles", []))
@@ -880,7 +892,7 @@ def frame_bits_across_posts(bits: str, posts: list[dict[str, Any]]) -> dict[str,
         }
 
     remaining = bits
-    frames: list[dict[str, Any]] = []
+    frames: list[PostAugmentation] = []
     for index, post in enumerate(posts):
         if not remaining:
             break

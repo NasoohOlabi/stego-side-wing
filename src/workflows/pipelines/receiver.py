@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
@@ -12,6 +12,7 @@ from infrastructure.config import (
     get_workflow_encoding_secret,
     get_workflow_payload_transform,
 )
+from workflows.contracts import SenderAudit
 from workflows.pipelines.data_load import DataLoadPipeline
 from workflows.pipelines.decode import DecodePipeline
 from workflows.pipelines.gen_angles import GenAnglesPipeline
@@ -162,15 +163,22 @@ def _canonicalize_decoded_angle_index(
     return expected_angle_index
 
 
-def _extract_sender_audit(post: dict[str, Any]) -> dict[str, Any] | None:
+def _extract_sender_audit(post: dict[str, Any]) -> SenderAudit | None:
+    """Pull the sender's audit trail out of arbitrary post JSON.
+
+    The result is cast to ``SenderAudit``, not proven to match it: this reads whatever a
+    (possibly old or foreign) sender artifact actually contains, which is exactly why the
+    downstream ``isinstance``/``is not None`` guards on individual fields stay in place even
+    though the type declares those fields required.
+    """
     explicit = post.get("sender_audit")
     if isinstance(explicit, dict):
-        return explicit
+        return cast(SenderAudit, explicit)
     embedding = post.get("embedding")
     if not isinstance(embedding, dict):
         return None
     embedded = embedding.get("senderAudit")
-    return embedded if isinstance(embedded, dict) else None
+    return cast(SenderAudit, embedded) if isinstance(embedded, dict) else None
 
 
 def _rebuilt_selected_urls_hash(rebuilt_post: dict[str, Any]) -> str:
@@ -181,7 +189,7 @@ def _rebuilt_selected_urls_hash(rebuilt_post: dict[str, Any]) -> str:
 
 
 def _context_drift_mismatches(
-    sender_audit: dict[str, Any], rebuilt_post: dict[str, Any], rebuilt_summary: dict[str, Any]
+    sender_audit: SenderAudit, rebuilt_post: dict[str, Any], rebuilt_summary: dict[str, Any]
 ) -> list[dict[str, Any]]:
     checks = (
         (
@@ -205,7 +213,8 @@ def _context_drift_mismatches(
     return [
         {"field": field, "expected": expected, "actual": actual}
         for field, expected, actual in checks
-        if expected is not None and expected != actual
+        # sender_audit is cast, not proven, to match SenderAudit -- see _extract_sender_audit.
+        if expected is not None and expected != actual  # pyright: ignore[reportUnnecessaryComparison]
     ]
 
 
@@ -235,7 +244,7 @@ def _tangent_db_parity_mismatch(
     }
 
 
-def _payload_transform_from_audit(sender_audit: dict[str, Any] | None) -> str:
+def _payload_transform_from_audit(sender_audit: SenderAudit | None) -> str:
     if not isinstance(sender_audit, dict):
         return get_workflow_payload_transform()
     direct = sender_audit.get("payload_transform")
@@ -249,11 +258,12 @@ def _payload_transform_from_audit(sender_audit: dict[str, Any] | None) -> str:
     return get_workflow_payload_transform()
 
 
-def _compressed_full_from_audit(sender_audit: dict[str, Any] | None) -> str | None:
+def _compressed_full_from_audit(sender_audit: SenderAudit | None) -> str | None:
     if not isinstance(sender_audit, dict):
         return None
     compression = sender_audit.get("compression")
-    if not isinstance(compression, dict):
+    # sender_audit is cast, not proven, to match SenderAudit -- see _extract_sender_audit.
+    if not isinstance(compression, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
         return None
     compressed = compression.get("compressed")
     return compressed if isinstance(compressed, str) and compressed else None

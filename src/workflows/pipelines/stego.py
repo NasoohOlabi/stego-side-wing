@@ -4,7 +4,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from loguru import logger
@@ -23,6 +23,7 @@ from infrastructure.config import (
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
+from workflows.contracts import PostAugmentation, SenderAudit
 from workflows.errors import NoUnprocessedPostsError
 from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
 from workflows.utils import stego_codec
@@ -227,7 +228,7 @@ def _angle_summary(angle: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-def _anchor_comment_body(post_augmentation: dict[str, Any] | None) -> str:
+def _anchor_comment_body(post_augmentation: PostAugmentation | None) -> str:
     if not isinstance(post_augmentation, dict):
         return ""
     chain = post_augmentation.get("commentEmbedding", {}).get("pickedCommentChain", [])
@@ -290,8 +291,8 @@ def _encode_success_result(
     selected_idx: Any,
     retry_count: int,
     tag: str | None,
-    sender_audit: dict[str, Any],
-    post_augmentation: dict[str, Any],
+    sender_audit: SenderAudit,
+    post_augmentation: PostAugmentation,
     encoded_results: list[dict[str, Any]],
     validation_details: dict[str, Any] | None,
     extra: dict[str, Any] | None = None,
@@ -327,8 +328,8 @@ def _encode_failure_result(
     selected_idx: Any,
     retry_count: int,
     tag: str | None,
-    sender_audit: dict[str, Any],
-    post_augmentation: dict[str, Any],
+    sender_audit: SenderAudit,
+    post_augmentation: PostAugmentation,
     encoded_results: list[dict[str, Any]],
     validation_details: dict[str, Any],
     error_details: dict[str, Any],
@@ -371,8 +372,8 @@ def _encode_exception_result(
     selected_idx: Any,
     retry_count: int,
     tag: str | None,
-    sender_audit: dict[str, Any],
-    post_augmentation: dict[str, Any],
+    sender_audit: SenderAudit,
+    post_augmentation: PostAugmentation,
     reason: str,
     breakdown: dict[str, Any] | None = None,
     extra: dict[str, Any] | None = None,
@@ -403,7 +404,7 @@ def _encode_exception_result(
     return result
 
 
-def _diagnostic_bits_fields(bits: str, post_augmentation: dict[str, Any]) -> dict[str, Any]:
+def _diagnostic_bits_fields(bits: str, post_augmentation: PostAugmentation) -> dict[str, Any]:
     """Extra result fields carried only by the binary-selection-bits diagnostic path."""
     return {
         "binary_selection_bits": bits,
@@ -423,7 +424,7 @@ def _tokenize_content_words(text: str) -> list[str]:
 
 
 def _context_support_texts(
-    post_augmentation: dict[str, Any] | None,
+    post_augmentation: PostAugmentation | None,
     sample: dict[str, Any] | None,
     selected_angle: dict[str, Any],
 ) -> list[str]:
@@ -458,7 +459,7 @@ def _context_support_texts(
 def _contextuality_gate(
     text: str,
     *,
-    post_augmentation: dict[str, Any] | None,
+    post_augmentation: PostAugmentation | None,
     sample: dict[str, Any] | None,
     selected_angle: dict[str, Any],
 ) -> dict[str, Any]:
@@ -605,36 +606,42 @@ def _tangent_db_report_field(post: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sender_audit_from_post(
-    post: dict[str, Any], post_augmentation: dict[str, Any]
-) -> dict[str, Any]:
+    post: dict[str, Any], post_augmentation: PostAugmentation
+) -> SenderAudit:
     dictionary_report = codec_build_dictionary_report(post)
     tangents_db = list(post_augmentation.get("angleEmbedding", {}).get("TangentsDB", []))
     search_results = list(post.get("search_results", []) or [])
     selected_urls_hashes = [stable_hash(item) for item in search_results]
     compression = dict(post_augmentation.get("compression", {}))
-    return {
-        "dictionary_id": dictionary_report["dictionary_id"],
-        "dictionary_hash": dictionary_report["texts_hash"],
-        "dictionary_count": dictionary_report["entry_count"],
-        "angles_hash": stable_hash(tangents_db),
-        "angles_count": len(tangents_db),
-        "selected_url_hashes": selected_urls_hashes,
-        "selected_urls_hash": stable_hash(selected_urls_hashes),
-        "selected_angle_index": post_augmentation.get("angleEmbedding", {})
-        .get("selectedAngle", {})
-        .get("idx"),
-        "compression": {
-            "method": compression.get("method"),
-            "compressed": compression.get("compressed"),
-            "compressed_length": compression.get("compressedLength"),
-            "original_length": compression.get("originalLength"),
-            "compressed_hash": stable_hash(compression.get("compressed", "")),
+    # A dict literal with a trailing ``**`` spread can't be checked structurally against a
+    # TypedDict, so pyright falls back to inferring a plain dict here -- cast documents the
+    # contract without changing how the dict is actually built.
+    return cast(
+        SenderAudit,
+        {
+            "dictionary_id": dictionary_report["dictionary_id"],
+            "dictionary_hash": dictionary_report["texts_hash"],
+            "dictionary_count": dictionary_report["entry_count"],
+            "angles_hash": stable_hash(tangents_db),
+            "angles_count": len(tangents_db),
+            "selected_url_hashes": selected_urls_hashes,
+            "selected_urls_hash": stable_hash(selected_urls_hashes),
+            "selected_angle_index": post_augmentation.get("angleEmbedding", {})
+            .get("selectedAngle", {})
+            .get("idx"),
+            "compression": {
+                "method": compression.get("method"),
+                "compressed": compression.get("compressed"),
+                "compressed_length": compression.get("compressedLength"),
+                "original_length": compression.get("originalLength"),
+                "compressed_hash": stable_hash(compression.get("compressed", "")),
+            },
+            "selection_signature": post_augmentation.get("selectionSignature"),
+            "comment_bits": post_augmentation.get("commentBits"),
+            "angle_bits": post_augmentation.get("angleBits"),
+            **_tangent_db_report_field(post),
         },
-        "selection_signature": post_augmentation.get("selectionSignature"),
-        "comment_bits": post_augmentation.get("commentBits"),
-        "angle_bits": post_augmentation.get("angleBits"),
-        **_tangent_db_report_field(post),
-    }
+    )
 
 
 def _clone_post(post: dict[str, Any]) -> dict[str, Any]:
@@ -675,7 +682,7 @@ def _append_comment_to_tree_with_flag(
     return (out, True) if inserted else (list(comments), False)
 
 
-def _planned_parent_id(post_augmentation: dict[str, Any]) -> str | None:
+def _planned_parent_id(post_augmentation: PostAugmentation) -> str | None:
     chain = post_augmentation.get("commentEmbedding", {}).get("pickedCommentChain", [])
     if not isinstance(chain, list) or not chain:
         return None
@@ -1015,11 +1022,11 @@ class StegoPipeline:
             else None,
         }
 
-    def _augment_post(self, payload: str, post: dict[str, Any]) -> dict[str, Any]:
+    def _augment_post(self, payload: str, post: dict[str, Any]) -> PostAugmentation:
         return codec_augment_post(payload, post)
 
     def _build_samples(
-        self, post_augmentation: dict[str, Any], post: dict[str, Any]
+        self, post_augmentation: PostAugmentation, post: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         angle_embedding = post_augmentation.get("angleEmbedding", {})
         sample_count = get_workflow_stego_sample_angle_count()
@@ -1054,8 +1061,8 @@ class StegoPipeline:
         embedded_payload: str,
         post: dict[str, Any],
         tag: str | None,
-        sender_audit: dict[str, Any],
-        post_augmentation: dict[str, Any],
+        sender_audit: SenderAudit,
+        post_augmentation: PostAugmentation,
         selected_angle: dict[str, Any],
         selected_idx: Any,
     ) -> dict[str, Any] | None:
@@ -1262,7 +1269,7 @@ class StegoPipeline:
         self,
         *,
         samples: list[dict[str, Any]],
-        post_augmentation: dict[str, Any],
+        post_augmentation: PostAugmentation,
         selected_angle: dict[str, Any],
         prompt_style: str,
         encode_run_id: str,
@@ -1303,7 +1310,7 @@ class StegoPipeline:
         encoded_results: list[dict[str, Any]],
         tangents_db: list[dict[str, Any]],
         selected_angle: dict[str, Any],
-        post_augmentation: dict[str, Any],
+        post_augmentation: PostAugmentation,
         encode_run_id: str,
         llm_timings: list[dict[str, Any]],
     ) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -1381,7 +1388,7 @@ class StegoPipeline:
         encoded_results: list[dict[str, Any]],
         tangents_db: list[dict[str, Any]],
         selected_angle: dict[str, Any],
-        post_augmentation: dict[str, Any],
+        post_augmentation: PostAugmentation,
         encode_run_id: str = "",
     ) -> dict[str, Any]:
         t_eval = time.perf_counter()
@@ -1607,7 +1614,7 @@ class StegoPipeline:
         encoded_results: list[dict[str, Any]],
         tangents_db: list[dict[str, Any]],
         selected_angle: dict[str, Any],
-        post_augmentation: dict[str, Any],
+        post_augmentation: PostAugmentation,
         encode_run_id: str,
         llm_timings: list[dict[str, Any]],
     ) -> dict[str, Any]:

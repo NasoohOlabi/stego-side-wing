@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+import pytest
+
+from workflows.errors import DecodeUnexpectedError
 from workflows.pipelines.decode import DecodePipeline
 
 
@@ -103,7 +106,13 @@ def test_decode_strict_mode_accepts_labeled_index():
     assert pipeline.decode("message", angles, strict_mode=True) == 1
 
 
-def test_decode_returns_none_on_runtime_error():
+def test_decode_raises_on_unexpected_collaborator_failure():
+    """An unanticipated failure (here: the backend itself raising) is not a "no match".
+
+    Every designed no-match outcome returns None from its own point in decode() with its
+    own warning log; this is the outer safety net for a bug or an unhandled collaborator
+    failure, and should surface as itself rather than look identical to "no match found".
+    """
     angles = [{"source_quote": "q0", "tangent": "t0"}]
     pipeline = DecodePipeline.__new__(DecodePipeline)
     pipeline.backend = SimpleNamespace(
@@ -111,4 +120,5 @@ def test_decode_returns_none_on_runtime_error():
     )
     pipeline.llm = SimpleNamespace(call_llm=lambda **kwargs: "0")
 
-    assert pipeline.decode("message", angles) is None
+    with pytest.raises(DecodeUnexpectedError, match="down"):
+        pipeline.decode("message", angles)

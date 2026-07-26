@@ -19,6 +19,7 @@ from infrastructure.config import (
 )
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter, strip_redacted_thinking
+from workflows.errors import DecodeUnexpectedError
 from workflows.utils.protocol_utils import angle_signature as _angle_signature
 from workflows.utils.workflow_llm_prompts import get_prompts
 
@@ -502,6 +503,6 @@ class DecodePipeline:
             )
             return semantic_fallback
 
-        except Exception:
+        except Exception as exc:
             self._log.exception("decode_failed", log_area="error")
-            return None
+            raise DecodeUnexpectedError(str(exc)) from exc

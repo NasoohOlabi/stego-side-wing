@@ -38,3 +38,17 @@ class DataLoadFetchError(WorkflowError, RuntimeError):
 
 class ReceiverDataLoadError(WorkflowError, RuntimeError):
     """Receiver context rebuild failed because data-load produced no usable body."""
+
+
+class DecodeUnexpectedError(WorkflowError, RuntimeError):
+    """``DecodePipeline.decode`` hit a failure outside its designed no-match paths.
+
+    Every legitimate "couldn't decode" outcome (no angles, no semantic matches, LLM
+    retries exhausted, no parseable index) already returns ``None`` from its own point in
+    ``decode`` with its own warning log. This is reserved for the outer safety net --
+    something ``decode`` did not anticipate (a collaborator raising, a malformed prompt
+    template, ...). Raising it instead of also returning ``None`` means a bug there
+    surfaces as itself instead of looking identical to "no match found", which used to
+    make ``StegoPipeline.encode`` burn its whole retry budget on a bug and then report an
+    unrelated-looking "Decoding validation failed".
+    """

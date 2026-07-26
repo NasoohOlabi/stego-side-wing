@@ -8,6 +8,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from loguru import logger
+from pydantic import validate_call
 
 from infrastructure.config import (
     get_workflow_encoding_secret,
@@ -262,6 +263,7 @@ def _prompt_style_for_attempt(configured_style: str, retry_count: int) -> str:
     return configured_style
 
 
+@validate_call
 def _decoded_indices(validation_details: dict[str, Any]) -> list[Any]:
     """Decoded angle index per evaluated candidate, in evaluation order."""
     candidates = validation_details.get("candidates", [])
@@ -270,6 +272,7 @@ def _decoded_indices(validation_details: dict[str, Any]) -> list[Any]:
     return [item.get("decoded_index") for item in candidates]
 
 
+@validate_call
 def _candidate_validation_audit(
     accepted_candidate: dict[str, Any], *, acceptance_source: str
 ) -> dict[str, Any]:

@@ -6,7 +6,7 @@ import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
 import openai
@@ -485,6 +485,17 @@ def _split_thinking_and_answer(raw: str) -> tuple[str, str]:
     return thinking, answer
 
 
+# Shared call shape for the strategy map in ``LLMAdapter._PROVIDER_CALLERS``. Bound methods
+# satisfy this even though Gemini's implementation is not a peer of the other three -- it
+# rotates through multiple API keys and falls back from the SDK to a raw REST call, while
+# openai/groq/lm_studio are single-shot. That asymmetry lives inside ``_call_gemini``; the
+# dispatch surface it presents to ``call_llm`` is identical to the others.
+ProviderCaller = Callable[
+    ["LLMAdapter", str, str | None, str | None, float, int | None],
+    str,
+]
+
+
 class LLMAdapter:
     """Adapter for LLM providers (OpenAI, Gemini, Groq, LM Studio)."""
 
@@ -688,16 +699,10 @@ class LLMAdapter:
         if provider is None:
             provider = self._select_provider()
 
-        if provider == "openai":
-            return self._call_openai(prompt, system_message, model, temperature, max_tokens)
-        elif provider == "gemini":
-            return self._call_gemini(prompt, system_message, model, temperature, max_tokens)
-        elif provider == "groq":
-            return self._call_groq(prompt, system_message, model, temperature, max_tokens)
-        elif provider == "lm_studio":
-            return self._call_lm_studio(prompt, system_message, model, temperature, max_tokens)
-        else:
+        handler = self._PROVIDER_CALLERS.get(provider)
+        if handler is None:
             raise ValueError(f"Unknown provider: {provider}")
+        return handler(self, prompt, system_message, model, temperature, max_tokens)
 
     def _select_provider(self) -> str:
         """Select available provider."""
@@ -1036,3 +1041,10 @@ class LLMAdapter:
             max_tokens=max_tokens,
             request_fn=_request,
         )
+
+    _PROVIDER_CALLERS: ClassVar[dict[str, ProviderCaller]] = {
+        "openai": _call_openai,
+        "gemini": _call_gemini,
+        "groq": _call_groq,
+        "lm_studio": _call_lm_studio,
+    }

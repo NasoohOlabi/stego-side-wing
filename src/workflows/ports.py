@@ -37,7 +37,13 @@ class LocalBackendPort(Protocol):
         self, text: str, objects: list[dict[str, Any]], n: int | None = None
     ) -> dict[str, Any]: ...
 
-    def analyze_angles(self, texts: list[str], *, use_cache: bool = True) -> dict[str, Any]: ...
+    def analyze_angles(
+        self,
+        texts: list[str],
+        *,
+        use_cache: bool = True,
+        max_results: int | None = None,
+    ) -> dict[str, Any]: ...
 
     def get_post_local(self, post_filename: str, step: str) -> dict[str, Any]: ...
 

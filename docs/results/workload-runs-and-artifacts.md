@@ -31,27 +31,55 @@ This repo keeps validation, Pareto screening, and sample-generation artifacts un
   - Real: `input-angles/`, `dataset/`, `output-results/`, `failures/`, `metrics/`, `summary.json`
 - The latest real-workload summary is also copied to `metrics/e2e_runs/latest_actual_workload_e2e.json`.
 
+### Legacy/refactor artifact separation
+
+- Historical angle posts have no `angle_artifact` field. Treat them as
+  `legacy_unversioned`; they remain readable and must not be rewritten merely to add
+  metadata.
+- Newly generated angle posts carry `angle_artifact.schema_version = 2`,
+  namespace `selection_channel_angles/refactor_v2`, generator version, sampler version,
+  dictionary ID, effective capacity profile/limits, and retained/raw target metadata.
+- Isolated prep runs write a schema-v2 `prep_run.json` with the same namespace plus the
+  complete effective capacity settings. Schema-v1 manifests remain readable as legacy
+  provenance.
+- Do not place a refactor prep run in a historical dataset root. The prep-until-quota command
+  automatically creates a unique `datasets/prep_runs/refactor_v2/<timestamp>_<tag>` root
+  when `--dataset-root` is omitted; an explicit root must likewise be new and isolated.
+  Downstream aggregation groups by the complete angle-artifact identity and rejects a mixed
+  legacy/refactor or mixed-profile input set unless the comparison uses separate lanes.
+
+Example bounded prep run:
+
+```powershell
+$env:WORKFLOW_ENCODING_PROFILE = 'balanced'
+$env:WORKFLOW_CAPACITY_LIMITS_ENABLED = '1'
+uv run python scripts/run_prep_until_google_quota_then_stego.py `
+  --tag bounded_v2 `
+  --dataset-root datasets/prep_runs/refactor_v2_20260728 `
+  --prep-run-id refactor_v2_20260728
+```
+
 ### Real-workload smoke command
 
 Run this first after any backend change:
 
-```bash
-uv run python scripts/run_actual_workload_e2e.py \
-  --variant security_legacy \
-  --samples-per-profile 5 \
-  --max-retries 1 \
+```powershell
+uv run python scripts/run_actual_workload_e2e.py `
+  --variant security_legacy `
+  --samples-per-profile 5 `
+  --max-retries 1 `
   --log-level INFO
 ```
 
 ### Pilot command (security shortlist)
 
-```bash
-uv run python scripts/run_actual_workload_e2e.py \
-  --variant security_legacy \
-  --variant sec_v2_anchored \
-  --variant sec_v2_natural_then_anchor_retry \
-  --samples-per-profile 25 \
-  --max-retries 1 \
+```powershell
+uv run python scripts/run_actual_workload_e2e.py `
+  --variant security_legacy `
+  --variant sec_v2_anchored `
+  --variant sec_v2_natural_then_anchor_retry `
+  --samples-per-profile 25 `
+  --max-retries 1 `
   --log-level INFO
 ```
 
@@ -71,7 +99,7 @@ uv run python scripts/run_actual_workload_e2e.py \
 
 Example:
 
-```bash
+```powershell
 uv run python scripts/run_multi_frame_stego_e2e.py --mode synthetic --max-frames-per-post 3
 ```
 

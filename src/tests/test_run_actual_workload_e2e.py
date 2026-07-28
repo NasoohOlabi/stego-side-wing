@@ -2,6 +2,8 @@ import importlib.util
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 
 def _load_runner_module():
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "run_actual_workload_e2e.py"
@@ -10,6 +12,32 @@ def _load_runner_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_rejects_mixed_legacy_and_refactor_angle_artifacts(tmp_path: Path) -> None:
+    module = _load_runner_module()
+    (tmp_path / "legacy.json").write_text('{"angles":[{"tangent":"old"}]}', encoding="utf-8")
+    (tmp_path / "new.json").write_text(
+        (
+            '{"angles":[{"tangent":"new"}],"angle_artifact":'
+            '{"schema_version":2,"artifact_namespace":"selection_channel_angles/refactor_v2",'
+            '"generator_version":"efficient_multiframe_selection_v1",'
+            '"sampler_version":"stable_round_robin_v1"}}'
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Mixed angle artifact identities"):
+        module.validate_angle_artifact_identity(tmp_path, ["legacy", "new"])
+
+
+def test_legacy_only_angle_artifacts_get_explicit_identity(tmp_path: Path) -> None:
+    module = _load_runner_module()
+    (tmp_path / "legacy.json").write_text('{"angles":[{"tangent":"old"}]}', encoding="utf-8")
+
+    identity = module.validate_angle_artifact_identity(tmp_path, ["legacy"])
+
+    assert identity["artifact_namespace"] == "legacy_unversioned"
 
 
 def test_run_actual_workload_e2e_retries_transient_sample_failure(monkeypatch) -> None:

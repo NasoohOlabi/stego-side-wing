@@ -5,26 +5,35 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from infrastructure.config import (
     POSTS_DIRECTORY,
     get_step_dirs,
+    get_workflow_angles_generation_mode,
     get_workflow_angles_max_output,
     get_workflow_capacity_profile,
+    get_workflow_capacity_settings,
     get_workflow_dataset_root,
     get_workflow_tangent_db_builder,
     resolve_path,
 )
 from workflows.stages import PREP_RUN_STEPS
+from workflows.utils.angle_artifact import (
+    ANGLE_ARTIFACT_NAMESPACE,
+    ANGLE_GENERATOR_VERSION,
+    PREP_MANIFEST_SCHEMA_VERSION,
+)
 from workflows.utils.tangent_db import tangent_db_config_from_env
+from workflows.utils.text_utils import DICTIONARY_SAMPLER_VERSION
 
 
 class PrepRunManifest(BaseModel):
     """Self-describing recipe for one isolated preparation run."""
 
-    schema_version: int = 1
+    schema_version: int = PREP_MANIFEST_SCHEMA_VERSION
     run_id: str
     tangent_db_builder: str
     tangent_db_config_hash: str
@@ -33,6 +42,11 @@ class PrepRunManifest(BaseModel):
     seed_corpus: str
     dataset_root: str
     step_dirs: dict[str, dict[str, str]]
+    artifact_namespace: str = "legacy_unversioned"
+    angle_generator_version: str = "legacy_unversioned"
+    angle_sampler_version: str = "legacy_unversioned"
+    angle_generation_mode: str = "unknown"
+    capacity_settings: dict[str, Any] = Field(default_factory=dict)
     notes: str = ""
 
 
@@ -56,6 +70,11 @@ def build_prep_run_manifest(*, run_id: str, notes: str = "") -> PrepRunManifest:
         seed_corpus=str(resolve_path(POSTS_DIRECTORY)),
         dataset_root=str(root),
         step_dirs=step_dirs,
+        artifact_namespace=ANGLE_ARTIFACT_NAMESPACE,
+        angle_generator_version=ANGLE_GENERATOR_VERSION,
+        angle_sampler_version=DICTIONARY_SAMPLER_VERSION,
+        angle_generation_mode=get_workflow_angles_generation_mode(),
+        capacity_settings=get_workflow_capacity_settings(),
         notes=notes,
     )
 

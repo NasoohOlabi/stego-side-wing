@@ -8,13 +8,19 @@ from content_acquisition.angles.angle_runner import analyze_angles_from_texts
 logger = logging.getLogger(__name__)
 
 
-def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, Any]]:
+def analyze_angles(
+    texts: object,
+    *,
+    use_cache: bool = True,
+    max_results: int | None = None,
+) -> list[dict[str, Any]]:
     """
     Analyze angles from text chunks.
 
     Args:
         texts: List of text strings to analyze
         use_cache: When False, skip angles disk cache read/write (forces fresh LLM work).
+        max_results: Optional upper bound on validated raw angle records returned.
 
     Returns:
         List of angle dicts with source_quote, tangent, category, and source_document
@@ -39,9 +45,14 @@ def analyze_angles(texts: object, *, use_cache: bool = True) -> list[dict[str, A
                 "action": "analyze",
                 "text_blocks": len(cast_texts),
                 "use_cache": use_cache,
+                "max_results": max_results,
             },
         )
-        results = analyze_angles_from_texts(cast_texts, use_cache=use_cache)
+        results = analyze_angles_from_texts(
+            cast_texts,
+            use_cache=use_cache,
+            max_results=max_results,
+        )
         return results
     except ValueError:
         logger.exception(

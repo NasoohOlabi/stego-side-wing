@@ -248,7 +248,7 @@ def test_encode_payload_frames_builds_local_artifact_feed():
     out = pipeline.encode_payload_frames("hi", posts, max_frames_per_post=3, tag="t")
 
     assert out["succeeded"] is True
-    assert out["frames"]
+    assert len(out["frames"]) >= 3
     assert out["posts"]
     assert out["ordered_frame_refs"]
     assert any(

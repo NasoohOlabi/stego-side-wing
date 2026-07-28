@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,13 @@ from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E
 from infrastructure.workflow_run_tracker import track_workflow  # noqa: E402
 from workflows.runner import WorkflowRunner  # noqa: E402
 from workflows.utils.prep_run_manifest import write_prep_run_manifest  # noqa: E402
+
+
+def _default_dataset_root(tag: str, *, created_at: datetime | None = None) -> Path:
+    """Choose a unique refactor namespace without touching historical dataset folders."""
+    timestamp = (created_at or datetime.now(UTC)).strftime("%Y%m%dT%H%M%S%fZ")
+    safe_tag = re.sub(r"[^A-Za-z0-9._-]+", "_", tag).strip("._-") or "run"
+    return _REPO_ROOT / "datasets" / "prep_runs" / "refactor_v2" / f"{timestamp}_{safe_tag}"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -54,7 +63,10 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset-root",
-        help="Isolated prep-run root (absolute or repo-relative).",
+        help=(
+            "Isolated prep-run root (absolute or repo-relative). Defaults to a unique "
+            "datasets/prep_runs/refactor_v2/<timestamp>_<tag> root."
+        ),
     )
     parser.add_argument(
         "--prep-run-id",
@@ -75,15 +87,17 @@ def _log_progress(event: str, payload: dict[str, Any]) -> None:
 def main() -> None:
     args = _parse_args()
     configure_api_logging(level=args.log_level, log_file=None, enable_file_log=False)
-    if args.dataset_root:
-        os.environ["WORKFLOW_DATASET_ROOT"] = args.dataset_root
-        run_id = args.prep_run_id or Path(args.dataset_root).name
-        manifest_path = write_prep_run_manifest(run_id=run_id, notes=args.notes)
-        logger.bind(component="PrepUntilQuotaThenStego").info(
-            "prep_run_manifest_written",
-            manifest_path=str(manifest_path),
-            run_id=run_id,
-        )
+    dataset_root = Path(args.dataset_root) if args.dataset_root else _default_dataset_root(args.tag)
+    os.environ["WORKFLOW_DATASET_ROOT"] = str(dataset_root)
+    run_id = args.prep_run_id or dataset_root.name
+    manifest_path = write_prep_run_manifest(run_id=run_id, notes=args.notes)
+    logger.bind(component="PrepUntilQuotaThenStego").info(
+        "prep_run_manifest_written",
+        manifest_path=str(manifest_path),
+        run_id=run_id,
+        dataset_root=str(dataset_root),
+        dataset_root_auto_selected=not bool(args.dataset_root),
+    )
     runner = WorkflowRunner()
     with track_workflow("prep-until-google-quota-then-stego"):
         result = runner.run_prep_until_google_quota_then_stego(

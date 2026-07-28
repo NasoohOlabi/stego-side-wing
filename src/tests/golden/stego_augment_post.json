@@ -24,6 +24,7 @@
     "bitsCount": 2,
     "bitsUsed": "00",
     "insufficientBits": false,
+    "recoverableBitsCount": 1,
     "remainingAngles": [
       {
         "category": "infrastructure",
@@ -87,6 +88,7 @@
         "permalink": null
       }
     ],
+    "recoverableBitsCount": 2,
     "targetType": "comment"
   },
   "compression": {
@@ -118,6 +120,7 @@
   "remainingBitsUnembedded": 176,
   "selectionSignature": "1000",
   "totalBitsEmbedded": 4,
+  "totalRecoverableBits": 3,
   "warnings": [
     "Selection channel did not carry the full compressed payload; remaining bits require multi-post framing or audit-assisted recovery."
   ]

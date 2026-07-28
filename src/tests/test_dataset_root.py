@@ -7,6 +7,7 @@ import pytest
 from infrastructure import config as cfg
 from services.posts_service import list_posts
 from workflows.utils.prep_run_manifest import (
+    PrepRunManifest,
     build_prep_run_manifest,
     write_prep_run_manifest,
 )
@@ -103,14 +104,39 @@ def test_prep_manifest_requires_isolated_root():
 def test_prep_manifest_records_recipe(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("WORKFLOW_DATASET_ROOT", str(tmp_path))
     monkeypatch.setenv("WORKFLOW_TANGENT_DB_BUILDER", "v1")
+    monkeypatch.setenv("WORKFLOW_ANGLES_MAX_OUTPUT", "16")
     manifest = build_prep_run_manifest(run_id="v1_test", notes="test run")
 
+    assert manifest.schema_version == 2
     assert manifest.run_id == "v1_test"
     assert manifest.tangent_db_builder == "v1"
     assert manifest.tangent_db_config_hash
     assert manifest.dataset_root == str(tmp_path)
     assert manifest.step_dirs["angles-step"]["dest"] == str(tmp_path / "news_angles")
+    assert manifest.artifact_namespace == "selection_channel_angles/refactor_v2"
+    assert manifest.angle_generator_version == "efficient_multiframe_selection_v1"
+    assert manifest.angle_sampler_version == "stable_round_robin_v1"
+    assert manifest.capacity_settings["angles_max_output"] == 16
 
     path = write_prep_run_manifest(run_id="v1_test", notes="test run")
     assert path == tmp_path / "prep_run.json"
     assert '"run_id": "v1_test"' in path.read_text(encoding="utf-8")
+
+
+def test_prep_manifest_v1_remains_readable() -> None:
+    legacy = PrepRunManifest.model_validate(
+        {
+            "schema_version": 1,
+            "run_id": "historical",
+            "tangent_db_builder": "legacy",
+            "tangent_db_config_hash": "old-hash",
+            "capacity_profile": "mid",
+            "created_at_utc": "2025-01-01T00:00:00+00:00",
+            "seed_corpus": "datasets/news",
+            "dataset_root": "datasets/legacy",
+            "step_dirs": {},
+        }
+    )
+
+    assert legacy.schema_version == 1
+    assert legacy.artifact_namespace == "legacy_unversioned"

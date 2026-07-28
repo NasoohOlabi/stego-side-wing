@@ -394,6 +394,7 @@ def test_receiver_run_multi_frame_recovers_ordered_payload():
     assert out["succeeded"] is True
     assert out["payload"] == "hi"
     assert out["frame_count"] == len(encoded["frames"])
+    assert out["frame_count"] >= 3
 
 
 def test_receiver_multi_frame_rejects_invalid_ordered_reference():

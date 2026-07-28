@@ -88,6 +88,10 @@ _WORKFLOW_TRANSPORT_NAME_TOKENS = RETRYABLE_TRANSPORT_NAME_TOKENS
 _WORKFLOW_TRANSPORT_MESSAGE_TOKENS = RETRYABLE_TRANSPORT_MESSAGE_TOKENS
 
 
+class MalformedAnglesResponseError(ValueError):
+    """An LLM/cache payload stayed malformed after the supported repair attempt."""
+
+
 def _env_positive_int(name: str, default: int) -> int:
     raw = (get_env(name) or "").strip()
     if not raw:
@@ -604,8 +608,15 @@ def _strip_code_fences(text: str) -> str:
 def _json_loads_angles_payload(text: str, *, phase: str) -> Any:
     stripped = text.strip()
     if not stripped:
-        raise ValueError(f"angles LLM returned empty text after JSON {phase}")
-    return json.loads(stripped)
+        raise MalformedAnglesResponseError(
+            f"angles LLM returned empty text after JSON {phase}"
+        )
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise MalformedAnglesResponseError(
+            f"angles LLM returned invalid JSON after {phase}: {exc}"
+        ) from exc
 
 
 def _schema_errors(data: Any) -> list[str]:
@@ -812,7 +823,9 @@ def _parse_or_repair(raw_text: str) -> list[dict[str, str]]:
 
         errors = _schema_errors(data)
         if errors:
-            raise ValueError("Schema validation failed: " + "; ".join(errors))
+            raise MalformedAnglesResponseError(
+                "Schema validation failed: " + "; ".join(errors)
+            )
 
     return data
 
@@ -829,8 +842,54 @@ def _tag_source_document(
     return out
 
 
+def _validated_cached_angles(data: Any) -> list[dict[str, Any]]:
+    errors = _schema_errors(data)
+    if errors:
+        raise MalformedAnglesResponseError(
+            "Cached angles schema validation failed: " + "; ".join(errors)
+        )
+    return [dict(item) for item in data]
+
+
 def _workflow_google_cache_dir(cache_root: Path) -> Path:
     return cache_root / _WORKFLOW_GOOGLE_CACHE_SUBDIR
+
+
+def _angle_target_reached(results: list[dict[str, Any]], max_results: int | None) -> bool:
+    return max_results is not None and len(results) >= max_results
+
+
+def _bounded_angle_results(
+    results: list[dict[str, Any]],
+    max_results: int | None,
+    recoverable_errors: list[MalformedAnglesResponseError],
+    successful_blocks: int,
+) -> list[dict[str, Any]]:
+    if successful_blocks == 0 and recoverable_errors:
+        raise recoverable_errors[0]
+    return results if max_results is None else results[:max_results]
+
+
+def _log_recoverable_input_failure(
+    *,
+    cache_key: str,
+    source_document: int,
+    exc: MalformedAnglesResponseError,
+    workflow_backend: bool,
+) -> None:
+    _LOG.warning(
+        "angles_input_block_skipped",
+        extra={
+            "event": "angles.input_block_skipped",
+            "tags": [TAG_WORKFLOW],
+            "component": "angle_runner",
+            "cache_key": cache_key,
+            "source_document": source_document,
+            "workflow_backend": workflow_backend,
+            "error_kind": type(exc).__name__,
+        },
+        exc_info=True,
+    )
 
 
 def _repair_json_workflow(
@@ -908,7 +967,9 @@ def _parse_or_repair_workflow(
 
         errors = _schema_errors(data)
         if errors:
-            raise ValueError("Schema validation failed: " + "; ".join(errors))
+            raise MalformedAnglesResponseError(
+                "Schema validation failed: " + "; ".join(errors)
+            )
 
     return data
 
@@ -961,6 +1022,7 @@ def analyze_angles_from_texts_via_workflow_llm(
     *,
     use_cache: bool = True,
     llm: LLMAdapter | None = None,
+    max_results: int | None = None,
 ) -> list[dict[str, Any]]:
     """
     Same outputs as ``analyze_angles_from_texts`` but uses ``LLMAdapter`` (Google when configured).
@@ -969,6 +1031,12 @@ def analyze_angles_from_texts_via_workflow_llm(
     """
     analyze_t0 = time.perf_counter()
     all_responses: list[dict[str, Any]] = []
+    recoverable_errors: list[MalformedAnglesResponseError] = []
+    processed_blocks = 0
+    cached_blocks = 0
+    generated_blocks = 0
+    if max_results is not None and max_results < 0:
+        raise ValueError("max_results must be non-negative")
     adapter = llm or LLMAdapter()
     cfg = get_config()
     provider, model = resolve_workflow_llm_provider_and_model(
@@ -996,18 +1064,23 @@ def analyze_angles_from_texts_via_workflow_llm(
     for text in texts:
         if not text:
             continue
+        if _angle_target_reached(all_responses, max_results):
+            break
 
+        processed_blocks += 1
+        cache_key = deterministic_hash_sha256(text)
         try:
-            cache_key = deterministic_hash_sha256(text)
             cache_file = wf_cache / f"{cache_key}.json"
 
             if use_cache and cache_file.exists():
                 _emit_status(f"[angles-workflow] cache hit {cache_key[:10]}...")
                 try:
                     cached_data = json.loads(cache_file.read_text(encoding="utf-8"))
-                    if not isinstance(cached_data, list):
-                        raise ValueError("cache root must be array")
-                    all_responses.extend(_tag_source_document(cached_data, running))
+                    validated_cache = _validated_cached_angles(cached_data)
+                    cached_blocks += 1
+                    all_responses.extend(_tag_source_document(validated_cache, running))
+                    if _angle_target_reached(all_responses, max_results):
+                        break
                     continue
                 except Exception as e:
                     _emit_status(f"[angles-workflow] cache read error {cache_key[:10]}...: {e}")
@@ -1053,10 +1126,27 @@ def analyze_angles_from_texts_via_workflow_llm(
                 except Exception as e:
                     _emit_status(f"[angles-workflow] cache save error {cache_key[:10]}...: {e}")
 
+            generated_blocks += 1
             all_responses.extend(_tag_source_document(text_responses, running))
+            if _angle_target_reached(all_responses, max_results):
+                break
+        except MalformedAnglesResponseError as exc:
+            recoverable_errors.append(exc)
+            _log_recoverable_input_failure(
+                cache_key=cache_key,
+                source_document=running,
+                exc=exc,
+                workflow_backend=True,
+            )
         finally:
             running += 1
 
+    bounded = _bounded_angle_results(
+        all_responses,
+        max_results,
+        recoverable_errors,
+        cached_blocks + generated_blocks,
+    )
     total_ms = int((time.perf_counter() - analyze_t0) * 1000)
     _LOG.info(
         "angles_analyze_from_texts_workflow_complete",
@@ -1066,19 +1156,40 @@ def analyze_angles_from_texts_via_workflow_llm(
             "component": "angle_runner",
             "elapsed_ms": total_ms,
             "text_blocks_input": len(texts),
-            "angles_out": len(all_responses),
+            "angles_out": len(bounded),
             "use_cache": use_cache,
+            "max_results": max_results,
+            "early_stopped": _angle_target_reached(all_responses, max_results),
+            "processed_blocks": processed_blocks,
+            "failed_blocks": len(recoverable_errors),
+            "cached_blocks": cached_blocks,
+            "generated_blocks": generated_blocks,
             "trace_id": get_trace_id() or "",
         },
     )
-    return all_responses
+    return bounded
 
 
-def analyze_angles_from_texts(texts: list[str], *, use_cache: bool = True) -> list[dict[str, Any]]:
+def analyze_angles_from_texts(
+    texts: list[str],
+    *,
+    use_cache: bool = True,
+    max_results: int | None = None,
+) -> list[dict[str, Any]]:
     if get_workflow_llm_backend() == "google":
-        return analyze_angles_from_texts_via_workflow_llm(texts, use_cache=use_cache)
+        return analyze_angles_from_texts_via_workflow_llm(
+            texts,
+            use_cache=use_cache,
+            max_results=max_results,
+        )
     analyze_t0 = time.perf_counter()
     all_responses: list[dict[str, Any]] = []
+    recoverable_errors: list[MalformedAnglesResponseError] = []
+    processed_blocks = 0
+    cached_blocks = 0
+    generated_blocks = 0
+    if max_results is not None and max_results < 0:
+        raise ValueError("max_results must be non-negative")
 
     cache_root = get_angles_cache_dir()
     try:
@@ -1100,18 +1211,23 @@ def analyze_angles_from_texts(texts: list[str], *, use_cache: bool = True) -> li
     for text in texts:
         if not text:
             continue
+        if _angle_target_reached(all_responses, max_results):
+            break
 
+        processed_blocks += 1
+        cache_key = deterministic_hash_sha256(text)
         try:
-            cache_key = deterministic_hash_sha256(text)
             cache_file = cache_root / f"{cache_key}.json"
 
             if use_cache and cache_file.exists():
                 _emit_status(f"[angles] cache hit {cache_key[:10]}...")
                 try:
                     cached_data = json.loads(cache_file.read_text(encoding="utf-8"))
-                    if not isinstance(cached_data, list):
-                        raise ValueError("cache root must be array")
-                    all_responses.extend(_tag_source_document(cached_data, running))
+                    validated_cache = _validated_cached_angles(cached_data)
+                    cached_blocks += 1
+                    all_responses.extend(_tag_source_document(validated_cache, running))
+                    if _angle_target_reached(all_responses, max_results):
+                        break
                     continue
                 except Exception as e:
                     _emit_status(f"[angles] cache read error {cache_key[:10]}...: {e}")
@@ -1151,10 +1267,27 @@ def analyze_angles_from_texts(texts: list[str], *, use_cache: bool = True) -> li
                 except Exception as e:
                     _emit_status(f"[angles] cache save error {cache_key[:10]}...: {e}")
 
+            generated_blocks += 1
             all_responses.extend(_tag_source_document(text_responses, running))
+            if _angle_target_reached(all_responses, max_results):
+                break
+        except MalformedAnglesResponseError as exc:
+            recoverable_errors.append(exc)
+            _log_recoverable_input_failure(
+                cache_key=cache_key,
+                source_document=running,
+                exc=exc,
+                workflow_backend=False,
+            )
         finally:
             running += 1
 
+    bounded = _bounded_angle_results(
+        all_responses,
+        max_results,
+        recoverable_errors,
+        cached_blocks + generated_blocks,
+    )
     total_ms = int((time.perf_counter() - analyze_t0) * 1000)
     _LOG.info(
         "angles_analyze_from_texts_complete",
@@ -1164,12 +1297,18 @@ def analyze_angles_from_texts(texts: list[str], *, use_cache: bool = True) -> li
             "component": "angle_runner",
             "elapsed_ms": total_ms,
             "text_blocks_input": len(texts),
-            "angles_out": len(all_responses),
+            "angles_out": len(bounded),
             "use_cache": use_cache,
+            "max_results": max_results,
+            "early_stopped": _angle_target_reached(all_responses, max_results),
+            "processed_blocks": processed_blocks,
+            "failed_blocks": len(recoverable_errors),
+            "cached_blocks": cached_blocks,
+            "generated_blocks": generated_blocks,
             "trace_id": get_trace_id() or "",
         },
     )
-    return all_responses
+    return bounded
 
 
 __all__ = ["analyze_angles_from_texts", "analyze_angles_from_texts_via_workflow_llm"]

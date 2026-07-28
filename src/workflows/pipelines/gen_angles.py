@@ -7,8 +7,11 @@ from typing import Any
 from loguru import logger
 
 from infrastructure.config import (
+    WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED,
     get_workflow_angles_generation_mode,
     get_workflow_angles_max_output,
+    get_workflow_angles_raw_target,
+    get_workflow_angles_raw_target_multiplier,
     get_workflow_llm_backend,
     get_workflow_tangent_db_builder,
     resolve_workflow_llm_provider_and_model,
@@ -17,6 +20,11 @@ from infrastructure.json_logging import get_trace_id
 from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.config import get_config
+from workflows.utils.angle_artifact import (
+    ANGLE_ARTIFACT_NAMESPACE,
+    ANGLE_ARTIFACT_SCHEMA_VERSION,
+    ANGLE_GENERATOR_VERSION,
+)
 from workflows.utils.angles_llm_config import (
     SYSTEM_PROMPT as ANGLES_SYSTEM_PROMPT,
 )
@@ -57,6 +65,62 @@ def _gen_angles_bind_log():
 
 def _elapsed_ms(since: float) -> int:
     return int((time.perf_counter() - since) * 1000)
+
+
+def _angle_target_report(
+    angles: list[dict[str, Any]], target: int
+) -> dict[str, int | bool | None]:
+    if target == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED:
+        return {
+            "angles_target_reached": None,
+            "angles_target_shortfall": None,
+        }
+    return {
+        "angles_target_reached": len(angles) >= target,
+        "angles_target_shortfall": max(0, target - len(angles)),
+    }
+
+
+def _finalize_angles(
+    *,
+    post: dict[str, Any],
+    entries: list[dict[str, Any]],
+    angles: list[dict[str, Any]],
+    target: int,
+    raw_target: int | None,
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Apply the shared post-generation stages before enforcing the retained target."""
+    selected = _apply_tangent_db_builder(
+        post=post,
+        entries=entries,
+        angles=angles,
+        max_output=raw_target if raw_target is not None else target,
+        report=report,
+    )
+    selected = _apply_angle_relevance_gate(post=post, angles=selected, report=report)
+    selected = _dedupe_angles(selected)
+    return selected[:target]
+
+
+def _angle_artifact_metadata(report: dict[str, Any]) -> dict[str, Any]:
+    """Version metadata that lets readers distinguish refactor output from legacy posts."""
+    return {
+        "schema_version": ANGLE_ARTIFACT_SCHEMA_VERSION,
+        "artifact_namespace": ANGLE_ARTIFACT_NAMESPACE,
+        "generator_version": ANGLE_GENERATOR_VERSION,
+        "sampler_version": report.get("input_sampler_version"),
+        "selection_strategy": report.get("input_selection_strategy"),
+        "dictionary_id": report.get("dictionary_id"),
+        "capacity_profile": report.get("input_capacity_profile"),
+        "capacity_limits": report.get("input_capacity_limits"),
+        "generation_mode": report.get("generation_mode"),
+        "angles_retained_target": report.get("angles_retained_target"),
+        "angles_raw_target": report.get("angles_raw_target"),
+        "raw_target_multiplier": report.get("raw_target_multiplier"),
+        "angles_target_reached": report.get("angles_target_reached"),
+        "angles_target_shortfall": report.get("angles_target_shortfall"),
+    }
 
 
 def _probe_llm_run_id(pipeline: Any) -> str:
@@ -154,7 +218,12 @@ def _apply_tangent_db_builder(
 def _post_with_angles(
     post: dict[str, Any], angles: list[dict[str, Any]], report: dict[str, Any]
 ) -> dict[str, Any]:
-    processed = dict(post, angles=angles, options_count=len(angles))
+    processed = dict(
+        post,
+        angles=angles,
+        options_count=len(angles),
+        angle_artifact=_angle_artifact_metadata(report),
+    )
     tangent_report = report.get("tangent_db_report")
     if isinstance(tangent_report, dict):
         processed["tangent_db_report"] = tangent_report
@@ -260,9 +329,20 @@ class GenAnglesPipeline:
             "model": report_model,
             "temperature": ANGLES_TEMPERATURE,
             "generation_mode": generation_mode,
+            "artifact_schema_version": ANGLE_ARTIFACT_SCHEMA_VERSION,
+            "artifact_namespace": ANGLE_ARTIFACT_NAMESPACE,
+            "angle_generator_version": ANGLE_GENERATOR_VERSION,
             "system_prompt_hash": stable_hash(ANGLES_SYSTEM_PROMPT),
             "user_prompt_template_hash": stable_hash(ANGLES_USER_PROMPT_TEMPLATE),
             "used_fallback": False,
+            "angles_retained_target": (
+                None
+                if get_workflow_angles_max_output()
+                == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED
+                else get_workflow_angles_max_output()
+            ),
+            "angles_raw_target": get_workflow_angles_raw_target(),
+            "raw_target_multiplier": get_workflow_angles_raw_target_multiplier(),
             "dictionary_id": dictionary_report["dictionary_id"],
             "input_raw_count": dictionary_report["raw_entry_count"],
             "input_source_counts": dictionary_report["source_counts"],
@@ -271,17 +351,31 @@ class GenAnglesPipeline:
             "input_truncated_sources": dictionary_report["truncated_sources"],
             "input_capacity_profile": dictionary_report["capacity_profile"],
             "input_capacity_limits": dictionary_report["capacity_limits"],
+            "input_sampler_version": dictionary_report.get("sampler_version"),
+            "input_selection_strategy": dictionary_report.get("selection_strategy"),
             "input_sample_entries": dictionary_report["sample_entries"],
         }
         if not dictionary:
-            angles = _apply_tangent_db_builder(
+            max_angles = get_workflow_angles_max_output()
+            angles = _finalize_angles(
                 post=post,
                 entries=entry_bundle,
                 angles=[],
-                max_output=get_workflow_angles_max_output(),
+                target=max_angles,
+                raw_target=get_workflow_angles_raw_target(),
                 report=report,
             )
-            report.update({"angles": [], "angles_hash": stable_hash([]), "options_count": 0})
+            report.update(
+                {
+                    "angles": angles,
+                    "angles_hash": stable_hash(angles),
+                    "options_count": len(angles),
+                    "angles_raw_count": 0,
+                    "angles_capped": False,
+                    "angles_max_output": max_angles,
+                    **_angle_target_report(angles, max_angles),
+                }
+            )
             _gen_angles_bind_log().info(
                 "gen_angles_preview_complete",
                 path="empty_dictionary",
@@ -291,7 +385,7 @@ class GenAnglesPipeline:
                 angles_count=0,
                 dictionary_id=report["dictionary_id"],
             )
-            return {"post": _post_with_angles(post, [], report), "report": report}
+            return {"post": _post_with_angles(post, angles, report), "report": report}
 
         if generation_mode == "extractive_zero_kld":
             t_extract = time.perf_counter()
@@ -299,17 +393,14 @@ class GenAnglesPipeline:
             extract_ms = _elapsed_ms(t_extract)
             angles_raw_count = len(angles)
             max_angles = get_workflow_angles_max_output()
-            angles = _apply_tangent_db_builder(
+            angles = _finalize_angles(
                 post=post,
                 entries=entry_bundle,
                 angles=angles,
-                max_output=max_angles,
+                target=max_angles,
+                raw_target=get_workflow_angles_raw_target(),
                 report=report,
             )
-            if len(angles) > max_angles:
-                angles = angles[:max_angles]
-            angles = _apply_angle_relevance_gate(post=post, angles=angles, report=report)
-            processed_post = _post_with_angles(post, angles, report)
             report.update(
                 {
                     "angles": angles,
@@ -318,8 +409,10 @@ class GenAnglesPipeline:
                     "angles_raw_count": angles_raw_count,
                     "angles_capped": angles_raw_count != len(angles),
                     "angles_max_output": max_angles,
+                    **_angle_target_report(angles, max_angles),
                 }
             )
+            processed_post = _post_with_angles(post, angles, report)
             _gen_angles_bind_log().info(
                 "gen_angles_preview_complete",
                 path="extractive_zero_kld",
@@ -350,7 +443,10 @@ class GenAnglesPipeline:
 
         t_an = time.perf_counter()
         try:
-            response = self.backend.analyze_angles(dictionary)
+            response = self.backend.analyze_angles(
+                dictionary,
+                max_results=get_workflow_angles_raw_target(),
+            )
             analyze_ms = _elapsed_ms(t_an)
             results = response.get("results", [])
             angles = []
@@ -368,17 +464,14 @@ class GenAnglesPipeline:
                         angles.append(angle)
             angles_raw_count = len(angles)
             max_angles = get_workflow_angles_max_output()
-            angles = _apply_tangent_db_builder(
+            angles = _finalize_angles(
                 post=post,
                 entries=entry_bundle,
                 angles=angles,
-                max_output=max_angles,
+                target=max_angles,
+                raw_target=get_workflow_angles_raw_target(),
                 report=report,
             )
-            if len(angles) > max_angles:
-                angles = angles[:max_angles]
-            angles = _apply_angle_relevance_gate(post=post, angles=angles, report=report)
-            processed_post = _post_with_angles(post, angles, report)
             report.update(
                 {
                     "angles": angles,
@@ -387,8 +480,10 @@ class GenAnglesPipeline:
                     "angles_raw_count": angles_raw_count,
                     "angles_capped": angles_raw_count != len(angles),
                     "angles_max_output": max_angles,
+                    **_angle_target_report(angles, max_angles),
                 }
             )
+            processed_post = _post_with_angles(post, angles, report)
             _gen_angles_bind_log().info(
                 "gen_angles_preview_complete",
                 path="analyze_angles",
@@ -431,17 +526,14 @@ class GenAnglesPipeline:
                 a.setdefault("source_document", 0)
             angles_raw_count = len(angles)
             max_angles = get_workflow_angles_max_output()
-            angles = _apply_tangent_db_builder(
+            angles = _finalize_angles(
                 post=post,
                 entries=entry_bundle,
                 angles=angles,
-                max_output=max_angles,
+                target=max_angles,
+                raw_target=get_workflow_angles_raw_target(),
                 report=report,
             )
-            if len(angles) > max_angles:
-                angles = angles[:max_angles]
-            angles = _apply_angle_relevance_gate(post=post, angles=angles, report=report)
-            processed_post = _post_with_angles(post, angles, report)
             report.update(
                 {
                     "used_fallback": True,
@@ -452,8 +544,10 @@ class GenAnglesPipeline:
                     "angles_raw_count": angles_raw_count,
                     "angles_capped": angles_raw_count != len(angles),
                     "angles_max_output": max_angles,
+                    **_angle_target_report(angles, max_angles),
                 }
             )
+            processed_post = _post_with_angles(post, angles, report)
             _gen_angles_bind_log().info(
                 "gen_angles_preview_complete",
                 path="fallback_llm",

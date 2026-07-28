@@ -1,5 +1,6 @@
 """Configuration management."""
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -14,6 +15,8 @@ ENV_FILE_PATH = REPO_ROOT / ".env"
 # Load .env file once at module level.
 dotenv.load_dotenv(dotenv_path=ENV_FILE_PATH if ENV_FILE_PATH.exists() else None)
 _dotenv_values_cache: dict[str, str | None] | None = None
+_capacity_unbounded_warning_emitted = False
+_LOG = logging.getLogger(__name__)
 
 
 def _load_dotenv_values() -> dict[str, str | None]:
@@ -127,11 +130,12 @@ DEFAULT_WORKFLOW_ENV_FLAG_ON = True
 
 # Profile tiers for _capacity_value: (low, mid, high).
 WORKFLOW_CAPACITY_TIER_RESEARCH_MAX_TERMS = (4, 8, 12)
-WORKFLOW_CAPACITY_TIER_RESEARCH_MAX_SELECTED_URLS = (12, 48, 96)
-WORKFLOW_CAPACITY_TIER_DICTIONARY_MAX_SEARCH_RESULTS = (12, 48, 96)
-WORKFLOW_CAPACITY_TIER_DICTIONARY_MAX_COMMENTS = (16, 64, 128)
-WORKFLOW_CAPACITY_TIER_ANGLES_MAX_INPUT_BLOCKS = (24, 96, 192)
-WORKFLOW_CAPACITY_TIER_ANGLES_MAX_OUTPUT = (8, 32, 64)
+WORKFLOW_CAPACITY_TIER_RESEARCH_MAX_SELECTED_URLS = (12, 24, 48)
+WORKFLOW_CAPACITY_TIER_DICTIONARY_MAX_SEARCH_RESULTS = (8, 16, 32)
+WORKFLOW_CAPACITY_TIER_DICTIONARY_MAX_COMMENTS = (24, 48, 96)
+WORKFLOW_CAPACITY_TIER_ANGLES_MAX_INPUT_BLOCKS = (32, 64, 128)
+WORKFLOW_CAPACITY_TIER_ANGLES_MAX_OUTPUT = (16, 32, 64)
+DEFAULT_WORKFLOW_ANGLES_RAW_TARGET_MULTIPLIER = 4
 
 DEFAULT_WORKFLOW_RESEARCH_FETCH_TIMEOUT_SEC = 180.0
 DEFAULT_WORKFLOW_RESEARCH_FETCH_RETRIES = 1
@@ -145,7 +149,7 @@ DEFAULT_WORKFLOW_CRAWL4AI_PAGE_TIMEOUT_MS = 45_000
 # profile-based cap so slices and URL loops effectively never hit the ceiling (> 0 so
 # research URL selection never treats the limit as "disabled" / zero-selected).
 WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED = 10_000_000
-DEFAULT_WORKFLOW_CAPACITY_LIMITS_ENABLED = False
+DEFAULT_WORKFLOW_CAPACITY_LIMITS_ENABLED = True
 
 
 class WorkflowEncodingProfileSettings(BaseModel):
@@ -178,7 +182,7 @@ class WorkflowEncodingProfileSettings(BaseModel):
 WORKFLOW_ENCODING_PROFILES: dict[WorkflowEncodingProfile, WorkflowEncodingProfileSettings] = {
     "balanced": WorkflowEncodingProfileSettings(
         capacity_profile="mid",
-        capacity_limits_enabled=False,
+        capacity_limits_enabled=True,
         angles_generation_mode="model",
         stego_generation_mode="model",
         payload_transform="plain",
@@ -496,9 +500,36 @@ def _workflow_env_on_off(key: str, *, default: bool) -> bool:
 
 def get_workflow_capacity_limits_enabled() -> bool:
     """When False, profile presets are ignored; per-key WORKFLOW_* overrides still apply."""
-    return _workflow_env_on_off(
+    enabled = _workflow_env_on_off(
         "WORKFLOW_CAPACITY_LIMITS_ENABLED",
         default=bool(_workflow_encoding_default("capacity_limits_enabled")),
+    )
+    if not enabled:
+        _warn_unbounded_workflow_capacity()
+    return enabled
+
+
+def _warn_unbounded_workflow_capacity() -> None:
+    """Emit the legacy escape-hatch warning once per process."""
+    global _capacity_unbounded_warning_emitted
+    if _capacity_unbounded_warning_emitted:
+        return
+    _capacity_unbounded_warning_emitted = True
+    _LOG.warning(
+        "workflow_capacity_limits_disabled",
+        extra={
+            "event": "workflow.capacity_limits_disabled",
+            "component": "infrastructure.config",
+            "capacity_mode": "legacy_unbounded",
+        },
+    )
+
+
+def get_workflow_codec_dictionary_limits_enabled() -> bool:
+    """Whether angle/research budgets also constrain payload compression dictionaries."""
+    return _workflow_env_on_off(
+        "WORKFLOW_CODEC_DICTIONARY_LIMITS_ENABLED",
+        default=False,
     )
 
 
@@ -583,6 +614,24 @@ def get_workflow_angles_max_output() -> int:
     return _capacity_value("WORKFLOW_ANGLES_MAX_OUTPUT", low=low, mid=mid, high=high)
 
 
+def get_workflow_angles_raw_target_multiplier() -> int:
+    """Raw candidates requested per retained angle target."""
+    value = _env_non_negative_int("WORKFLOW_ANGLES_RAW_TARGET_MULTIPLIER")
+    return (
+        DEFAULT_WORKFLOW_ANGLES_RAW_TARGET_MULTIPLIER
+        if value is None
+        else max(1, value)
+    )
+
+
+def get_workflow_angles_raw_target() -> int | None:
+    """Maximum validated raw angle records requested from the backend."""
+    retained_target = get_workflow_angles_max_output()
+    if retained_target == WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED:
+        return None
+    return retained_target * get_workflow_angles_raw_target_multiplier()
+
+
 def get_workflow_tangent_db_builder() -> Literal["legacy", "v1"]:
     """Tangent-DB shadow report: ``legacy`` (off) or ``v1`` (compute without selection)."""
     raw = (_workflow_env_raw("WORKFLOW_TANGENT_DB_BUILDER") or "legacy").lower()
@@ -632,10 +681,13 @@ def get_workflow_tangent_db_settings() -> dict[str, str | int | float | bool]:
     }
 
 
-def get_workflow_capacity_settings() -> dict[str, str | int | bool | dict[str, Any]]:
+def get_workflow_capacity_settings() -> dict[
+    str, str | int | bool | None | dict[str, Any]
+]:
     """Structured capacity settings for reports and logs (effective limits after env resolution)."""
     return {
         "limits_enabled": get_workflow_capacity_limits_enabled(),
+        "codec_dictionary_limits_enabled": get_workflow_codec_dictionary_limits_enabled(),
         "profile": get_workflow_capacity_profile(),
         "research_max_terms": get_workflow_research_max_terms(),
         "research_max_selected_urls": get_workflow_research_max_selected_urls(),
@@ -643,6 +695,8 @@ def get_workflow_capacity_settings() -> dict[str, str | int | bool | dict[str, A
         "dictionary_max_comments": get_workflow_dictionary_max_comments(),
         "angles_max_input_blocks": get_workflow_angles_max_input_blocks(),
         "angles_max_output": get_workflow_angles_max_output(),
+        "angles_raw_target_multiplier": get_workflow_angles_raw_target_multiplier(),
+        "angles_raw_target": get_workflow_angles_raw_target(),
         "tangent_db": get_workflow_tangent_db_settings(),
     }
 

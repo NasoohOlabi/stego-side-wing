@@ -17,6 +17,7 @@ from typing import Any, cast
 
 from pydantic import validate_call
 
+from infrastructure.config import get_workflow_codec_dictionary_limits_enabled
 from workflows.contracts import PostAugmentation
 from workflows.utils.text_utils import (
     build_post_text_dictionary,
@@ -403,14 +404,20 @@ def take_bits(bits: str, count: int) -> tuple[str, str, bool]:
 
 @validate_call
 def build_dictionary(post: dict[str, Any]) -> list[str]:
-    dictionary = build_post_text_dictionary(post, apply_capacity_profile=True)
+    dictionary = build_post_text_dictionary(
+        post,
+        apply_capacity_profile=get_workflow_codec_dictionary_limits_enabled(),
+    )
     return [entry for entry in dictionary if is_non_empty_string(entry)]
 
 
 @validate_call
 def build_dictionary_report(post: dict[str, Any]) -> dict[str, Any]:
     """Source-aware deterministic dictionary metadata shared by sender and receiver."""
-    return build_post_text_dictionary_report(post, apply_capacity_profile=True)
+    return build_post_text_dictionary_report(
+        post,
+        apply_capacity_profile=get_workflow_codec_dictionary_limits_enabled(),
+    )
 
 
 @validate_call
@@ -633,6 +640,7 @@ def embed_in_comment_selection(bits: str, post: dict[str, Any]) -> dict[str, Any
         "result": {
             "bitsUsed": bits_used,
             "bitsCount": bits_count,
+            "recoverableBitsCount": _recoverable_width(n + 1),
             "targetType": "post" if selection_index == 0 else "comment",
             "context": {
                 "id": post.get("id"),
@@ -685,6 +693,7 @@ def embed_in_angle_selection(
         return {
             "bitsUsed": "",
             "bitsCount": 0,
+            "recoverableBitsCount": 0,
             "remainingBits": bits,
             "selectedAngle": {},
             "remainingAngles": [],
@@ -704,6 +713,7 @@ def embed_in_angle_selection(
     return {
         "bitsUsed": bits_used,
         "bitsCount": bits_count,
+        "recoverableBitsCount": _recoverable_width(len(angles)),
         "remainingBits": remaining,
         "selectedAngle": selected_angle,
         "remainingAngles": remaining_angles,
@@ -729,6 +739,8 @@ def _selection_embedding_fields(bits: str, post: dict[str, Any]) -> dict[str, An
         "commentEmbedding": comment_emb["result"],
         "angleEmbedding": angle_emb,
         "totalBitsEmbedded": comment_emb["result"]["bitsCount"] + angle_emb["bitsCount"],
+        "totalRecoverableBits": comment_emb["result"]["recoverableBitsCount"]
+        + angle_emb["recoverableBitsCount"],
         "fullEncodedBits": selection_signature,
         "commentBits": comment_emb["result"]["bitsUsed"],
         "angleBits": angle_emb["bitsUsed"],

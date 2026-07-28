@@ -18,6 +18,7 @@ def build_workflow_capacity_observation_fields(
         "event": "workflow_capacity_observation",
         "capacity_profile": settings["profile"],
         "limits_enabled": settings["limits_enabled"],
+        "codec_dictionary_limits_enabled": settings["codec_dictionary_limits_enabled"],
         "effective_limits": {
             "research_max_terms": settings["research_max_terms"],
             "research_max_selected_urls": settings["research_max_selected_urls"],
@@ -25,6 +26,8 @@ def build_workflow_capacity_observation_fields(
             "dictionary_max_comments": settings["dictionary_max_comments"],
             "angles_max_input_blocks": settings["angles_max_input_blocks"],
             "angles_max_output": settings["angles_max_output"],
+            "angles_raw_target_multiplier": settings["angles_raw_target_multiplier"],
+            "angles_raw_target": settings["angles_raw_target"],
         },
     }
 
@@ -50,7 +53,10 @@ def build_workflow_capacity_observation_fields(
             "angles_raw_count": gen_angles_report.get("angles_raw_count"),
             "angles_count_after_cap": gen_angles_report.get("options_count"),
             "angles_capped": gen_angles_report.get("angles_capped"),
+            "angles_target_reached": gen_angles_report.get("angles_target_reached"),
+            "angles_target_shortfall": gen_angles_report.get("angles_target_shortfall"),
             "dictionary_capacity_applied": gen_angles_report.get("input_capacity_applied"),
+            "dictionary_sampler_version": gen_angles_report.get("input_sampler_version"),
         }
         if "observed" in out:
             out["observed"].update(obs_ga)

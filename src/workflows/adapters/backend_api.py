@@ -101,8 +101,18 @@ class BackendAPIAdapter:
         except RequestException:
             return self._needle_finder_batch_local(needles=needles, haystack=haystack)
 
-    def analyze_angles(self, texts: list[str], *, use_cache: bool = True) -> dict[str, Any]:
-        return self._local_client().analyze_angles(texts, use_cache=use_cache)
+    def analyze_angles(
+        self,
+        texts: list[str],
+        *,
+        use_cache: bool = True,
+        max_results: int | None = None,
+    ) -> dict[str, Any]:
+        return self._local_client().analyze_angles(
+            texts,
+            use_cache=use_cache,
+            max_results=max_results,
+        )
 
     def get_post_local(self, post_filename: str, step: str) -> dict[str, Any]:
         return self._local_client().get_post_local(post_filename=post_filename, step=step)

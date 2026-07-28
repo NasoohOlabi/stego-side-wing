@@ -65,10 +65,22 @@ class LocalBackendClient:
 
         return semantic_search(query_text=text, objects_list=objects, n=n)
 
-    def analyze_angles(self, texts: list[str], *, use_cache: bool = True) -> dict[str, Any]:
+    def analyze_angles(
+        self,
+        texts: list[str],
+        *,
+        use_cache: bool = True,
+        max_results: int | None = None,
+    ) -> dict[str, Any]:
         from services.angles_service import analyze_angles
 
-        return {"results": analyze_angles(texts, use_cache=use_cache)}
+        return {
+            "results": analyze_angles(
+                texts,
+                use_cache=use_cache,
+                max_results=max_results,
+            )
+        }
 
     def get_post_local(self, post_filename: str, step: str) -> dict[str, Any]:
         src_dir, _ = self.config.get_step_dirs(step)

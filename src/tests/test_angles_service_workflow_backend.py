@@ -6,6 +6,7 @@ import httpx
 import pytest
 import requests
 
+from workflows.adapters.backend_api import BackendAPIAdapter
 from workflows.adapters.llm import LLMAdapter
 from workflows.cache_context import angles_cache_context
 
@@ -45,7 +46,13 @@ def test_analyze_angles_lm_backend_uses_angle_runner(
     monkeypatch.setenv("WORKFLOW_LLM_BACKEND", "lm_studio")
     seen: list[tuple[list[str], bool]] = []
 
-    def track(texts: list[str], *, use_cache: bool = True) -> list[dict[str, str]]:
+    def track(
+        texts: list[str],
+        *,
+        use_cache: bool = True,
+        max_results: int | None = None,
+    ) -> list[dict[str, str]]:
+        assert max_results is None
         seen.append((list(texts), use_cache))
         return []
 
@@ -54,6 +61,67 @@ def test_analyze_angles_lm_backend_uses_angle_runner(
 
     analyze_angles(["only_lm"], use_cache=False)
     assert seen == [(["only_lm"], False)]
+
+
+def test_analyze_angles_propagates_max_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[int | None] = []
+
+    def track(
+        _texts: list[str],
+        *,
+        use_cache: bool = True,
+        max_results: int | None = None,
+    ) -> list[dict[str, str]]:
+        assert use_cache is False
+        seen.append(max_results)
+        return []
+
+    monkeypatch.setattr("services.angles_service.analyze_angles_from_texts", track)
+    from services.angles_service import analyze_angles
+
+    analyze_angles(["bounded"], use_cache=False, max_results=17)
+
+    assert seen == [17]
+
+
+def test_backend_clients_propagate_max_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, int | None]] = []
+
+    class _Local:
+        def analyze_angles(
+            self,
+            _texts: list[str],
+            *,
+            use_cache: bool = True,
+            max_results: int | None = None,
+        ) -> dict[str, object]:
+            calls.append(("adapter", max_results))
+            return {"results": []}
+
+    adapter = BackendAPIAdapter.__new__(BackendAPIAdapter)
+    adapter.local = _Local()  # type: ignore[assignment]
+    adapter.analyze_angles(["a"], max_results=11)
+
+    def analyze(
+        _texts: object,
+        *,
+        use_cache: bool = True,
+        max_results: int | None = None,
+    ) -> list[dict[str, str]]:
+        calls.append(("client", max_results))
+        return []
+
+    monkeypatch.setattr("services.angles_service.analyze_angles", analyze)
+    from services.workflow_backend_client import LocalBackendClient
+
+    client = LocalBackendClient(object())  # type: ignore[arg-type]
+    client.analyze_angles(["b"], max_results=13)
+
+    assert calls == [("adapter", 11), ("client", 13)]
 
 
 @pytest.mark.usefixtures("clear_llm_backend_env")

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import re
+import unicodedata
 from typing import Any
 
 from infrastructure.config import (
@@ -13,6 +15,8 @@ from infrastructure.config import (
     get_workflow_dictionary_max_search_results,
 )
 from workflows.utils.protocol_utils import stable_hash, text_preview
+
+DICTIONARY_SAMPLER_VERSION = "stable_round_robin_v1"
 
 
 def chunk_text_equal_overlap(
@@ -104,9 +108,12 @@ def _dictionary_entry(
     source_index: int,
     text: str,
     *,
+    source_id: str | None = None,
     comment_id: str | None = None,
 ) -> dict[str, Any]:
     entry = {"source": source, "source_index": source_index, "text": text}
+    if source_id is not None:
+        entry["source_id"] = source_id
     if comment_id is not None:
         entry["comment_id"] = comment_id
     return entry
@@ -124,7 +131,23 @@ def build_post_text_dictionary_entries(post: dict[str, Any]) -> list[dict[str, A
         for idx, result in enumerate(search_results):
             text = _search_result_text(result)
             if text:
-                entries.append(_dictionary_entry("search_results", idx, text))
+                source_id = None
+                if isinstance(result, dict):
+                    raw_source_id = (
+                        result.get("id")
+                        or result.get("url")
+                        or result.get("link")
+                    )
+                    if raw_source_id is not None and str(raw_source_id).strip():
+                        source_id = str(raw_source_id).strip()
+                entries.append(
+                    _dictionary_entry(
+                        "search_results",
+                        idx,
+                        text,
+                        source_id=source_id,
+                    )
+                )
 
     for idx, comment in enumerate(flatten_comments(post.get("comments", []))):
         body = comment.get("body", "")
@@ -140,28 +163,57 @@ def build_post_text_dictionary_entries(post: dict[str, Any]) -> list[dict[str, A
                     "comments",
                     idx,
                     body,
+                    source_id=comment_id,
                     comment_id=comment_id,
                 )
             )
     return entries
 
 
-def _limit_source_entries(
+def _normalize_sampling_text(text: Any) -> str:
+    """Canonicalize equivalent visible text for deterministic sampler ranking."""
+    normalized = unicodedata.normalize("NFKC", str(text))
+    return re.sub(r"\s+", " ", normalized).strip().casefold()
+
+
+def _entry_sampling_key(entry: dict[str, Any]) -> str:
+    """Stable rank independent of input enumeration and Python hash randomization."""
+    source_id = entry.get("source_id") or entry.get("comment_id")
+    return stable_hash(
+        {
+            "source": str(entry.get("source", "")),
+            "source_id": str(source_id) if source_id is not None else None,
+            "text": _normalize_sampling_text(entry.get("text", "")),
+        }
+    )
+
+
+def _ranked_source_entries(
     entries: list[dict[str, Any]], source: str, keep: int
 ) -> tuple[list[dict[str, Any]], bool]:
-    kept: list[dict[str, Any]] = []
-    source_seen = 0
-    truncated = False
-    for entry in entries:
-        if entry["source"] != source:
-            kept.append(entry)
-            continue
-        if source_seen < keep:
-            kept.append(entry)
-            source_seen += 1
-            continue
-        truncated = True
-    return kept, truncated
+    source_entries = [entry for entry in entries if entry.get("source") == source]
+    ranked = sorted(source_entries, key=_entry_sampling_key)
+    return ranked[:keep], len(ranked) > keep
+
+
+def _round_robin_entries(
+    post_entries: list[dict[str, Any]],
+    search_entries: list[dict[str, Any]],
+    comment_entries: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    effective_limit = max(limit, 1) if post_entries else max(limit, 0)
+    selected = list(post_entries[:1])
+    sources = (search_entries, comment_entries)
+    index = 0
+    while len(selected) < effective_limit and any(
+        index < len(source) for source in sources
+    ):
+        for source in sources:
+            if index < len(source) and len(selected) < effective_limit:
+                selected.append(source[index])
+        index += 1
+    return selected
 
 
 def _source_counts(entries: list[dict[str, Any]]) -> dict[str, int]:
@@ -178,6 +230,7 @@ def _entry_meta(entry: dict[str, Any]) -> dict[str, Any]:
     return {
         "source": str(entry.get("source", "")),
         "source_index": int(entry.get("source_index", 0)),
+        "source_id": entry.get("source_id"),
         "comment_id": entry.get("comment_id"),
         "text_hash": stable_hash(text),
         "text_length": len(text),
@@ -188,17 +241,22 @@ def _entry_meta(entry: dict[str, Any]) -> dict[str, Any]:
 def apply_post_text_dictionary_capacity(
     entries: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Apply global workflow capacity limits while preserving stable order."""
-    capped, search_capped = _limit_source_entries(
-        entries, "search_results", get_workflow_dictionary_max_search_results()
+    """Apply deterministic source budgets and a balanced global input ceiling."""
+    post_entries = [entry for entry in entries if entry.get("source") == "post"]
+    search_entries, search_capped = _ranked_source_entries(
+        entries,
+        "search_results",
+        get_workflow_dictionary_max_search_results(),
     )
-    capped, comments_capped = _limit_source_entries(
-        capped, "comments", get_workflow_dictionary_max_comments()
+    comment_entries, comments_capped = _ranked_source_entries(
+        entries,
+        "comments",
+        get_workflow_dictionary_max_comments(),
     )
     max_blocks = get_workflow_angles_max_input_blocks()
-    total_capped = len(capped) > max_blocks
-    if total_capped:
-        capped = capped[:max_blocks]
+    source_capped = post_entries + search_entries + comment_entries
+    capped = _round_robin_entries(post_entries, search_entries, comment_entries, max_blocks)
+    total_capped = len(source_capped) > max_blocks
     truncated_sources = [
         source
         for source, capped_flag in (
@@ -210,6 +268,8 @@ def apply_post_text_dictionary_capacity(
     ]
     return capped, {
         "capacity_profile": get_workflow_capacity_profile(),
+        "sampler_version": DICTIONARY_SAMPLER_VERSION,
+        "selection_strategy": "stable_source_rank_round_robin",
         "capacity_limits": {
             "dictionary_max_search_results": get_workflow_dictionary_max_search_results(),
             "dictionary_max_comments": get_workflow_dictionary_max_comments(),
@@ -227,13 +287,28 @@ def _dictionary_report(
 ) -> dict[str, Any]:
     final_meta = [_entry_meta(entry) for entry in final_entries]
     final_texts = [str(entry.get("text", "")) for entry in final_entries]
+    stable_identities = [
+        {
+            "source": entry["source"],
+            "source_id": entry["source_id"],
+            "text_hash": entry["text_hash"],
+        }
+        for entry in final_meta
+    ]
     return {
-        "dictionary_id": stable_hash(final_meta),
+        "dictionary_id": stable_hash(stable_identities),
         "texts_hash": stable_hash(final_texts),
         "raw_entry_count": len(raw_entries),
         "entry_count": len(final_entries),
         "raw_source_counts": _source_counts(raw_entries),
         "source_counts": _source_counts(final_entries),
+        "selected_source_counts": _source_counts(final_entries),
+        "selected_entry_hashes": [
+            str(entry["text_hash"]) for entry in stable_identities
+        ],
+        "selected_source_ids": [
+            entry["source_id"] for entry in stable_identities
+        ],
         "sample_entries": final_meta[:5],
         **capacity_meta,
     }
@@ -246,6 +321,8 @@ def build_post_text_dictionary_bundle(
     raw_entries = build_post_text_dictionary_entries(post)
     capacity_meta = {
         "capacity_profile": None,
+        "sampler_version": DICTIONARY_SAMPLER_VERSION,
+        "selection_strategy": "exhaustive_source_order",
         "capacity_limits": {},
         "capacity_applied": False,
         "truncated_sources": [],

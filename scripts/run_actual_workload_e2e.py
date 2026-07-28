@@ -153,6 +153,45 @@ def has_usable_angles(post: dict[str, Any]) -> bool:
     return isinstance(angles, list) and bool(angles)
 
 
+def angle_artifact_identity(post: dict[str, Any]) -> dict[str, Any]:
+    """Return an explicit identity for both versioned and historical angle posts."""
+    artifact = post.get("angle_artifact")
+    if not isinstance(artifact, dict):
+        return {
+            "schema_version": 1,
+            "artifact_namespace": "legacy_unversioned",
+            "generator_version": "legacy_unversioned",
+            "sampler_version": "legacy_unversioned",
+        }
+    return {
+        "schema_version": artifact.get("schema_version"),
+        "artifact_namespace": artifact.get("artifact_namespace"),
+        "generator_version": artifact.get("generator_version"),
+        "sampler_version": artifact.get("sampler_version"),
+        "capacity_profile": artifact.get("capacity_profile"),
+        "capacity_limits": artifact.get("capacity_limits"),
+        "generation_mode": artifact.get("generation_mode"),
+        "angles_retained_target": artifact.get("angles_retained_target"),
+        "angles_raw_target": artifact.get("angles_raw_target"),
+    }
+
+
+def validate_angle_artifact_identity(angles_dir: Path, post_ids: Sequence[str]) -> dict[str, Any]:
+    """Reject a sample lane that silently combines different angle-generation versions."""
+    identities: dict[str, dict[str, Any]] = {}
+    for post_id in dict.fromkeys(post_ids):
+        post = read_json(angles_dir / f"{post_id}.json")
+        identity = angle_artifact_identity(post)
+        key = json.dumps(identity, sort_keys=True, ensure_ascii=True)
+        identities[key] = identity
+    if len(identities) != 1:
+        raise ValueError(
+            "Mixed angle artifact identities are not allowed in one sample-generation lane: "
+            f"{list(identities.values())}"
+        )
+    return next(iter(identities.values()))
+
+
 def _flatten_post_angles(post: dict[str, Any]) -> list[dict[str, Any]]:
     angles = post.get("angles")
     if not isinstance(angles, list):
@@ -829,6 +868,7 @@ def run_actual_workload_e2e(
         samples_per_profile=samples_per_profile,
         allow_post_reuse=allow_post_reuse,
     )[:samples_per_profile]
+    angle_artifact = validate_angle_artifact_identity(angles_dir, selected_post_ids)
     created = datetime.now(UTC)
     run_id = created.strftime("%Y%m%dT%H%M%SZ")
     resolved_run_dir = (run_dir or RUNS_ROOT / f"actual_workload_e2e_{run_id}").resolve()
@@ -903,6 +943,7 @@ def run_actual_workload_e2e(
             "kind": "prepared_real_posts_with_angles",
             "angles_dir": str(angles_dir.resolve()),
             "dataset_dir": str(dataset_dir.resolve()),
+            "angle_artifact": angle_artifact,
         },
         "force_model_generation": force_model_generation,
         "skip_receiver_decode": skip_receiver_decode,

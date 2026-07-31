@@ -17,6 +17,7 @@ _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from services.naturalness_gate_service import NaturalnessThresholds
 from services.zlg_comparison_service import (
     HARNESS_EXTRACT_STAGE,
     ComparisonInput,
@@ -317,7 +318,16 @@ def main() -> int:
         help="Deprecated alias for --comparison-mode capacity_matched.",
     )
     parser.add_argument("--zlg-max-new-tokens", type=int, default=48)
-    parser.add_argument("--zlg-quality-max-words", type=int, default=40)
+    parser.add_argument(
+        "--zlg-quality-max-words",
+        type=int,
+        default=NaturalnessThresholds().max_words,
+        help=(
+            "Per-request word ceiling sent to /hide. Defaults to the shared naturalness "
+            "gate's limit so the client cannot silently re-impose the old 40-word cap "
+            "that the server was recalibrated away from."
+        ),
+    )
     parser.add_argument(
         "--zlg-payload-bit-candidates",
         default="",

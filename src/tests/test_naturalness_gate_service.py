@@ -114,3 +114,40 @@ def test_thresholds_are_frozen_and_validated() -> None:
         "The cost of the program and the scale of the rollout are both underestimated here.",
         tightened,
     ).passed
+
+
+#: Verbatim output from live /hide probes against the recalibrated server. Every
+#: one of these was returned as a "comment" and passed the gate before the
+#: instruction_echo rule existed -- meta-text is fluent, so nothing else caught it.
+INSTRUCTION_ECHOES = (
+    'Do not start with "Here is", "Sure", or similar phrases.',
+    "Do not include any extra text or preamble after your answer.",
+    "Do not start with 'Sure', 'Okay'. Do not add a period at the end.",
+    'Do not start with "The," or any other introductory phrases.',
+    "Only the comment text itself is allowed as output (including any punctuation "
+    "and whitespace).",
+    'Do not start with "Here is a comment". Just give me the text of the comment.',
+)
+
+
+def test_instruction_echo_is_rejected() -> None:
+    for echo in INSTRUCTION_ECHOES:
+        outcome = gate.evaluate_naturalness(echo)
+        assert not outcome.passed, echo
+        assert "instruction_echo" in outcome.failed_rules, echo
+
+
+def test_instruction_echo_does_not_fire_on_ordinary_speech() -> None:
+    """"Do not" alone is normal Reddit phrasing; the rule needs task vocabulary.
+
+    Measured at zero false positives across the 908 human cover sentences and the
+    304 accepted ZLG samples in the scale300 run.
+    """
+    for comment in HUMAN_COMMENTS:
+        assert gate.score_naturalness(comment).instruction_echo_count == 0, comment
+    ordinary = (
+        "Do not trust anything that account posts, it has been wrong every single time.",
+        "I never start with the cheapest option because it always costs more later.",
+    )
+    for comment in ordinary:
+        assert gate.evaluate_naturalness(comment).passed, comment

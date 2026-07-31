@@ -55,6 +55,27 @@ STRUCTURAL_ARTIFACT_PATTERNS = (
     r"\[INST\]",
 )
 
+#: Text that talks *about* producing a comment instead of being one. A raw
+#: completion continues whatever the prompt ends with, so a prompt ending in
+#: rules yields more rules -- and that output is perfectly fluent, so every other
+#: rule here passes it. Four of four live probes returned text like `Do not start
+#: with "Here is", "Sure", or similar phrases.` and the gate accepted all four.
+#:
+#: The prompt shape is the real fix; this is the backstop. Each pattern requires
+#: task vocabulary rather than a bare imperative, because "do not" alone is
+#: ordinary Reddit speech.
+INSTRUCTION_ECHO_PATTERNS = (
+    # Anchored to a sentence start: the echo form is an imperative. Unanchored,
+    # this fired on "I never start with the cheapest option because...".
+    r"(?:^|[.!?]\s+)(?:do not|don't)\s+(?:start|begin)\s+with\b",
+    r"\byour\s+(?:answer|response|output|reply)\b",
+    r"\b(?:preamble|markdown|quotation marks|code fence|bullet points?)\b",
+    r"\bextra text\b",
+    r"\bas output\b",
+    r"\b(?:output|respond|reply|answer)\s+only\b",
+    r"\bthe\s+(?:comment|text)\s+itself\b",
+)
+
 
 class NaturalnessThresholds(BaseModel):
     """Gate limits. Defaults are calibrated to pass >95% of human Reddit comments."""
@@ -87,6 +108,7 @@ class NaturalnessMetrics(BaseModel):
     unbalanced_quote_count: int
     replacement_char_count: int
     structural_artifact_count: int
+    instruction_echo_count: int
     terminal_punctuation: bool
     decode_ready: bool
 
@@ -144,6 +166,14 @@ def _structural_artifacts(text: str) -> int:
     )
 
 
+def _instruction_echoes(text: str) -> int:
+    return sum(
+        1
+        for pattern in INSTRUCTION_ECHO_PATTERNS
+        if re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+    )
+
+
 @validate_call
 def score_naturalness(text: str) -> NaturalnessMetrics:
     """Measure one candidate. Pure: no thresholds applied here."""
@@ -159,6 +189,7 @@ def score_naturalness(text: str) -> NaturalnessMetrics:
         unbalanced_quote_count=_unbalanced_quotes(stripped),
         replacement_char_count=normalized.count(REPLACEMENT_CHAR),
         structural_artifact_count=_structural_artifacts(stripped),
+        instruction_echo_count=_instruction_echoes(stripped),
         terminal_punctuation=stripped.endswith((".", "!", "?", '"', "'", ")")),
         decode_ready=bool(stripped),
     )
@@ -176,6 +207,7 @@ def _rule_violations(
         ("unbalanced_quote", metrics.unbalanced_quote_count > 0),
         ("replacement_char", metrics.replacement_char_count > 0),
         ("structural_artifact", metrics.structural_artifact_count > 0),
+        ("instruction_echo", metrics.instruction_echo_count > 0),
     )
     return tuple(name for name, violated in checks if violated)
 

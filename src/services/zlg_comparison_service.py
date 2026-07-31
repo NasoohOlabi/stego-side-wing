@@ -125,19 +125,30 @@ def build_api_prompt(
     seed: int = 2023,
     n_cover: int = DEFAULT_N_COVER,
 ) -> str:
+    """Prompt the HTTP service for one plain comment.
+
+    Examples are joined as bare lines rather than ``- `` bullets, and the prompt
+    asks outright for no surrounding quotation marks. Both details showed up in
+    the scale300 run as quality-gate rejections rather than style nits: the bullet
+    framing primed markdown output, and the model's habit of opening with ``"``
+    left an unbalanced quote whenever ``complete_sent`` truncated the sentence
+    before the closing one. The trailing ``Comment:`` label is gone for the same
+    reason -- a colon cue invites a quoted string as the answer.
+    """
     cover_texts = cover_texts or []
     clean = [_normalize_whitespace(text) for text in cover_texts if _normalize_whitespace(text)]
     with_random = random.Random(seed)
     chosen = clean[:]
     if len(clean) > n_cover:
         chosen = with_random.sample(clean, n_cover)
-    examples = "\n".join(f"- {text}" for text in chosen)
+    examples = "\n\n".join(chosen)
     return (
         f"You are writing one short {corpus} comment.\n\n"
-        f"Examples of real comments:\n{examples}\n\n"
-        "Write exactly one new comment as a single plain sentence. "
-        "No markdown, no bullet points, no labels, no alternatives, no explanation.\n"
-        "Comment:"
+        f"Examples of real comments:\n\n{examples}\n\n"
+        "Write one new comment in the same voice, as a single plain sentence.\n"
+        "Start directly with the first word of the comment. "
+        "Do not wrap it in quotation marks. "
+        "Do not use markdown, bullet points, labels, alternatives, or explanation."
     )
 
 

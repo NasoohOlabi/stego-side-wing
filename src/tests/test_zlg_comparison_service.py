@@ -39,6 +39,21 @@ def test_build_api_prompt_is_plain_for_http_service() -> None:
     assert "[INST]" not in prompt
 
 
+def test_build_api_prompt_does_not_prime_quotes_or_markdown() -> None:
+    """The two habits that turned into gate rejections, not style preferences.
+
+    Bulleted examples primed markdown output, and a trailing ``Comment:`` label
+    invited a quoted answer whose closing quote ``complete_sent`` then truncated
+    away -- 39 of 133 scale300 gate rejections were unbalanced quotes.
+    """
+    prompt = svc.build_api_prompt("Reddit news discussion", ["First real one.", "Second one."])
+    assert "\n- " not in prompt
+    assert not prompt.rstrip().endswith("Comment:")
+    assert "quotation marks" in prompt
+    assert "First real one." in prompt
+    assert "Second one." in prompt
+
+
 def test_run_comparison_success_with_reveal(monkeypatch) -> None:
     calls: list[dict] = []
 

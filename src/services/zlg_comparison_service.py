@@ -128,13 +128,19 @@ def build_api_prompt(
 ) -> str:
     """Prompt the HTTP service for one plain comment.
 
-    Examples are joined as bare lines rather than ``- `` bullets, and the prompt
-    asks outright for no surrounding quotation marks. Both details showed up in
-    the scale300 run as quality-gate rejections rather than style nits: the bullet
-    framing primed markdown output, and the model's habit of opening with ``"``
-    left an unbalanced quote whenever ``complete_sent`` truncated the sentence
-    before the closing one. The trailing ``Comment:`` label is gone for the same
-    reason -- a colon cue invites a quoted string as the answer.
+    Shape matters more than wording here, and all three of these were measured
+    against the live service rather than reasoned about:
+
+    - **Instructions first, examples last.** ``/hide`` is a raw completion, so the
+      model continues whatever the prompt ends with. Ending on a block of rules
+      made it invent more rules -- 4 of 4 probes returned things like ``Do not
+      start with "Here is", "Sure", or similar phrases.`` and every one passed the
+      quality gate, because fluent meta-text breaks none of its rules. Ending on
+      examples makes the natural continuation another example.
+    - **No trailing ``Comment:`` label.** A colon cue invites a quoted string:
+      the ``New comment: `` variant put quotes back on 1 of 4 probes, and dangling
+      opening quotes were 39 of the 133 scale300 gate rejections.
+    - **No ``- `` bullets.** Bullet framing primed markdown output.
     """
     cover_texts = cover_texts or []
     clean = [_normalize_whitespace(text) for text in cover_texts if _normalize_whitespace(text)]
@@ -144,12 +150,9 @@ def build_api_prompt(
         chosen = with_random.sample(clean, n_cover)
     examples = "\n\n".join(chosen)
     return (
-        f"You are writing one short {corpus} comment.\n\n"
-        f"Examples of real comments:\n\n{examples}\n\n"
-        "Write one new comment in the same voice, as a single plain sentence.\n"
-        "Start directly with the first word of the comment. "
-        "Do not wrap it in quotation marks. "
-        "Do not use markdown, bullet points, labels, alternatives, or explanation."
+        f"Below are real {corpus} comments. Continue the list with one more comment "
+        "in the same voice: a single plain sentence, no quotation marks, no markdown, "
+        f"no labels.\n\n{examples}\n\n"
     )
 
 

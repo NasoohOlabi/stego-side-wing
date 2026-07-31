@@ -54,6 +54,21 @@ def test_build_api_prompt_does_not_prime_quotes_or_markdown() -> None:
     assert "Second one." in prompt
 
 
+def test_build_api_prompt_ends_on_an_example_not_on_instructions() -> None:
+    """/hide is a raw completion, so the prompt's last line is what gets continued.
+
+    Ending on a rules block made the model invent more rules -- 4 of 4 live probes
+    returned instruction text like 'Do not start with "Here is"...', and all four
+    passed the quality gate, since fluent meta-text violates none of its rules.
+    """
+    prompt = svc.build_api_prompt(
+        "Reddit news discussion", ["First real one.", "Second one."], n_cover=2
+    )
+    assert prompt.rstrip().endswith("Second one.")
+    instructions_end = prompt.index("First real one.")
+    assert "no markdown" in prompt[:instructions_end]
+
+
 def test_run_comparison_success_with_reveal(monkeypatch) -> None:
     calls: list[dict] = []
 

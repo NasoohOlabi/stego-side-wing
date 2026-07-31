@@ -49,6 +49,7 @@ def test_run_comparison_success_with_reveal(monkeypatch) -> None:
                 {
                     "stegotext": "stego text",
                     "payload_bytes": 5,
+                    "payload_bits": 40,
                     "is_truncated": False,
                     "ppl": 12.5,
                     "params_used": {"mode": "huffman"},
@@ -72,6 +73,10 @@ def test_run_comparison_success_with_reveal(monkeypatch) -> None:
     assert result["decode_ok"] is True
     hide_body = calls[0]["json"]
     assert hide_body["complete_sent"] is True
+    reveal_body = calls[1]["json"]
+    # Per docs/stego_api_agent_guide.md: without payload_bits_len the server falls back to a
+    # legacy 16-bit-header framed decode, which misreads headerless stegotext.
+    assert reveal_body["payload_bits_len"] == 40
 
 
 def test_run_comparison_retries_and_fails_on_size_mismatch(monkeypatch) -> None:
@@ -258,6 +263,123 @@ def test_dynamic_frames_count_carrier_that_exceeds_word_budget(monkeypatch) -> N
 
     assert result["accepted"] is False
     assert result["word_count"] == 4
+
+
+def _http_error(status_code: int, reason: str | None) -> RuntimeError:
+    detail: dict = {"reason": reason} if reason else {}
+    return RuntimeError(
+        svc.json.dumps(
+            {
+                "kind": "http_error",
+                "status_code": status_code,
+                "url": "http://127.0.0.1:9000/hide",
+                "response_body": svc.json.dumps({"detail": detail}) if detail else "",
+            }
+        )
+    )
+
+
+def test_quality_gate_rejection_is_retried_with_a_fresh_prompt(monkeypatch) -> None:
+    """A 422 quality-gate reject is a property of the sampled text, so re-roll."""
+    seen_prompts: list[str] = []
+
+    def _fake_post_json(url: str, payload: dict) -> dict:
+        if url.endswith("/hide"):
+            seen_prompts.append(payload["prompt"])
+            if len(seen_prompts) < 3:
+                raise _http_error(422, "quality_gate_failed")
+            return {
+                "stegotext": "clean stego text",
+                "payload_bytes": 5,
+                "payload_bits": 40,
+                "is_truncated": False,
+                "ppl": 11.0,
+                "params_used": {"mode": "huffman"},
+            }
+        return {"decode_ok": True, "secret": "hello"}
+
+    monkeypatch.setattr(svc, "post_json", _fake_post_json)
+    result = svc.run_comparison_sample(
+        svc.ComparisonInput(
+            target_payload="hello",
+            server_url="http://127.0.0.1:9000",
+            cover_texts=[f"Sentence {i}." for i in range(12)],
+            max_retries=3,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["attempt"] == 3
+    assert len(seen_prompts) == 3
+    # Retries must resample cover sentences, not resend an identical request.
+    assert len(set(seen_prompts)) == 3
+
+
+def test_non_retryable_hide_error_fails_immediately(monkeypatch) -> None:
+    attempts: list[int] = []
+
+    def _fake_post_json(url: str, payload: dict) -> dict:
+        attempts.append(1)
+        raise _http_error(400, "malformed_request")
+
+    monkeypatch.setattr(svc, "post_json", _fake_post_json)
+    result = svc.run_comparison_sample(
+        svc.ComparisonInput(
+            target_payload="hello",
+            server_url="http://127.0.0.1:9000",
+            cover_texts=["Sentence one.", "Sentence two.", "Sentence three."],
+            max_retries=4,
+        )
+    )
+
+    assert result["accepted"] is False
+    assert len(attempts) == 1
+
+
+def test_retry_classifier_distinguishes_transient_from_contract_errors() -> None:
+    assert svc.is_retryable_hide_error(_http_error(422, "quality_gate_failed")) is True
+    assert svc.is_retryable_hide_error(_http_error(503, None)) is True
+    assert svc.is_retryable_hide_error(_http_error(400, "malformed_request")) is False
+    assert svc.is_retryable_hide_error(_http_error(422, "bad_field")) is False
+    # A non-HTTP failure (connection reset, timeout) carries no status code.
+    assert svc.is_retryable_hide_error(RuntimeError("connection reset")) is True
+
+
+def test_first_attempt_prompt_is_unchanged_by_reseeding() -> None:
+    """Attempt 1 must reproduce the pre-change prompt so past runs stay comparable."""
+    sample = svc.ComparisonInput(
+        target_payload="hello",
+        server_url="http://127.0.0.1:9000",
+        cover_texts=[f"Sentence {i}." for i in range(12)],
+        seed=1234,
+    )
+    assert svc._prompt_for_attempt(sample, sample.seed) == svc.build_api_prompt(
+        corpus=sample.corpus, cover_texts=sample.cover_texts, seed=1234, n_cover=sample.n_cover
+    )
+
+
+def test_prompt_leakage_failure_preserves_the_rejected_text(monkeypatch) -> None:
+    def _fake_post_json(url: str, payload: dict) -> dict:
+        return {
+            "stegotext": "leaked <OUTPUT> marker",
+            "payload_bytes": 5,
+            "payload_bits": 40,
+            "is_truncated": False,
+        }
+
+    monkeypatch.setattr(svc, "post_json", _fake_post_json)
+    result = svc.run_comparison_sample(
+        svc.ComparisonInput(
+            target_payload="hello",
+            server_url="http://127.0.0.1:9000",
+            cover_texts=["Sentence one.", "Sentence two.", "Sentence three."],
+            max_retries=2,
+        )
+    )
+
+    assert result["accepted"] is False
+    assert result["reason"] == "prompt_leakage_detected"
+    assert result["rejected_stegotext"] == "leaked <OUTPUT> marker"
 
 
 def test_append_jsonl_writes_record(tmp_path: Path) -> None:

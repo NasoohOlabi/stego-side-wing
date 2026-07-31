@@ -239,6 +239,46 @@ def _partial_hide_result_from_error(
     )
 
 
+ATTEMPT_SEED_STRIDE = 1_000_003
+RETRYABLE_HIDE_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+RETRYABLE_HIDE_DETAIL_REASONS = frozenset(
+    {"quality_gate_failed", "quality_or_capacity_failure"}
+)
+
+
+def _hide_error_detail(exc: Exception) -> tuple[int | None, str | None]:
+    """Pull (status_code, detail reason) out of the JSON blob post_json raises."""
+    try:
+        error_payload = json.loads(str(exc))
+    except Exception:
+        return None, None
+    status = error_payload.get("status_code")
+    status_code = int(status) if isinstance(status, (int, float)) else None
+    try:
+        detail = json.loads(str(error_payload.get("response_body") or "")).get("detail")
+    except Exception:
+        return status_code, None
+    if isinstance(detail, dict) and isinstance(detail.get("reason"), str):
+        return status_code, str(detail["reason"])
+    return status_code, None
+
+
+def is_retryable_hide_error(exc: Exception) -> bool:
+    """True when re-rolling the prompt could plausibly succeed.
+
+    A quality-gate rejection is a property of the sampled text, not of the
+    request, so a fresh draw is a genuinely new trial. Transport-level and
+    server-side faults are likewise transient. A 4xx that is neither is a
+    contract error and will fail identically on every retry.
+    """
+    status_code, reason = _hide_error_detail(exc)
+    if status_code is None:
+        return True
+    if reason in RETRYABLE_HIDE_DETAIL_REASONS:
+        return True
+    return status_code in RETRYABLE_HIDE_STATUS_CODES
+
+
 def _official_repo_root() -> Path:
     return Path(__file__).resolve().parents[3] / "tmp_zero_shot_gls_official"
 
@@ -508,21 +548,24 @@ def post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _prompt_for_attempt(sample: ComparisonInput, seed: int) -> str:
+    """Build the prompt for one attempt.
+
+    ``seed`` drives which ``n_cover`` cover sentences are sampled, so bumping it
+    per retry gives the generator a genuinely different context rather than
+    re-running an identical request.
+    """
+    builder = build_prompt if sample.server_url.startswith("local://") else build_api_prompt
+    return builder(
+        corpus=sample.corpus,
+        cover_texts=sample.cover_texts,
+        seed=seed,
+        n_cover=max(1, sample.n_cover),
+    )
+
+
 def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
-    if sample.server_url.startswith("local://"):
-        prompt = build_prompt(
-            corpus=sample.corpus,
-            cover_texts=sample.cover_texts,
-            seed=sample.seed,
-            n_cover=max(1, sample.n_cover),
-        )
-    else:
-        prompt = build_api_prompt(
-            corpus=sample.corpus,
-            cover_texts=sample.cover_texts,
-            seed=sample.seed,
-            n_cover=max(1, sample.n_cover),
-        )
+    prompt = _prompt_for_attempt(sample, sample.seed)
     target_bytes = len(sample.target_payload.encode("utf-8"))
     if sample.server_url.startswith("local://"):
         return _run_local_hf_sample(sample, prompt=prompt, target_bytes=target_bytes)
@@ -628,7 +671,13 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
             "attempt": 0,
         }
 
+    last_rejected_stegotext: str | None = None
     for attempt in range(1, sample.max_retries + 1):
+        # Stride well clear of the +1/+2 seed offsets run_comparison_frames and
+        # _verified_frame apply, so retry prompts never collide with a sibling
+        # carrier's. Attempt 1 keeps the caller's seed exactly.
+        attempt_seed = sample.seed + (attempt - 1) * ATTEMPT_SEED_STRIDE
+        prompt = _prompt_for_attempt(sample, attempt_seed)
         started = time.perf_counter()
         try:
             hide_resp = post_json(
@@ -643,6 +692,7 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
                     "max_bpw": sample.max_bpw,
                     "max_new_tokens": sample.max_new_tokens,
                     "quality_max_words": sample.quality_max_words,
+                    "quality_max_retries": sample.quality_max_retries,
                     "__timeout_seconds__": sample.request_timeout_seconds,
                 },
             )
@@ -658,6 +708,8 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
             if partial_result is not None:
                 return partial_result
             failure_reason = f"hide_request_failed: {exc}"
+            if is_retryable_hide_error(exc) and attempt < sample.max_retries:
+                continue
             return {
                 "accepted": False,
                 "reason": failure_reason,
@@ -674,7 +726,7 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
                     "secret_bytes": target_bytes,
                     "corpus": sample.corpus,
                     "examples_in_prompt": min(len(sample.cover_texts), max(1, sample.n_cover)),
-                    "seed": sample.seed,
+                    "seed": attempt_seed,
                     "n_cover": sample.n_cover,
                     "threshold": sample.threshold,
                     "temperature": sample.temperature,
@@ -692,6 +744,7 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
         stegotext = hide_resp.get("stegotext")
         used_bits = hide_resp.get("used_bits")
         target_bits = hide_resp.get("target_bits")
+        payload_bits_len = hide_resp.get("payload_bits")
         stego_token_ids = hide_resp.get("stego_token_ids")
         context_seed = hide_resp.get("context_seed")
         effective_prompt_hash = hide_resp.get("effective_prompt_hash")
@@ -724,6 +777,7 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
             continue
         if stegotext_has_prompt_leakage(stegotext):
             failure_reason = "prompt_leakage_detected"
+            last_rejected_stegotext = stegotext
             continue
 
         decode_ok: bool | None = None
@@ -737,6 +791,7 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
                         "stego_token_ids": stego_token_ids,
                         "context_seed": context_seed,
                         "effective_prompt_hash": effective_prompt_hash,
+                        "payload_bits_len": payload_bits_len,
                         "threshold": sample.threshold,
                         "temperature": sample.temperature,
                         "temperature_alpha": sample.temperature_alpha,
@@ -787,6 +842,9 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
             "attempt": attempt,
             "reveal_context": {
                 "prompt": prompt,
+                # The prompt seed that actually won; retries resample cover
+                # sentences, so sample.seed alone no longer reconstructs it.
+                "prompt_seed": attempt_seed,
                 "context_seed": context_seed,
                 "effective_prompt_hash": effective_prompt_hash,
                 "threshold": sample.threshold,
@@ -801,7 +859,10 @@ def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
         "reason": failure_reason or "unknown_failure",
         "payload_bytes_target": target_bytes,
         "payload_bytes_actual": 0,
+        # Kept for post-hoc failure analysis: the text that tripped the check is
+        # the only evidence of *why* the baseline failed, and is otherwise lost.
         "stegotext": None,
+        "rejected_stegotext": last_rejected_stegotext,
         "decode_ok": None,
         "ppl": None,
         "params_used": None,

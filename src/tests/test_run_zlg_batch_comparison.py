@@ -38,6 +38,32 @@ def test_extract_sample_reads_payload_and_context(tmp_path: Path) -> None:
     assert embedded_bits == 0
 
 
+def test_single_comment_sentence_is_topped_up_from_post_context() -> None:
+    """A lone usable comment sentence must not strand the sample (was 94/554 of a run)."""
+    mod = _load_module()
+    context = {
+        "title": "State appeals the EdChoice ruling in court.",
+        "selftext": "Funding for private schools is now under review. Districts are worried.",
+    }
+    picked = [{"name": "u", "body": "Short. The state is actively appealing that ruling."}]
+
+    cover = mod._build_cover_texts(context, picked, 2500, 1400)
+
+    assert len(cover) >= mod.MIN_COVER_TEXTS
+    # The comment sentence still leads; context only backfills.
+    assert cover[0] == "The state is actively appealing that ruling."
+
+
+def test_sufficient_comment_sentences_do_not_pull_in_post_context() -> None:
+    mod = _load_module()
+    context = {"title": "A title that should stay out.", "selftext": "Body text."}
+    picked = [{"name": "u", "body": "First real comment sentence. Second real comment sentence."}]
+
+    cover = mod._build_cover_texts(context, picked, 2500, 1400)
+
+    assert cover == ["First real comment sentence.", "Second real comment sentence."]
+
+
 def test_load_processed_uses_source_key(tmp_path: Path) -> None:
     mod = _load_module()
     p = tmp_path / "results.jsonl"

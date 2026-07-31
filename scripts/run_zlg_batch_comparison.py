@@ -75,35 +75,56 @@ def _extract_selftext_sentences(raw_selftext: str, max_selftext_chars: int) -> l
     return [part for sentence in parts for part in _split_sentences(sentence)]
 
 
+MIN_COVER_TEXTS = 2
+
+
 def _build_cover_texts(
     context: dict[str, Any],
     picked: list[dict[str, Any]],
     max_selftext_chars: int,
     max_chain_chars: int,
 ) -> list[str]:
-    title = str(context.get("title") or "").strip()
-    selftext = str(context.get("selftext") or "")
+    """Prefer real comment sentences, but top up from title/selftext when too few.
+
+    Comment sentences are the closest stylistic match for the ZLG prompt, so they
+    lead. Returning only those would strand every post whose picked chain yields a
+    single usable sentence, so the post's own title/selftext backfills up to
+    ``MIN_COVER_TEXTS`` rather than failing the sample outright.
+    """
     comment_lines = [
         _clip(str(item.get("body") or ""), max_chain_chars)
         for item in picked
         if str(item.get("body") or "").strip()
     ]
-    comment_candidates: list[str] = []
-    for line in comment_lines:
-        comment_candidates.extend(_split_sentences(line))
-    comment_candidates = [
-        sentence for sentence in comment_candidates if 4 <= len(_tokens_for_prompt(sentence)) <= 60
-    ]
-    if comment_candidates:
-        return _dedupe_sentences(comment_candidates)[:32]
+    preferred = _dedupe_sentences(_preferred_comment_sentences(comment_lines))
+    if len(preferred) >= MIN_COVER_TEXTS:
+        return preferred[:32]
 
+    fallback = _fallback_cover_sentences(context, comment_lines, max_selftext_chars)
+    return _dedupe_sentences([*preferred, *fallback])[:32]
+
+
+def _preferred_comment_sentences(comment_lines: list[str]) -> list[str]:
+    candidates: list[str] = []
+    for line in comment_lines:
+        candidates.extend(_split_sentences(line))
+    return [
+        sentence for sentence in candidates if 4 <= len(_tokens_for_prompt(sentence)) <= 60
+    ]
+
+
+def _fallback_cover_sentences(
+    context: dict[str, Any], comment_lines: list[str], max_selftext_chars: int
+) -> list[str]:
+    title = str(context.get("title") or "").strip()
+    selftext = str(context.get("selftext") or "")
     candidates: list[str] = []
     if title:
         candidates.extend(_split_sentences(title))
     candidates.extend(_extract_selftext_sentences(selftext, max_selftext_chars))
     for line in comment_lines:
         candidates.extend(_split_sentences(line))
-    return _dedupe_sentences(candidates)[:32]
+    return candidates
 
 
 def _tokens_for_prompt(text: str) -> list[str]:
@@ -238,7 +259,7 @@ def _extract_sample(
         max_selftext_chars=max_selftext_chars,
         max_chain_chars=max_chain_chars,
     )
-    if len(cover_texts) < 2:
+    if len(cover_texts) < MIN_COVER_TEXTS:
         raise ValueError("not enough cover sentences extracted for ZLG prompt")
     return cover_texts, target_payload, embedded_bits
 
@@ -273,6 +294,34 @@ def main() -> int:
         "--zlg-payload-bit-candidates",
         default="",
         help="Comma-separated raw payload bit candidates for /capacity_probe.",
+    )
+    parser.add_argument(
+        "--zlg-threshold",
+        type=float,
+        default=ComparisonInput.threshold,
+        help=(
+            "EGS threshold sent with every /hide and /reveal call. Defaults to this client's "
+            "built-in value, which may not match the target server's own tuned default -- check "
+            "GET <server-url>/health and a sample response's params_used before a real run."
+        ),
+    )
+    parser.add_argument(
+        "--zlg-temperature",
+        type=float,
+        default=ComparisonInput.temperature,
+        help="EGS temperature sent with every /hide and /reveal call. See --zlg-threshold note.",
+    )
+    parser.add_argument(
+        "--zlg-temperature-alpha",
+        type=float,
+        default=ComparisonInput.temperature_alpha,
+        help="EGS temperature_alpha sent with every /hide and /reveal call.",
+    )
+    parser.add_argument(
+        "--zlg-max-bpw",
+        type=int,
+        default=ComparisonInput.max_bpw,
+        help="EGS max_bpw sent with every /hide and /reveal call.",
     )
     args = parser.parse_args()
 
@@ -331,6 +380,10 @@ def main() -> int:
                     do_reveal_check=not args.no_reveal_check,
                     request_timeout_seconds=max(1, args.request_timeout_seconds),
                     n_cover=4,
+                    threshold=args.zlg_threshold,
+                    temperature=args.zlg_temperature,
+                    temperature_alpha=args.zlg_temperature_alpha,
+                    max_bpw=args.zlg_max_bpw,
                     max_new_tokens=max(1, args.zlg_max_new_tokens),
                     quality_max_words=max(1, args.zlg_quality_max_words),
                     payload_bits_candidates=_payload_candidates_for_mode(

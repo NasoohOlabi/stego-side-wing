@@ -98,14 +98,30 @@ Expected, and worth checking before committing to the full run:
 
 ### 2. Full re-run
 
-Same command across all ten `metrics/e2e_runs/scale300_chunk{1..10}/balanced/summary.json`
-into one `--run-dir` (the runner resumes on `source_key`, so appending is safe). Record
-the `/health` block with the run.
+Use the **combined** summary — it already holds all 554 entries across the 154 posts, so
+this is one command, not a ten-chunk loop:
+
+```bash
+uv run python scripts/run_zlg_batch_comparison.py \
+  --source-summary metrics/e2e_runs/scale300_combined_summary.json \
+  --server-url http://192.168.100.136:9000 \
+  --run-dir metrics/zlg_comparison_runs/zlg_batch_scale300_recalibrated
+```
+
+The runner resumes on `source_key`, so re-invoking after an interruption appends rather
+than duplicating. Record the `/health` block alongside the run.
 
 ### 3. Rebuild the dataset
 
+`--source-summary` and `--dataset-dir` default to an unrelated older run
+(`fresh_metrics_200_*`) — they must be passed explicitly or the build silently pairs
+against the wrong posts:
+
 ```bash
-uv run python scripts/build_zlg_method_comparison_dataset.py --zlg-run-dir <run-dir>
+uv run python scripts/build_zlg_method_comparison_dataset.py \
+  --zlg-run-dir metrics/zlg_comparison_runs/zlg_batch_scale300_recalibrated \
+  --source-summary metrics/e2e_runs/scale300_combined_summary.json \
+  --dataset-dir metrics/e2e_runs/scale300_combined_dataset
 ```
 
 ### 4. Re-verify the gate calibration against the new output

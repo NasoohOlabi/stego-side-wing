@@ -65,6 +65,13 @@ class NaturalnessThresholds(BaseModel):
     max_words: int = Field(default=60, ge=1)
     # The deployed ZLG gate used 2, which fails any comment repeating one bigram.
     max_bigram_repeat_limit: int = Field(default=4, ge=2)
+    # Deliberately stricter than the deployed server's quality_max_repetition_ratio
+    # of 0.65. That 0.65 was only ever safe because the old max_bigram_repeat <= 1
+    # rule caught phrase-level degeneracy first. With the bigram limit relaxed to
+    # what human writing actually needs, 0.65 lets through real degenerate output
+    # such as "...the most famous person on earth is also the most famous person on
+    # earth." (repetition_ratio 0.444, max_bigram_repeat only 2). 0.28 catches it
+    # and still leaves human rejection at 4.96%, inside the 5% budget.
     repetition_ratio_limit: float = Field(default=0.28, gt=0.0, le=1.0)
 
 

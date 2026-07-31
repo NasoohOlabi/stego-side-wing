@@ -10,9 +10,10 @@ import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import requests
+from pydantic import validate_call
 from requests import HTTPError
 from transformers import AutoModelForCausalLM, AutoTokenizer, GPT2LMHeadModel, GPT2Tokenizer
 
@@ -255,6 +256,68 @@ RETRYABLE_HIDE_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504}
 RETRYABLE_HIDE_DETAIL_REASONS = frozenset(
     {"quality_gate_failed", "quality_or_capacity_failure"}
 )
+
+FailureStage = Literal[
+    "none",
+    "harness_extract",
+    "hide_request",
+    "quality_gate",
+    "capacity",
+    "leakage_check",
+    "reveal",
+    "unknown",
+]
+HARNESS_EXTRACT_STAGE: FailureStage = "harness_extract"
+
+_REASON_PREFIX_STAGES: tuple[tuple[str, FailureStage], ...] = (
+    ("sample_extract_failed", "harness_extract"),
+    ("capacity_probe_", "hide_request"),
+    ("reveal_", "reveal"),
+    ("hide_truncated", "capacity"),
+    ("payload_size_mismatch", "capacity"),
+    ("missing_stegotext", "hide_request"),
+    ("prompt_leakage_detected", "leakage_check"),
+)
+
+
+@validate_call
+def classify_failure_stage(reason: str | None, *, accepted: bool = False) -> FailureStage:
+    """Map a free-text failure reason onto the stage that produced it.
+
+    Callers previously had to regex a status code out of a JSON blob embedded in
+    a message to tell "ZLG could not encode this" from "our harness never sent a
+    request". Conflating those two is what let 94 extraction failures be counted
+    against the baseline's acceptance rate in the scale300 run.
+    """
+    if accepted:
+        return "none"
+    text = (reason or "").strip()
+    if not text:
+        return "unknown"
+    for prefix, stage in _REASON_PREFIX_STAGES:
+        if text.startswith(prefix):
+            return stage
+    if text.startswith("hide_request_failed"):
+        return "quality_gate" if _mentions_quality_gate(text) else "hide_request"
+    return "unknown"
+
+
+def _mentions_quality_gate(reason: str) -> bool:
+    return any(marker in reason for marker in RETRYABLE_HIDE_DETAIL_REASONS)
+
+
+def _with_failure_stage(result: dict[str, Any]) -> dict[str, Any]:
+    """Stamp every result with its stage so downstream code never parses `reason`."""
+    if "failure_stage" in result:
+        return result
+    reason = result.get("reason")
+    return {
+        **result,
+        "failure_stage": classify_failure_stage(
+            reason if isinstance(reason, str) else None,
+            accepted=bool(result.get("accepted")),
+        ),
+    }
 
 
 def _hide_error_detail(exc: Exception) -> tuple[int | None, str | None]:
@@ -576,6 +639,11 @@ def _prompt_for_attempt(sample: ComparisonInput, seed: int) -> str:
 
 
 def run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
+    """Run one ZLG hide/reveal trial, tagged with the stage that ended it."""
+    return _with_failure_stage(_run_comparison_sample(sample))
+
+
+def _run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
     prompt = _prompt_for_attempt(sample, sample.seed)
     target_bytes = len(sample.target_payload.encode("utf-8"))
     if sample.server_url.startswith("local://"):

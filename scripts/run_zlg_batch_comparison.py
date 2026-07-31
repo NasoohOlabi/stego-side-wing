@@ -15,7 +15,12 @@ _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from services.zlg_comparison_service import ComparisonInput, append_jsonl, run_comparison_sample
+from services.zlg_comparison_service import (
+    HARNESS_EXTRACT_STAGE,
+    ComparisonInput,
+    append_jsonl,
+    run_comparison_sample,
+)
 
 DEFAULT_SOURCE_SUMMARY = (
     _REPO_ROOT
@@ -269,7 +274,10 @@ def main() -> int:
     parser.add_argument("--source-summary", default=str(DEFAULT_SOURCE_SUMMARY))
     parser.add_argument("--server-url", default="http://127.0.0.1:9000")
     parser.add_argument("--run-dir", default="")
-    parser.add_argument("--max-retries", type=int, default=3)
+    # A quality-gate rejection is a property of the sampled text, so each retry
+    # is a genuinely new trial. 3 left the scale300 run deciding 24% of samples
+    # on a single draw once the server's own retries were exhausted.
+    parser.add_argument("--max-retries", type=int, default=5)
     parser.add_argument("--request-timeout-seconds", type=int, default=3600)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--sleep-seconds", type=float, default=0.0)
@@ -420,6 +428,9 @@ def main() -> int:
                 "source_output_file": entry.get("output_file"),
                 "accepted": False,
                 "reason": f"sample_extract_failed: {exc}",
+                # No request was ever sent, so this row must never be counted
+                # against the baseline's acceptance rate.
+                "failure_stage": HARNESS_EXTRACT_STAGE,
                 "payload_bytes_target": 0,
                 "payload_bytes_actual": 0,
                 "stegotext": None,

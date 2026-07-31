@@ -397,6 +397,69 @@ def test_prompt_leakage_failure_preserves_the_rejected_text(monkeypatch) -> None
     assert result["rejected_stegotext"] == "leaked <OUTPUT> marker"
 
 
+def test_failure_stage_separates_harness_faults_from_baseline_faults() -> None:
+    """The distinction the scale300 acceptance rate got wrong.
+
+    A harness extraction failure sent no request at all, so it must not be
+    reachable from the same bucket as a gate rejection or a decode failure.
+    """
+    assert svc.classify_failure_stage(None, accepted=True) == "none"
+    assert (
+        svc.classify_failure_stage("sample_extract_failed: not enough cover sentences")
+        == "harness_extract"
+    )
+    assert svc.classify_failure_stage(str(_http_error(422, "quality_gate_failed"))) == "unknown"
+    assert (
+        svc.classify_failure_stage(f"hide_request_failed: {_http_error(422, 'quality_gate_failed')}")
+        == "quality_gate"
+    )
+    assert (
+        svc.classify_failure_stage(f"hide_request_failed: {_http_error(503, None)}")
+        == "hide_request"
+    )
+    assert svc.classify_failure_stage("prompt_leakage_detected") == "leakage_check"
+    assert svc.classify_failure_stage("reveal_payload_mismatch") == "reveal"
+    assert svc.classify_failure_stage("hide_truncated") == "capacity"
+    assert svc.classify_failure_stage("payload_size_mismatch: expected=5, got=2") == "capacity"
+    assert svc.classify_failure_stage("something we have never seen") == "unknown"
+
+
+def test_every_comparison_result_carries_a_failure_stage(monkeypatch) -> None:
+    def _fake_post_json(url: str, payload: dict) -> dict:
+        return {
+            "stegotext": "A perfectly ordinary comment about the weather.",
+            "payload_bytes": 5,
+            "payload_bits": 40,
+            "is_truncated": False,
+            "decode_ok": True,
+            "secret": "hello",
+        }
+
+    monkeypatch.setattr(svc, "post_json", _fake_post_json)
+    accepted = svc.run_comparison_sample(
+        svc.ComparisonInput(
+            target_payload="hello",
+            server_url="http://127.0.0.1:9000",
+            cover_texts=["Sentence one.", "Sentence two."],
+        )
+    )
+    assert accepted["accepted"] is True
+    assert accepted["failure_stage"] == "none"
+
+    monkeypatch.setattr(
+        svc, "post_json", lambda url, payload: (_ for _ in ()).throw(_http_error(400, "bad_field"))
+    )
+    failed = svc.run_comparison_sample(
+        svc.ComparisonInput(
+            target_payload="hello",
+            server_url="http://127.0.0.1:9000",
+            cover_texts=["Sentence one.", "Sentence two."],
+        )
+    )
+    assert failed["accepted"] is False
+    assert failed["failure_stage"] == "hide_request"
+
+
 def test_append_jsonl_writes_record(tmp_path: Path) -> None:
     out = tmp_path / "logs" / "x.jsonl"
     svc.append_jsonl(out, {"accepted": True})

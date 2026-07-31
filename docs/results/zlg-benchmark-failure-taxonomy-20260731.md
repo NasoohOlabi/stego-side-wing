@@ -130,5 +130,63 @@ final, since the prompt change and the gate recalibration both affect generation
 
 - Re-run the benchmark against the redeployed server and regenerate the dataset.
 - Update the figures cited in `project_paper`.
-- The advisory-gate protocol split (`strict_quality=false` returning 200 with metrics)
-  is additive on the server; the client still uses fail-closed behaviour.
+## Decided against: switching the client to the advisory gate
+
+The plan called for the client to send the server's opt-out flag and let our shared gate
+be the only judge. Reading the server disproved it, twice over.
+
+First, the flag already exists — `HideRequest.enforce_quality`, not a new
+`strict_quality`. Nothing needed adding.
+
+Second, it does not actually report the verdict. `quality_passed` is assigned the
+*overall acceptance* decision, not `quality_ok`, so with `enforce_quality=false` a
+gate-failing generation returns 200 with `quality_passed=true`, and `quality_metrics`
+carries raw fields but no boolean. A client would have to re-implement `quality_pass` to
+recover the verdict — and a benchmark run in that mode would record every sample as
+gate-passing. (Relatedly, the `if decode_ready and not enforce_quality` branch is
+unreachable: `is_truncated` and `decode_ready` are mutually exclusive, so truncation
+raises regardless of the flag.)
+
+Third, and decisive: the gate sits *inside* the server's retry loop, at
+
+```python
+passed = (not is_truncated) and decode_ready and (quality_ok or not enforce_quality)
+```
+
+so `enforce_quality=false` makes the loop accept its first draw and ZLG silently loses
+all four of its quality retries. That would **disadvantage the baseline** — the opposite
+of what this whole exercise is for.
+
+The right framing is two gates doing two different jobs. The server gate is ZLG's
+*generation-time* quality control, the counterpart of our own pipeline's retries; the
+shared `naturalness_gate_service` is the *analysis-time* yardstick both methods are
+measured against. Keeping the server gate on and recalibrated is what makes the
+comparison fair, so the client stays fail-closed.
+
+## Server-side changes (ZGLS service repo on `asus`)
+
+Four commits on that repo's `main`, none pushed:
+
+| SHA | What |
+| --- | --- |
+| `ccff266` | Threshold recalibration: non-ASCII → `replacement_char_count`, bigram ≤1 → ≤3, `max_words` 40 → 60 |
+| `5c4bcaf` | Matching test updates |
+| `5246767` | `/health` reports `git_commit`, `git_dirty` and the full active threshold set |
+| `11cab87` | Human-corpus calibration test |
+
+Calibration on the server's own 50-comment corpus: **72% → 0% rejected**. Suite is 46
+passed, 6 skipped (the skips need a live `ZGLS_SERVER_URL`).
+
+## Still open
+
+- Re-run the benchmark against the redeployed server and regenerate the dataset.
+- Update the figures cited in `project_paper`.
+- `quality_passed` should carry `quality_ok` rather than the overall acceptance decision,
+  with acceptance moved to its own field. Harmless today because we run fail-closed, but
+  it silently mislabels every sample for anyone who uses `enforce_quality=false`.
+- The server's own `quality_max_repetition_ratio` is still 0.65 while this repo's mirror
+  uses 0.28. With the bigram limit relaxed, 0.65 no longer catches phrase-level
+  degeneracy — it passes "...the most famous person on earth is also the most famous
+  person on earth" (`repetition_ratio` 0.444, `max_bigram_repeat` only 2). The analysis
+  gate catches it, so no result is wrong, but the server will now waste retries emitting
+  text the yardstick will reject.

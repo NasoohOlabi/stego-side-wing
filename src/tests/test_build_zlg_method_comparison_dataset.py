@@ -58,6 +58,114 @@ def test_clustered_statistics_collapse_sample_indexes_within_post() -> None:
     assert module._clustered_paired_stats(rows)["paired_n"] == 1
 
 
+def test_clustered_method_summary_weights_each_post_once() -> None:
+    module = _load_module()
+    rows = [
+        {**_row(0, "p1", "our_method", 1.0), "perplexity_gpt2": 10.0},
+        {**_row(1, "p1", "our_method", 1.0), "perplexity_gpt2": 10.0},
+        {**_row(2, "p2", "our_method", 1.0), "perplexity_gpt2": 30.0},
+    ]
+
+    summary = module._clustered_method_summary(rows)["our_method"]
+
+    assert summary["n"] == 2
+    assert summary["perplexity_gpt2_mean"] == 20.0
+
+
+def test_zlg_attempt_reliability_counts_failures_as_zero_throughput() -> None:
+    module = _load_module()
+    rows = [
+        {
+            "accepted": True,
+            "decode_ok": True,
+            "payload_bits_encoded": 16,
+            "total_embedded_bits": 16,
+        },
+        {"accepted": False, "decode_ok": False},
+    ]
+
+    summary = module._zlg_attempt_reliability(rows)
+
+    assert summary["decode_verified_rate"] == 0.5
+    assert summary["effective_payload_bits_per_attempt"] == 8.0
+    assert summary["conditional_payload_bits_per_verified_success"] == 16.0
+
+
+def test_harness_skipped_rows_leave_the_acceptance_denominator() -> None:
+    """The scale300 reporting bug: 94 rows that never reached the server.
+
+    A cover-sentence extraction failure sends no request, so charging it to the
+    baseline's acceptance rate measures our harness, not ZLG.
+    """
+    module = _load_module()
+    rows = [
+        {"accepted": True, "decode_ok": True, "payload_bits_encoded": 16, "total_embedded_bits": 16},
+        {"accepted": False, "reason": "reveal_decode_failed"},
+        {"accepted": False, "reason": "sample_extract_failed: not enough cover sentences"},
+        {"accepted": False, "failure_stage": "harness_extract", "reason": "sample_extract_failed"},
+    ]
+
+    summary = module._zlg_attempt_reliability(rows)
+
+    assert summary["rows_in_run"] == 4
+    assert summary["harness_skipped"] == 2
+    assert summary["attempted"] == 2
+    assert summary["acceptance_rate"] == 0.5
+    assert summary["effective_payload_bits_per_attempt"] == 8.0
+    assert summary["failure_stage_counts"]["harness_extract"] == 2
+    assert summary["failure_stage_counts"]["reveal"] == 1
+
+
+def test_shared_gate_judges_both_methods_by_one_standard() -> None:
+    """our_method's quality_passed used to be hardcoded True."""
+    module = _load_module()
+    rows = [
+        {
+            "method": "our_method",
+            "stegotext": "The FDA approved it for headaches in the third trimester but not the first.",
+        },
+        {"method": "our_method", "stegotext": "Short."},
+        {
+            "method": "zlg",
+            "stegotext": "[The user wants you to generate a short comment about the news.]",
+        },
+    ]
+    for row in rows:
+        row.update(module._shared_gate_fields(str(row["stegotext"])))
+
+    summary = module._shared_gate_summary(rows)
+
+    assert summary["our_method"]["n"] == 2
+    assert summary["our_method"]["pass_rate"] == 0.5
+    assert summary["zlg"]["pass_rate"] == 0.0
+    assert "structural_artifact" in summary["zlg"]["failed_rules"]
+    assert summary["thresholds"]["max_bigram_repeat_limit"] == 4
+
+
+def test_refresh_shared_gate_preserves_the_servers_own_verdict() -> None:
+    module = _load_module()
+    rows = [{"method": "zlg", "stegotext": "Short.", "quality_passed": True}]
+
+    assert module._refresh_shared_gate(rows) == 1
+    assert rows[0]["server_quality_passed"] is True
+    assert rows[0]["quality_passed"] is False
+
+
+def test_holm_correction_controls_the_metric_family() -> None:
+    module = _load_module()
+    stats = {
+        "a": {"two_sided_sign_test_p": 0.01},
+        "b": {"two_sided_sign_test_p": 0.03},
+        "metadata": "ignored",
+    }
+
+    module._apply_holm_correction(stats)
+
+    assert stats["a"]["holm_adjusted_p"] == 0.02
+    assert stats["b"]["holm_adjusted_p"] == 0.03
+    assert stats["a"]["multiple_testing_family_size"] == 2
+
+
 def test_lexical_quality_index_rewards_diversity_and_avoids_repetition() -> None:
     module = _load_module()
 
@@ -65,9 +173,36 @@ def test_lexical_quality_index_rewards_diversity_and_avoids_repetition() -> None
     repetitive = module._quality("same same same same same same")
 
     assert varied["lexical_quality_index"] > repetitive["lexical_quality_index"]
-    assert varied["lexical_quality_index_version"] == "lexical_quality_v1"
+    assert varied["lexical_quality_index_version"] == "lexical_quality_v2"
     assert 0.0 <= repetitive["lexical_quality_index"] <= 100.0
     assert module._quality("")["lexical_quality_index"] == 0.0
+
+
+def test_lexical_quality_index_is_length_robust() -> None:
+    """Diversity must not decay purely because a text is longer (the v1 TTR defect)."""
+    module = _load_module()
+    sentence = "the quick brown fox jumps over a lazy dog near the river bank today"
+
+    short = module._quality(sentence)
+    long_text = module._quality(" ".join([sentence] * 6))
+
+    assert abs(short["lexical_diversity_mattr"] - long_text["lexical_diversity_mattr"]) < 0.05
+    # Plain TTR, by contrast, collapses on the repeated text.
+    assert long_text["unique_token_ratio"] < 0.5 * short["unique_token_ratio"]
+
+
+def test_lexical_quality_index_drops_collinear_repetition_term() -> None:
+    """repetition_ratio is 1 - unique_ratio, so it must not feed the index twice."""
+    module = _load_module()
+    result = module._quality("alpha beta gamma delta epsilon zeta")
+
+    assert result["repetition_ratio"] == 1.0 - result["unique_token_ratio"]
+    expected = module._lexical_quality_index(
+        lexical_diversity=result["lexical_diversity_mattr"],
+        max_bigram_repeat=result["max_bigram_repeat"],
+        word_count=result["word_count"],
+    )
+    assert result["lexical_quality_index"] == expected
 
 
 def test_lexical_quality_index_is_in_clustered_statistics() -> None:

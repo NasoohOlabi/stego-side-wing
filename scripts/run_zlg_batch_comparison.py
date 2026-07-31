@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import requests
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
@@ -149,6 +151,24 @@ def _dedupe_sentences(candidates: list[str]) -> list[str]:
         seen.add(key)
         deduped.append(normalized)
     return deduped
+
+
+def _server_identity(server_url: str) -> dict[str, Any]:
+    """Record which build produced the run, so results stay attributable.
+
+    A run's numbers are only interpretable against the gate thresholds and model
+    that were live at the time; without this the only provenance is the wall
+    clock.
+    """
+    if server_url.startswith("local://"):
+        return {"server_url": server_url, "backend": "local_hf"}
+    try:
+        response = requests.get(f"{server_url.rstrip('/')}/health", timeout=30)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        return {"server_url": server_url, "health_error": str(exc)}
+    return {"server_url": server_url, "health": payload if isinstance(payload, dict) else None}
 
 
 def _seed_from_key(key: str) -> int:
@@ -450,7 +470,7 @@ def main() -> int:
         progress = {
             "source_summary": str(source_summary),
             "run_dir": str(run_dir),
-            "total_entries": len(entries),
+            "entries_this_invocation": len(entries),
             "processed_now": processed,
             "accepted_now": accepted,
             "failed_now": failed,
@@ -466,16 +486,22 @@ def main() -> int:
     summary = {
         "source_summary": str(source_summary),
         "run_dir": str(run_dir),
-        "total_entries": len(entries),
+        # `entries_this_invocation` is the last --source-summary's entry count;
+        # `rows_total` counts everything accumulated across resumed chunk runs.
+        # Reporting only the former next to accumulated counters is what made
+        # zlg_batch_scale300 claim total_entries=53 alongside 554 rows.
+        "entries_this_invocation": len(entries),
+        "rows_total": processed,
         "processed_entries": len(done.intersection({_entry_key(e) for e in entries})),
         "accepted": accepted,
         "failed": failed,
         "comparison_mode": comparison_mode,
         "results_jsonl": str(results_jsonl),
+        "zlg_server_identity": _server_identity(args.server_url),
         "updated_at_utc": datetime.now(UTC).isoformat(),
     }
     summary_path.write_text(json.dumps(summary, ensure_ascii=True, indent=2), encoding="utf-8")
-    print(json.dumps(summary, ensure_ascii=False))
+    sys.stdout.write(json.dumps(summary, ensure_ascii=False) + "\n")
     return 0
 
 

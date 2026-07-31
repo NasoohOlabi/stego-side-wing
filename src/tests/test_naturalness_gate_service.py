@@ -1,0 +1,116 @@
+"""Regression tests for the shared naturalness gate.
+
+Every case here is a rule the deployed ZLG gate got wrong in the scale300 run,
+pinned so a future retune cannot quietly reintroduce it.
+"""
+
+from __future__ import annotations
+
+from services import naturalness_gate_service as gate
+
+#: Ordinary human Reddit comments. None of these should be rejected: each one
+#: trips a rule the deployed gate enforced.
+HUMAN_COMMENTS = (
+    "The US government is offering tax benefits to Hyundai for setting up a plant in the US.",
+    "He was shot in a vital spot and it's not like he was wearing a vest.",
+    "The FDA approved it for headaches in the third trimester but not in the first two.",
+    "It’s strange to think that if the events had occurred decades ago, "
+    "they would have been considered the most shocking event of the day.",
+    "The state is actively appealing the ruling on 'EdChoice' and funding private schools.",
+    "The media narrative is so powerful that the narrative is what people remember…",
+    "I think the point of the article is that the cost of the program keeps rising.",
+)
+
+
+def test_smart_apostrophes_are_not_a_rejection_reason() -> None:
+    """28 of 133 gate rejections were this, and not one was real mojibake."""
+    outcome = gate.evaluate_naturalness(
+        "It’s strange that the White House didn’t address the report before Friday…"
+    )
+    assert outcome.passed
+    assert outcome.metrics.replacement_char_count == 0
+
+    # The same sentence with ASCII typography must score identically -- the
+    # curly forms carry no signal the gate should act on.
+    ascii_form = gate.evaluate_naturalness(
+        "It's strange that the White House didn't address the report before Friday..."
+    )
+    assert ascii_form.metrics == outcome.metrics
+
+
+def test_contractions_do_not_read_as_unclosed_quotes() -> None:
+    outcome = gate.evaluate_naturalness(
+        "He was shot in a vital spot and it's not like he was wearing a vest."
+    )
+    assert outcome.passed
+    assert outcome.metrics.unbalanced_quote_count == 0
+
+
+def test_a_repeated_bigram_is_normal_english() -> None:
+    """The deployed limit was 2, which fails any comment repeating 'of the'."""
+    outcome = gate.evaluate_naturalness(
+        "The cost of the program and the scale of the rollout are both underestimated here."
+    )
+    assert outcome.metrics.max_bigram_repeat >= 2
+    assert outcome.passed
+
+
+def test_real_replacement_characters_still_fail() -> None:
+    outcome = gate.evaluate_naturalness(
+        "The teacher�s snake was feeding week old kittens to the student."
+    )
+    assert not outcome.passed
+    assert "replacement_char" in outcome.failed_rules
+
+
+def test_thinking_block_leakage_fails() -> None:
+    outcome = gate.evaluate_naturalness(
+        "It's a good time to start planting.\n\n<think>\nThinking Process:\n\n1."
+    )
+    assert not outcome.passed
+    assert "structural_artifact" in outcome.failed_rules
+
+
+def test_meta_commentary_leakage_fails() -> None:
+    """The deployed gate accepted these; 22 of its 304 'successes' were this."""
+    outcome = gate.evaluate_naturalness(
+        "[The user wants you to generate a short comment on a Reddit news discussion.]"
+    )
+    assert not outcome.passed
+    assert "structural_artifact" in outcome.failed_rules
+
+
+def test_unclosed_double_quote_fails() -> None:
+    outcome = gate.evaluate_naturalness(
+        '"The fact that we have so much money in our bank accounts, '
+        "yet we are still struggling to make ends meet."
+    )
+    assert not outcome.passed
+    assert "unbalanced_quote" in outcome.failed_rules
+
+
+def test_degenerate_repetition_still_fails() -> None:
+    outcome = gate.evaluate_naturalness(
+        "The guy who is the most famous person on earth is also the most famous person on earth."
+    )
+    assert not outcome.passed
+
+
+def test_gate_passes_ordinary_human_comments() -> None:
+    """The calibration property: the gate must not reject real writing.
+
+    scripts/calibrate_naturalness_gate.py runs this against a full corpus; this
+    test pins the specific sentences that motivated each threshold.
+    """
+    assert gate.rejection_rate(list(HUMAN_COMMENTS)) == 0.0
+
+
+def test_thresholds_are_frozen_and_validated() -> None:
+    thresholds = gate.NaturalnessThresholds()
+    assert thresholds.max_bigram_repeat_limit == 4
+    assert thresholds.max_words == 60
+    tightened = gate.NaturalnessThresholds(max_bigram_repeat_limit=2)
+    assert not gate.evaluate_naturalness(
+        "The cost of the program and the scale of the rollout are both underestimated here.",
+        tightened,
+    ).passed

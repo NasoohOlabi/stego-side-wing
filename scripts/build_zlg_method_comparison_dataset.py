@@ -18,11 +18,25 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from infrastructure.mappings import dict_field, list_field  # noqa: E402
+from services.naturalness_gate_service import (  # noqa: E402
+    NaturalnessThresholds,
+    evaluate_naturalness,
+)
+from services.paired_quality_metrics_service import (  # noqa: E402
+    aggregated_quality_metric_keys,
+    score_reference_metrics,
+    score_self_consistency,
+)
 from services.stego_metrics_service import run_single_post_metrics  # noqa: E402
-from services.zlg_comparison_service import stegotext_has_prompt_leakage  # noqa: E402
+from services.zlg_comparison_service import (  # noqa: E402
+    classify_failure_stage,
+    stegotext_has_prompt_leakage,
+)
+from workflows.utils.stego_codec import selection_channel_capacity_report  # noqa: E402
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
-LEXICAL_QUALITY_INDEX_VERSION = "lexical_quality_v1"
+LEXICAL_QUALITY_INDEX_VERSION = "lexical_quality_v2"
+MATTR_WINDOW = 10
 TANGENT_DB_QUALITY_SUMMARY_VERSION = "tangent_db_quality_summary_v1"
 
 
@@ -67,17 +81,36 @@ def _length_sanity_score(word_count: int) -> float:
     return max(0.0, 1.0 - ((word_count - 120) / 120.0))
 
 
+def _mattr(tokens: list[str], window: int = MATTR_WINDOW) -> float:
+    """Moving-average type-token ratio.
+
+    Plain TTR falls with length, so comparing methods whose outputs differ in word count
+    partly measures length. Averaging over fixed-width windows removes that dependence
+    above ``window`` tokens.
+    """
+    if not tokens:
+        return 0.0
+    if len(tokens) <= window:
+        return len(set(tokens)) / len(tokens)
+    spans = range(len(tokens) - window + 1)
+    return sum(len(set(tokens[i : i + window])) / window for i in spans) / len(spans)
+
+
 def _lexical_quality_index(
-    *, unique_ratio: float, repetition_ratio: float, max_bigram_repeat: int, word_count: int
+    *, lexical_diversity: float, max_bigram_repeat: int, word_count: int
 ) -> float:
+    """Three independent components: diversity, phrase repetition, and length sanity.
+
+    ``repetition_ratio`` is ``1 - unique_ratio`` by construction, so the previous version
+    weighted the same signal twice; it has been dropped in favour of length-robust MATTR.
+    """
     if word_count == 0:
         return 0.0
     bigram_score = 1.0 - min(1.0, max(0, max_bigram_repeat - 1) / 3.0)
     score = (
-        (0.4 * unique_ratio)
-        + (0.3 * (1.0 - repetition_ratio))
-        + (0.2 * bigram_score)
-        + (0.1 * _length_sanity_score(word_count))
+        (0.55 * lexical_diversity)
+        + (0.30 * bigram_score)
+        + (0.15 * _length_sanity_score(word_count))
     )
     return round(100.0 * score, 6)
 
@@ -87,17 +120,18 @@ def _quality(text: str) -> dict[str, Any]:
     counts = Counter(toks)
     bigrams = Counter(itertools.pairwise(toks))
     unique_ratio = (len(counts) / len(toks)) if toks else 0.0
-    repetition_ratio = 1.0 - unique_ratio if toks else 0.0
     max_bigram_repeat = max(bigrams.values()) if bigrams else 0
+    lexical_diversity = _mattr(toks)
     return {
         "word_count": len(toks),
         "unique_token_ratio": unique_ratio if toks else None,
-        "repetition_ratio": repetition_ratio if toks else None,
+        # Retained as a raw diagnostic only; it is a linear restatement of unique_token_ratio.
+        "repetition_ratio": (1.0 - unique_ratio) if toks else None,
+        "lexical_diversity_mattr": lexical_diversity if toks else None,
         "single_token_share": (max(counts.values()) / len(toks)) if toks else None,
         "max_bigram_repeat": max_bigram_repeat,
         "lexical_quality_index": _lexical_quality_index(
-            unique_ratio=unique_ratio,
-            repetition_ratio=repetition_ratio,
+            lexical_diversity=lexical_diversity,
             max_bigram_repeat=max_bigram_repeat,
             word_count=len(toks),
         ),
@@ -118,6 +152,63 @@ def _metric_block(metrics: dict[str, Any]) -> dict[str, Any]:
         "jsd_global_corpus": secondary.get("jsd_stego_vs_global_corpus"),
         "metric_warnings": metrics.get("warnings") or [],
     }
+
+
+def _walk_comment_bodies(items: Any) -> list[str]:
+    """Flatten source comments without relying on a particular Reddit export shape."""
+    bodies: list[str] = []
+    if not isinstance(items, list):
+        return bodies
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        body = item.get("body")
+        if (
+            isinstance(body, str)
+            and body.strip()
+            and body.strip().lower() not in {"[deleted]", "[removed]"}
+        ):
+            bodies.append(" ".join(body.split()))
+        bodies.extend(_walk_comment_bodies(item.get("replies")))
+    return bodies
+
+
+def _string_leaves(value: Any, *, limit: int = 5) -> list[str]:
+    """Collect bounded stored research snippets without making network requests."""
+    if limit <= 0:
+        return []
+    if isinstance(value, str):
+        text = " ".join(value.split())
+        return [text[:1200]] if text else []
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            out.extend(_string_leaves(item, limit=limit - len(out)))
+            if len(out) >= limit:
+                break
+        return out
+    if isinstance(value, dict):
+        out = []
+        for key in ("snippet", "content", "description", "title", "body"):
+            out.extend(_string_leaves(value.get(key), limit=limit - len(out)))
+            if len(out) >= limit:
+                break
+        return out
+    return []
+
+
+def _reference_and_context(dataset_file: Path) -> tuple[str, str]:
+    """Return the deterministic human reference and bounded thread evidence."""
+    post = _read_json(dataset_file)
+    if not isinstance(post, dict):
+        return "", ""
+    comments = _walk_comment_bodies(post.get("comments"))
+    reference = comments[0] if comments else ""
+    post_parts = [str(post.get("title") or "").strip(), str(post.get("selftext") or "").strip()]
+    evidence = [part for part in post_parts if part and not part.startswith("Error:")]
+    evidence.extend(comments[:20])
+    evidence.extend(_string_leaves(post.get("search_results")))
+    return reference, "\n\n".join(evidence)[:12000]
 
 
 def _extract_tangent_db_report(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -181,7 +272,9 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "kl_global_corpus",
             "jsd_global_corpus",
             "word_count",
+            "repetition_ratio",
             "lexical_quality_index",
+            *aggregated_quality_metric_keys(),
         ):
             vals = _finite_values(group, key)
             if vals:
@@ -191,6 +284,206 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 block[f"{key}_max"] = max(vals)
         out[method] = block
     return out
+
+
+def _clustered_method_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Descriptive means with each post weighted once, matching the inference unit."""
+    by_post_method: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (str(row.get("post_id")), str(row.get("method")))
+        by_post_method.setdefault(key, []).append(row)
+
+    post_rows: list[dict[str, Any]] = []
+    for (post_id, method), group in by_post_method.items():
+        aggregated: dict[str, Any] = {"post_id": post_id, "method": method}
+        for metric in (
+            "payload_bits_encoded",
+            "protocol_overhead_bits",
+            "total_embedded_bits",
+            "embedded_bits",
+            "payload_bytes_encoded",
+            "perplexity_gpt2",
+            "kl_matched_post",
+            "jsd_matched_post",
+            "kl_global_corpus",
+            "jsd_global_corpus",
+            "word_count",
+            "repetition_ratio",
+            "lexical_quality_index",
+            *aggregated_quality_metric_keys(),
+        ):
+            values = _finite_values(group, metric)
+            if values:
+                aggregated[metric] = statistics.fmean(values)
+        post_rows.append(aggregated)
+    return _summary(post_rows)
+
+
+def _shared_gate_fields(text: str) -> dict[str, Any]:
+    """Judge any method's output by the one gate, so `quality_passed` is comparable."""
+    outcome = evaluate_naturalness(text)
+    return {
+        "quality_passed": outcome.passed,
+        "gate_failed_rules": list(outcome.failed_rules),
+        "gate_metrics": outcome.metrics.model_dump(),
+    }
+
+
+def _refresh_shared_gate(rows: list[dict[str, Any]]) -> int:
+    """Re-score existing rows so datasets built before the shared gate get its verdict."""
+    updated = 0
+    for row in rows:
+        text = str(row.get("stegotext") or "")
+        if not text:
+            continue
+        if row.get("method") == "zlg" and "server_quality_passed" not in row:
+            row["server_quality_passed"] = bool(row.get("quality_passed"))
+        row.update(_shared_gate_fields(text))
+        updated += 1
+    return updated
+
+
+def _gate_pass_rate(rows: list[dict[str, Any]], method: str) -> dict[str, Any]:
+    subset = [row for row in rows if row.get("method") == method]
+    passed = [row for row in subset if bool(row.get("quality_passed"))]
+    failures = Counter(
+        rule for row in subset for rule in (row.get("gate_failed_rules") or []) if isinstance(rule, str)
+    )
+    return {
+        "n": len(subset),
+        "passed": len(passed),
+        "pass_rate": (len(passed) / len(subset)) if subset else None,
+        "failed_rules": dict(failures.most_common()),
+    }
+
+
+def _shared_gate_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "thresholds": NaturalnessThresholds().model_dump(),
+        "our_method": _gate_pass_rate(rows, "our_method"),
+        "zlg": _gate_pass_rate(rows, "zlg"),
+        "note": (
+            "Both methods scored by services.naturalness_gate_service. ZLG's own server-side "
+            "verdict is kept per row as `server_quality_passed`; it is not comparable across "
+            "methods because our method was never subject to it."
+        ),
+    }
+
+
+def _failure_stage(row: dict[str, Any]) -> str:
+    """Read the row's stage, deriving it for rows written before the field existed."""
+    stage = row.get("failure_stage")
+    if isinstance(stage, str) and stage:
+        return stage
+    reason = row.get("reason")
+    return classify_failure_stage(
+        reason if isinstance(reason, str) else None, accepted=bool(row.get("accepted"))
+    )
+
+
+def _zlg_attempt_reliability(zlg_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Report unconditional ZLG reliability/throughput instead of successful hides only.
+
+    Rows whose stage is ``harness_extract`` never reached the server -- our own
+    cover-sentence extraction gave up before sending a request -- so they are
+    reported separately rather than divided into the acceptance rate. Counting
+    them as baseline failures understated ZLG's acceptance by 17 points in the
+    scale300 run.
+    """
+    skipped_rows = [row for row in zlg_rows if _failure_stage(row) == "harness_extract"]
+    attempted_rows = [row for row in zlg_rows if _failure_stage(row) != "harness_extract"]
+    attempted = len(attempted_rows)
+    accepted_rows = [row for row in attempted_rows if bool(row.get("accepted"))]
+    decoded_rows = [row for row in accepted_rows if bool(row.get("decode_ok"))]
+    recovered_bits = sum(_zlg_capacity_fields(row)["payload_bits_encoded"] for row in decoded_rows)
+    return {
+        "rows_in_run": len(zlg_rows),
+        "harness_skipped": len(skipped_rows),
+        "attempted": attempted,
+        "accepted": len(accepted_rows),
+        "decode_verified": len(decoded_rows),
+        "acceptance_rate": (len(accepted_rows) / attempted) if attempted else None,
+        "decode_verified_rate": (len(decoded_rows) / attempted) if attempted else None,
+        "effective_payload_bits_per_attempt": (recovered_bits / attempted) if attempted else None,
+        "conditional_payload_bits_per_verified_success": (
+            recovered_bits / len(decoded_rows) if decoded_rows else None
+        ),
+        "failed_attempts_count_as_zero_bits": True,
+        "failure_stage_counts": _failure_stage_counts(zlg_rows),
+        "denominator_note": (
+            "acceptance_rate and effective_payload_bits_per_attempt divide by `attempted`, "
+            "which excludes `harness_skipped` rows where our extraction failed before any "
+            "request was sent."
+        ),
+    }
+
+
+def _failure_stage_counts(zlg_rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts = Counter(_failure_stage(row) for row in zlg_rows if not bool(row.get("accepted")))
+    return dict(sorted(counts.items()))
+
+
+def _refresh_recoverable_capacity(rows: list[dict[str, Any]]) -> int:
+    """Replace legacy modulo-width counts with uniquely decodable selection capacity."""
+    reports: dict[tuple[str, str], dict[str, int]] = {}
+    updated = 0
+    for row in rows:
+        if row.get("method") != "our_method":
+            continue
+        source_file = Path(str(row.get("source_output_file") or ""))
+        post_id = str(row.get("post_id") or "")
+        key = (str(source_file.parent.parent), post_id)
+        if key not in reports:
+            angle_bearing_post: dict[str, Any] | None = None
+            if source_file.is_file():
+                payload = _read_json(source_file)
+                top = payload[0] if isinstance(payload, list) and payload else payload
+                candidate = top.get("post") if isinstance(top, dict) else None
+                if isinstance(candidate, dict) and candidate.get("angles"):
+                    angle_bearing_post = candidate
+            if angle_bearing_post is None:
+                dataset_file = source_file.parent.parent / "dataset" / f"{post_id}.json"
+                angle_bearing_post = _read_json(dataset_file) if dataset_file.is_file() else None
+            reports[key] = (
+                selection_channel_capacity_report(angle_bearing_post)
+                if isinstance(angle_bearing_post, dict)
+                else {}
+            )
+        report = reports[key]
+        recoverable_bits = int(report.get("recoverable_capacity_bits") or 0)
+        if recoverable_bits <= 0:
+            continue
+        row["physical_selection_bits"] = int(
+            row.get("physical_selection_bits") or row.get("selection_bits") or 0
+        )
+        row["selection_bits"] = recoverable_bits
+        row["embedded_bits"] = recoverable_bits
+        row["payload_bits_encoded"] = recoverable_bits
+        row["total_embedded_bits"] = recoverable_bits
+        row["payload_bytes_encoded"] = recoverable_bits / 8.0
+        row["selection_capacity_report"] = report
+        updated += 1
+    return updated
+
+
+def _refresh_lexical_quality(rows: list[dict[str, Any]]) -> int:
+    for row in rows:
+        row.update(_quality(str(row.get("stegotext") or "")))
+    return len(rows)
+
+
+def _lexical_quality_metadata() -> dict[str, Any]:
+    return {
+        "version": LEXICAL_QUALITY_INDEX_VERSION,
+        "range": [0.0, 100.0],
+        "higher_is_better": True,
+        "weights": {
+            "lexical_diversity_mattr": 0.55,
+            "bigram_non_repetition": 0.3,
+            "length_sanity_5_to_120_words": 0.15,
+        },
+        "status": "exploratory_handcrafted_index",
+    }
 
 
 def _sign_test_p_value(positive: int, negative: int) -> float | None:
@@ -218,6 +511,24 @@ def _bootstrap_mean_ci(
     }
 
 
+def _apply_holm_correction(stats: dict[str, Any]) -> None:
+    tests = sorted(
+        (
+            (key, float(block["two_sided_sign_test_p"]))
+            for key, block in stats.items()
+            if isinstance(block, dict)
+            and isinstance(block.get("two_sided_sign_test_p"), (int, float))
+        ),
+        key=lambda item: item[1],
+    )
+    running_max = 0.0
+    total = len(tests)
+    for rank, (key, p_value) in enumerate(tests):
+        running_max = max(running_max, min(1.0, (total - rank) * p_value))
+        stats[key]["holm_adjusted_p"] = running_max
+        stats[key]["multiple_testing_family_size"] = total
+
+
 def _stats_from_complete_pairs(
     complete: list[dict[str, dict[str, Any]]],
 ) -> dict[str, Any]:
@@ -235,6 +546,7 @@ def _stats_from_complete_pairs(
         "word_count",
         "repetition_ratio",
         "lexical_quality_index",
+        *aggregated_quality_metric_keys(),
     ):
         deltas: list[float] = []
         for pair in complete:
@@ -264,6 +576,7 @@ def _stats_from_complete_pairs(
             block["delta_max"] = max(deltas)
             block["delta_population_stdev"] = statistics.pstdev(deltas)
         out[metric] = block
+    _apply_holm_correction(out)
     return out
 
 
@@ -302,6 +615,7 @@ def _clustered_paired_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "word_count",
                 "repetition_ratio",
                 "lexical_quality_index",
+                *aggregated_quality_metric_keys(),
             ):
                 values = _finite_values(method_rows, metric)
                 if values:
@@ -521,6 +835,9 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         if source_entry is None:
             continue
         source_file = _resolve_output_file(str(source_entry["output_file"]))
+        dataset_file = dataset_dir / f"{source_entry.get('post_id')}.json"
+        dataset_post = _read_json(dataset_file)
+        reference_text, thread_context = _reference_and_context(dataset_file)
         our_payload = _read_json(source_file)
         our_top = our_payload[0] if isinstance(our_payload, list) and our_payload else our_payload
         if not isinstance(our_top, dict):
@@ -528,7 +845,6 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         our_text = str(our_top.get("stegoText") or "")
         tangent_db_report = _extract_tangent_db_report(our_top)
         embedding = dict_field(our_top, "embedding")
-        comment_embedding = dict_field(embedding, "commentEmbedding")
         compression = dict_field(embedding, "compression")
         recovery = source_entry.get("receiver_decode", {}).get("recovery_meta", {})
         capacity_metrics = (source_entry.get("sample_metrics") or {}).get("capacity_metrics") or {}
@@ -538,13 +854,39 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         # "audit_assisted_compressed_full" recovery (side-channel-assisted reconstruction of a
         # test-harness tracking string), not real transmitted capacity. See capacity_fields_note
         # in the written summary for the full explanation.
-        pure_channel_bits = capacity_metrics.get("total_bits")
-        if pure_channel_bits is None:
-            pure_channel_bits = int(comment_embedding.get("bitsCount") or 0)
-        else:
-            pure_channel_bits = int(pure_channel_bits)
+        #
+        # Use the sender-side post snapshot (output-results/<...>.json[0]["post"]), which carries
+        # the "angles" the sample actually encoded against. The `dataset/<post_id>.json` snapshot
+        # is captured before angle generation and has no "angles" key, which silently zeroed the
+        # tangent channel and under-reported capacity by ~43% (docs/reports/zlg-sample-audit-2026-07-27.md).
+        angle_bearing_post = our_top.get("post")
+        if not isinstance(angle_bearing_post, dict) or not angle_bearing_post.get("angles"):
+            angle_bearing_post = dataset_post
+        capacity_report = (
+            selection_channel_capacity_report(angle_bearing_post)
+            if isinstance(angle_bearing_post, dict)
+            else {}
+        )
+        angle_embedding_bits = int(
+            (dict_field(embedding, "angleEmbedding") or {}).get("bitsCount") or 0
+        )
+        if capacity_report.get("tangent_choices") == 0 and angle_embedding_bits > 0:
+            raise ValueError(
+                "capacity_report reports zero tangent choices but the sample's angleEmbedding "
+                f"used {angle_embedding_bits} bits (post_id={source_entry.get('post_id')}, "
+                f"sample_index={source_entry.get('sample_index')}); the resolved post snapshot "
+                "is missing its angles."
+            )
+        pure_channel_bits = int(capacity_report.get("recoverable_capacity_bits") or 0)
+        if pure_channel_bits <= 0:
+            pure_channel_bits = int(capacity_metrics.get("total_bits") or 0)
         our_metrics = run_single_post_metrics(source_file, dataset_dir, device=args.device)
         our_quality = _quality(our_text)
+        our_reference_metrics = (
+            {}
+            if args.skip_reference_metrics
+            else score_reference_metrics(our_text, reference_text, device=args.device)
+        )
         rows.append(
             {
                 "pair_id": pair_id,
@@ -559,9 +901,13 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 "protocol_overhead_bits": 0,
                 "total_embedded_bits": pure_channel_bits,
                 "hidden_payload_bits": int(capacity_metrics.get("hidden_payload_bits") or 0),
-                "selection_bits": int(capacity_metrics.get("selection_bits") or 0),
-                "decode_ok": True,
-                "quality_passed": True,
+                "selection_bits": pure_channel_bits,
+                "physical_selection_bits": int(capacity_metrics.get("selection_bits") or 0),
+                "selection_capacity_report": capacity_report,
+                "decode_ok": bool((source_entry.get("sample_metrics") or {}).get("receiver_success")),
+                # Was hardcoded True while ZLG carried the server's own gate
+                # verdict, so the two methods were never judged by one standard.
+                **_shared_gate_fields(our_text),
                 "payload_bits_total": int(compression.get("compressedLength") or 0),
                 "payload_bytes_target": int(source_entry.get("payload_bytes") or 0),
                 "payload_bytes_encoded": pure_channel_bits / 8.0,
@@ -570,9 +916,12 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 "recovery_source": "audit_assisted_compressed_full",
                 "source_output_file": str(source_file),
+                "reference_text": reference_text,
+                "thread_context": thread_context,
                 "tangent_db_report": tangent_db_report,
                 **our_quality,
                 **_metric_block(our_metrics),
+                **our_reference_metrics,
             }
         )
 
@@ -583,6 +932,11 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         _write_temp_output(zlg_metric_file, zlg_text)
         zlg_metrics = run_single_post_metrics(zlg_metric_file, dataset_dir, device=args.device)
         zlg_quality = _quality(zlg_text)
+        zlg_reference_metrics = (
+            {}
+            if args.skip_reference_metrics
+            else score_reference_metrics(zlg_text, reference_text, device=args.device)
+        )
         zlg_capacity = _zlg_capacity_fields(zlg)
         rows.append(
             {
@@ -596,7 +950,10 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 "embedded_bits": zlg_capacity["total_embedded_bits"],
                 **zlg_capacity,
                 "decode_ok": bool(zlg.get("decode_ok")),
-                "quality_passed": bool(zlg.get("quality_passed")),
+                # The server's own verdict is retained for provenance, but the
+                # comparable number is the shared gate both methods now face.
+                "server_quality_passed": bool(zlg.get("quality_passed")),
+                **_shared_gate_fields(zlg_text),
                 "payload_bits_total": int(zlg.get("target_bits") or 0),
                 "payload_bytes_target": int(zlg.get("payload_bytes_target") or 0),
                 "payload_bytes_encoded": int(zlg.get("payload_bytes_actual") or 0),
@@ -604,11 +961,32 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 "api_ppl": zlg.get("ppl"),
                 "recovery_source": "pure_channel_hide_reveal_verified",
                 "source_output_file": str(source_file),
+                "reference_text": reference_text,
+                "thread_context": thread_context,
                 **zlg_quality,
                 **_metric_block(zlg_metrics),
+                **zlg_reference_metrics,
             }
         )
         pair_id += 1
+
+    if not args.skip_reference_metrics:
+        for row in rows:
+            alternatives = [
+                str(other.get("stegotext") or "")
+                for other in rows
+                if other.get("post_id") == row.get("post_id")
+                and other.get("method") == row.get("method")
+            ]
+            score, warning, provenance = score_self_consistency(
+                str(row.get("stegotext") or ""), alternatives, device=args.device
+            )
+            row["self_consistency"] = score
+            warnings = row.setdefault("quality_metric_warnings", [])
+            if warning:
+                warnings.append(warning)
+            if provenance:
+                row.setdefault("quality_metric_provenance", {})["self_consistency"] = provenance
 
     diversity = _assert_diversity(rows, minimum_ratio=args.minimum_diversity_ratio)
     out_dir = zlg_run_dir / "comparison_dataset"
@@ -623,32 +1001,25 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "rows": len(rows),
         "paired_posts": len({(r["post_id"], r["sample_index"]) for r in rows}) if rows else 0,
         "methods": _summary(rows),
+        "methods_clustered_by_post": _clustered_method_summary(rows),
         "comparison_modes": sorted({str(r.get("comparison_mode")) for r in rows}),
+        "zlg_attempt_reliability": _zlg_attempt_reliability(zlg_rows),
+        "shared_naturalness_gate": _shared_gate_summary(rows),
         "paired_statistics": _clustered_paired_stats(rows),
         "row_level_descriptive_statistics": _row_level_paired_stats(rows),
         "independence_diagnostics": _independence_diagnostics(rows),
         "diversity_guard": diversity,
-        "lexical_quality_index": {
-            "version": LEXICAL_QUALITY_INDEX_VERSION,
-            "range": [0.0, 100.0],
-            "higher_is_better": True,
-            "weights": {
-                "unique_token_ratio": 0.4,
-                "inverse_repetition_ratio": 0.3,
-                "bigram_non_repetition": 0.2,
-                "length_sanity_5_to_120_words": 0.1,
-            },
-        },
+        "lexical_quality_index": _lexical_quality_metadata(),
         "tangent_db_quality": _tangent_db_quality_summary(rows),
         "rows_jsonl": str(rows_path),
         "capacity_fields_note": (
-            "our_method capacity fields (embedded_bits/payload_bits_encoded/total_embedded_bits/"
-            "payload_bytes_encoded) use the pure-selection-channel capacity "
-            "(capacity_metrics.total_bits from the source e2e run), which is the honest "
-            "blind-decode capacity. This is NOT the audit-assisted 'full payload' byte count "
-            "(preserved separately under audit_assisted_payload_bytes) -- that number reflects "
-            "recovery of a test-harness tracking string via side-channel-assisted reconstruction, "
-            "not real pure-channel capacity."
+            "our_method capacity fields use the sum of floor(log2(choice_count)) for the "
+            "comment and angle selections, excluding modulo-alias states that are not uniquely "
+            "decodable. ZLG capacity is hide/reveal verified but its displayed conditional mean "
+            "includes successful hides only; zlg_attempt_reliability reports failures as zero. "
+            "Capacity is resolved from the sender's output-results post snapshot (which carries "
+            "angles), not the pre-angle dataset snapshot -- see docs/reports/"
+            "zlg-sample-audit-2026-07-27.md for the historical under-count this fixes."
         ),
     }
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -671,6 +1042,11 @@ def main() -> int:
         ),
     )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument(
+        "--skip-reference-metrics",
+        action="store_true",
+        help="Do not run BLEU/ROUGE/BERTScore/self-consistency while building rows.",
+    )
     parser.add_argument("--minimum-diversity-ratio", type=float, default=1.0)
     parser.add_argument(
         "--refresh-statistics-only",
@@ -681,9 +1057,34 @@ def main() -> int:
     if args.refresh_statistics_only:
         dataset_dir = Path(args.zlg_run_dir).resolve() / "comparison_dataset"
         rows = _load_jsonl(dataset_dir / "paired_rows.jsonl")
+        capacity_rows_updated = _refresh_recoverable_capacity(rows)
+        lexical_rows_updated = _refresh_lexical_quality(rows)
+        gate_rows_updated = _refresh_shared_gate(rows)
+        if capacity_rows_updated or lexical_rows_updated or gate_rows_updated:
+            (dataset_dir / "paired_rows.jsonl").write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
         diversity = _assert_diversity(rows, minimum_ratio=args.minimum_diversity_ratio)
         summary_path = dataset_dir / "summary.json"
         summary = _read_json(summary_path)
+        summary["methods"] = _summary(rows)
+        summary["methods_clustered_by_post"] = _clustered_method_summary(rows)
+        zlg_rows = _load_jsonl(Path(args.zlg_run_dir).resolve() / "results.jsonl")
+        summary["zlg_attempt_reliability"] = _zlg_attempt_reliability(zlg_rows)
+        summary["shared_naturalness_gate"] = _shared_gate_summary(rows)
+        summary["recoverable_capacity_rows_updated"] = capacity_rows_updated
+        summary["lexical_quality_rows_updated"] = lexical_rows_updated
+        summary["lexical_quality_index"] = _lexical_quality_metadata()
+        summary["capacity_fields_note"] = (
+            "our_method capacity fields use the sum of floor(log2(choice_count)) for the "
+            "comment and angle selections, excluding modulo-alias states that are not uniquely "
+            "decodable. ZLG capacity is hide/reveal verified but its displayed conditional mean "
+            "includes successful hides only; zlg_attempt_reliability reports failures as zero. "
+            "Capacity is resolved from the sender's output-results post snapshot (which carries "
+            "angles), not the pre-angle dataset snapshot -- see docs/reports/"
+            "zlg-sample-audit-2026-07-27.md for the historical under-count this fixes."
+        )
         summary["row_level_descriptive_statistics"] = _row_level_paired_stats(rows)
         summary["paired_statistics"] = _clustered_paired_stats(rows)
         summary["independence_diagnostics"] = _independence_diagnostics(rows)

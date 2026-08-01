@@ -81,6 +81,18 @@ INSTRUCTION_ECHO_PATTERNS = (
     r"(?:^|[.!?]\s+)start\s+(?:directly|immediately)\b",
 )
 
+#: A different failure mode from the two above: not the model talking about its
+#: task, but the *inference backend* failing and its own error string being
+#: embedded and revealed as if it were the comment. Seen verbatim 10 times in
+#: 510 accepted samples of the recalibrated scale300 re-run:
+#: `{"index": "error": true}, {"content": null}] [ERROR: Failed to call LLM.`
+#: -- fluent enough (10 words, no repetition) to pass every other rule.
+BACKEND_ERROR_PATTERNS = (
+    r"\[ERROR:",
+    r"Failed to call \w+",
+    r'"index":\s*"error"',
+)
+
 
 class NaturalnessThresholds(BaseModel):
     """Gate limits. Defaults are calibrated to pass >95% of human Reddit comments."""
@@ -114,6 +126,7 @@ class NaturalnessMetrics(BaseModel):
     replacement_char_count: int
     structural_artifact_count: int
     instruction_echo_count: int
+    backend_error_count: int
     terminal_punctuation: bool
     decode_ready: bool
 
@@ -179,6 +192,14 @@ def _instruction_echoes(text: str) -> int:
     )
 
 
+def _backend_errors(text: str) -> int:
+    return sum(
+        1
+        for pattern in BACKEND_ERROR_PATTERNS
+        if re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+    )
+
+
 @validate_call
 def score_naturalness(text: str) -> NaturalnessMetrics:
     """Measure one candidate. Pure: no thresholds applied here."""
@@ -195,6 +216,7 @@ def score_naturalness(text: str) -> NaturalnessMetrics:
         replacement_char_count=normalized.count(REPLACEMENT_CHAR),
         structural_artifact_count=_structural_artifacts(stripped),
         instruction_echo_count=_instruction_echoes(stripped),
+        backend_error_count=_backend_errors(stripped),
         terminal_punctuation=stripped.endswith((".", "!", "?", '"', "'", ")")),
         decode_ready=bool(stripped),
     )
@@ -213,6 +235,7 @@ def _rule_violations(
         ("replacement_char", metrics.replacement_char_count > 0),
         ("structural_artifact", metrics.structural_artifact_count > 0),
         ("instruction_echo", metrics.instruction_echo_count > 0),
+        ("backend_error", metrics.backend_error_count > 0),
     )
     return tuple(name for name, violated in checks if violated)
 

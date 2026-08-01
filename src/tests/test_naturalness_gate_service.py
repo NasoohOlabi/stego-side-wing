@@ -171,3 +171,20 @@ def test_smoke_run_accepted_echoes_are_rejected() -> None:
         outcome = gate.evaluate_naturalness(echo)
         assert not outcome.passed, echo
         assert "instruction_echo" in outcome.failed_rules, echo
+
+
+def test_backend_error_leak_is_rejected() -> None:
+    """A different failure mode: not the model talking about its task, but the
+    inference backend itself failing and the error string being embedded as if it
+    were the comment. Seen verbatim 10 times in 510 accepted samples of the
+    recalibrated scale300 re-run -- fluent enough (10 words, no repetition, no
+    unbalanced quotes) that it was the only rule set that could have caught it."""
+    blob = '{"index": "error": true}, {"content": null}] [ERROR: Failed to call LLM.'
+    outcome = gate.evaluate_naturalness(blob)
+    assert not outcome.passed
+    assert "backend_error" in outcome.failed_rules
+
+
+def test_backend_error_pattern_does_not_fire_on_ordinary_speech() -> None:
+    for comment in HUMAN_COMMENTS:
+        assert gate.score_naturalness(comment).backend_error_count == 0, comment

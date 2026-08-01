@@ -151,3 +151,23 @@ def test_instruction_echo_does_not_fire_on_ordinary_speech() -> None:
     )
     for comment in ordinary:
         assert gate.evaluate_naturalness(comment).passed, comment
+
+
+#: Echoes the first smoke run recorded as *accepted* ZLG samples, which the
+#: initial pattern set missed: "the comment text itself" has a word between the
+#: two halves, and "Start directly with..." carries no other task vocabulary.
+SMOKE_RUN_ACCEPTED_ECHOES = (
+    "Do not add extra newlines between sentences or paragraphs in your output.",
+    "Only the comment text itself is needed as the output format for this request.",
+    "Do not include any other output or text outside of the comment itself.",
+    'Start directly with the "This". Start immediately.',
+    "Only the comment text itself in one plain sentence without any extra formatting "
+    "or explanation.",
+)
+
+
+def test_smoke_run_accepted_echoes_are_rejected() -> None:
+    for echo in SMOKE_RUN_ACCEPTED_ECHOES:
+        outcome = gate.evaluate_naturalness(echo)
+        assert not outcome.passed, echo
+        assert "instruction_echo" in outcome.failed_rules, echo

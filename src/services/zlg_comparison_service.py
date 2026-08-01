@@ -17,6 +17,8 @@ from pydantic import validate_call
 from requests import HTTPError
 from transformers import AutoModelForCausalLM, AutoTokenizer, GPT2LMHeadModel, GPT2Tokenizer
 
+from services.naturalness_gate_service import INSTRUCTION_ECHO_PATTERNS
+
 DEFAULT_CORPUS = "Reddit news discussion"
 DEFAULT_N_COVER = 4
 DEFAULT_THRESHOLD = 0.005
@@ -157,10 +159,23 @@ def build_api_prompt(
 
 
 def stegotext_has_prompt_leakage(stegotext: str) -> bool:
+    """Reject carriers that are about writing a comment rather than being one.
+
+    ``INSTRUCTION_ECHO_PATTERNS`` is reused from the naturalness gate so meta-text
+    has a single definition, and so it is caught *here* -- at hide time, where a
+    fresh draw can still replace it -- rather than only at analysis time. The
+    literals in ``BROKEN_STEGO_PATTERNS`` were an incomplete hand-rolled attempt at
+    the same thing: they list "Here is a comment" and "Output only" but missed
+    "...in your output" and "Only the comment text itself is needed as the output
+    format", both of which the smoke run recorded as accepted ZLG samples.
+    """
     text = stegotext.strip()
     if text.endswith(("'", '"')) and text.count(text[-1]) % 2 == 1:
         return True
-    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in BROKEN_STEGO_PATTERNS)
+    patterns = (*BROKEN_STEGO_PATTERNS, *INSTRUCTION_ECHO_PATTERNS)
+    return any(
+        re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE) for pattern in patterns
+    )
 
 
 def _target_bits_for_payload(payload_bytes: int) -> int:

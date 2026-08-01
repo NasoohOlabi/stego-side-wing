@@ -73,7 +73,12 @@ INSTRUCTION_ECHO_PATTERNS = (
     r"\bextra text\b",
     r"\bas output\b",
     r"\b(?:output|respond|reply|answer)\s+only\b",
-    r"\bthe\s+(?:comment|text)\s+itself\b",
+    # "text itself" also covers "the comment text itself", which an earlier
+    # `the (comment|text) itself` form missed because of the word in between.
+    r"\b(?:comment|text)\s+itself\b",
+    r"\boutput format\b",
+    # Same sentence-start anchoring as "do not start with", for the same reason.
+    r"(?:^|[.!?]\s+)start\s+(?:directly|immediately)\b",
 )
 
 

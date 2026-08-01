@@ -371,6 +371,32 @@ def is_retryable_hide_error(exc: Exception) -> bool:
     return status_code in RETRYABLE_HIDE_STATUS_CODES
 
 
+#: /reveal's failure mode is different from /hide's: every observed exception has
+#: been the server unable to decode the bits it *extracted* from this specific
+#: stegotext -- ``ZGLSError("payload utf-8 decode failed: ...", status_code=400)``
+#: -- which is a property of that one generation (a fragile EGS threshold decision
+#: near a boundary), not a defect in the reveal request. A live round-trip probe
+#: of 12 hide/reveal pairs on the recalibrated server found 0 such failures, so
+#: this is rare rather than systemic, but a smoke run of 33 samples still hit it
+#: 7 times -- and every one was previously terminal on the first occurrence
+#: despite max_retries allowing more attempts, because the reveal exception
+#: handler returned immediately instead of retrying like reveal_decode_failed and
+#: reveal_payload_mismatch already do a few lines below it.
+RETRYABLE_REVEAL_STATUS_CODES = frozenset({400, 408, 409, 425, 429, 500, 502, 503, 504})
+
+
+def is_retryable_reveal_error(exc: Exception) -> bool:
+    """True when a fresh generation attempt could plausibly avoid the failure.
+
+    A retry here draws an entirely new stegotext from a reseeded prompt, so it is
+    a genuinely independent trial regardless of which status code failed.
+    """
+    status_code, _ = _hide_error_detail(exc)
+    if status_code is None:
+        return True
+    return status_code in RETRYABLE_REVEAL_STATUS_CODES
+
+
 def _official_repo_root() -> Path:
     return Path(__file__).resolve().parents[3] / "tmp_zero_shot_gls_official"
 
@@ -898,6 +924,8 @@ def _run_comparison_sample(sample: ComparisonInput) -> dict[str, Any]:
                 )
             except Exception as exc:
                 failure_reason = f"reveal_request_failed: {exc}"
+                if is_retryable_reveal_error(exc) and attempt < sample.max_retries:
+                    continue
                 return {
                     "accepted": False,
                     "reason": failure_reason,

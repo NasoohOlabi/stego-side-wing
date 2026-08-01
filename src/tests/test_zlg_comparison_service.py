@@ -375,6 +375,65 @@ def test_retry_classifier_distinguishes_transient_from_contract_errors() -> None
     assert svc.is_retryable_hide_error(RuntimeError("connection reset")) is True
 
 
+def _reveal_http_error(status_code: int, detail: str) -> RuntimeError:
+    return RuntimeError(
+        svc.json.dumps(
+            {
+                "kind": "http_error",
+                "status_code": status_code,
+                "url": "http://127.0.0.1:9000/reveal",
+                "response_body": svc.json.dumps({"detail": detail}),
+            }
+        )
+    )
+
+
+def test_reveal_classifier_treats_400_as_retryable() -> None:
+    """Unlike /hide, every observed /reveal 400 has been content-dependent bit
+    corruption ("payload utf-8 decode failed") from a fragile EGS threshold
+    decision on that one generation -- not a defect in the request."""
+    assert svc.is_retryable_reveal_error(_reveal_http_error(400, "payload utf-8 decode failed")) is True
+    assert svc.is_retryable_reveal_error(_reveal_http_error(503, "unavailable")) is True
+    assert svc.is_retryable_reveal_error(RuntimeError("connection reset")) is True
+
+
+def test_corrupted_reveal_is_retried_with_a_fresh_generation(monkeypatch) -> None:
+    """A smoke run recorded 10/33 reveal failures, all terminal on first occurrence
+    despite max_retries=5, because this exception path returned immediately while
+    the sibling reveal_decode_failed / reveal_payload_mismatch paths already
+    retried. This pins the fix: a 400 from /reveal must cost one attempt, not the
+    whole sample."""
+    reveal_attempts = 0
+
+    def _fake_post_json(url: str, payload: dict) -> dict:
+        nonlocal reveal_attempts
+        if url.endswith("/hide"):
+            return {
+                "stegotext": "stego text",
+                "payload_bytes": 5,
+                "payload_bits": 40,
+                "is_truncated": False,
+            }
+        reveal_attempts += 1
+        if reveal_attempts == 1:
+            raise _reveal_http_error(400, "payload utf-8 decode failed: invalid start byte")
+        return {"decode_ok": True, "secret": "hello"}
+
+    monkeypatch.setattr(svc, "post_json", _fake_post_json)
+    result = svc.run_comparison_sample(
+        svc.ComparisonInput(
+            target_payload="hello",
+            server_url="http://127.0.0.1:9000",
+            cover_texts=["Sentence one.", "Sentence two.", "Sentence three."],
+            max_retries=3,
+        )
+    )
+
+    assert reveal_attempts == 2
+    assert result["accepted"] is True
+    assert result["attempt"] == 2
+
+
 def test_first_attempt_prompt_is_unchanged_by_reseeding() -> None:
     """Attempt 1 must reproduce the pre-change prompt so past runs stay comparable."""
     sample = svc.ComparisonInput(

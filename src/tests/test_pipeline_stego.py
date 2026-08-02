@@ -4,6 +4,7 @@ import pytest
 
 from workflows.pipelines import stego
 from workflows.pipelines.stego import StegoPipeline
+from workflows.pipelines.stego_candidates import StegoCandidateEngine
 from workflows.utils.output_results_shape import n8n_save_object_body
 from workflows.utils.stego_codec import extract_invisible_payload
 
@@ -40,6 +41,31 @@ def test_stego_comment_strings_from_parsed_requires_three_strings() -> None:
     assert stego._stego_comment_strings_from_parsed(["a", "b", "c", "d"]) is None
     assert stego._stego_comment_strings_from_parsed({"texts": ["x", "y", "z"]}) == ["x", "y", "z"]
     assert stego._stego_comment_strings_from_parsed({"texts": ["x", "y"]}) is None
+
+
+def test_candidate_generation_never_invents_an_anchor_reply() -> None:
+    generated = ["The visa decision makes sense given what he chose to release."]
+    engine = StegoCandidateEngine(
+        generate_texts=lambda **_: generated.copy(),
+        revise_candidate=lambda **_: "",
+        decode_candidate=lambda **_: (None, 0),
+    )
+    sample = {
+        "category": "Social Issues",
+        "tangent": "cancel culture and immigration",
+        "source_quote": "visa after he released a song",
+    }
+
+    groups = engine.generate_groups(
+        samples=[sample],
+        post_augmentation={"commentEmbedding": {}},
+        selected_angle=sample,
+        prompt_style="natural",
+        encode_run_id="test",
+        llm_timings=[],
+    )
+
+    assert groups[0]["texts"] == generated
 
 
 def test_stego_flatten_and_eq_helpers():
@@ -536,22 +562,6 @@ def test_contextuality_gate_rejects_generic_editorial_drift():
     assert "generic_editorial_tone" in result["reasons"]
 
 
-def test_selected_angle_anchor_variant_adds_distinctive_phrase():
-    selected_angle = {
-        "category": "Reference Material",
-        "source_quote": '{"title": "Immigrant Defenders Law Center", "summary": "Provides free legal aid to underserved communities."}',
-        "tangent": "Discuss legal defense resources.",
-    }
-
-    result = stego._with_selected_angle_anchor_variants(
-        ["This is terrifying and someone needs to help her family."],
-        selected_angle,
-    )
-
-    assert len(result) == 2
-    assert "Immigrant Defenders Law Center" in result[1]
-
-
 def test_evaluate_candidate_groups_prefers_context_safe_exact_match():
     pipeline = StegoPipeline.__new__(StegoPipeline)
     selected_angle = {
@@ -604,44 +614,6 @@ def test_evaluate_candidate_groups_prefers_context_safe_exact_match():
 
     assert result["succeeded"] is True
     assert result["accepted_candidate"]["group_index"] == 1
-
-
-def test_evaluate_candidate_groups_prefers_model_reply_over_synthetic_anchor():
-    pipeline = StegoPipeline.__new__(StegoPipeline)
-    selected_angle = {
-        "idx": 0,
-        "category": "Work",
-        "tangent": "ending the work day",
-        "source_quote": "Putting the laptop away helps end the work day.",
-    }
-    post_augmentation = {
-        "commentEmbedding": {
-            "context": {"title": "Working from home", "selftext": "Need a routine."},
-            "pickedCommentChain": [{"name": "u1", "body": "I put my laptop away at five."}],
-        }
-    }
-    pipeline._decode_candidate = lambda **kwargs: (0, 1)
-    result = pipeline._evaluate_candidate_groups(
-        encoded_results=[
-            {
-                "category": "Work",
-                "source_quote": selected_angle["source_quote"],
-                "tangent": selected_angle["tangent"],
-                "prompt_style": "natural",
-                "texts": [
-                    "Packing the laptop away at five has made the evening feel separate from work.",
-                    "Putting the laptop away helps end the work day. I can see why people keep coming back to that point.",
-                ],
-            }
-        ],
-        tangents_db=[selected_angle],
-        selected_angle=selected_angle,
-        post_augmentation=post_augmentation,
-    )
-
-    assert result["succeeded"] is True
-    assert result["accepted_candidate"]["candidate_index"] == 0
-    assert result["validationDetails"]["candidates"][0]["is_synthetic_anchor"] is False
 
 
 def test_decode_rerank_promotes_lexically_grounded_candidate():

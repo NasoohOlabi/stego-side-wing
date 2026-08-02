@@ -10,6 +10,7 @@ from uuid import uuid4
 from loguru import logger
 
 from infrastructure.config import (
+    get_workflow_context_sampler,
     get_workflow_encoding_secret,
     get_workflow_encoding_settings,
     get_workflow_payload_transform,
@@ -26,12 +27,7 @@ from workflows.config import get_config
 from workflows.contracts import PostAugmentation, SenderAudit
 from workflows.errors import NoUnprocessedPostsError
 from workflows.pipelines.decode import DECODE_LLM_MODEL, DecodePipeline
-from workflows.pipelines.stego_anchor_text import (
-    is_synthetic_anchor_text as _is_synthetic_anchor_text,
-)
-from workflows.pipelines.stego_anchor_text import (
-    with_selected_angle_anchor_variants as _with_selected_angle_anchor_variants,  # noqa: F401
-)
+from workflows.pipelines.gen_angles import GenAnglesPipeline
 from workflows.pipelines.stego_audit import (
     sender_audit_from_post as _sender_audit_from_post,
 )
@@ -48,6 +44,9 @@ from workflows.pipelines.stego_extractive import (
 )
 from workflows.pipelines.stego_extractive import extractive_stego_text as _extractive_stego_text
 from workflows.pipelines.stego_multiframe import plan_payload_frames as _plan_payload_frames
+from workflows.pipelines.stego_multiframe import (
+    plan_payload_frames_contextual as _plan_payload_frames_contextual,
+)
 from workflows.pipelines.stego_results import angle_summary as _angle_summary
 from workflows.pipelines.stego_results import (
     candidate_validation_audit as _candidate_validation_audit,
@@ -60,7 +59,6 @@ from workflows.pipelines.stego_results import encode_exception_result as _encode
 from workflows.pipelines.stego_results import encode_failure_result as _encode_failure_result
 from workflows.pipelines.stego_results import encode_success_result as _encode_success_result
 from workflows.utils import stego_codec
-from workflows.utils.naturalness_gate import naturalness_gate_enabled
 from workflows.utils.output_results_shape import (
     assert_valid_n8n_stego_artifact,
     n8n_save_object_body,
@@ -240,10 +238,12 @@ class StegoPipeline:
         backend: BackendAPIAdapter | None = None,
         llm: LLMAdapter | None = None,
         decode_pipeline: DecodePipeline | None = None,
+        gen_angles_pipeline: GenAnglesPipeline | None = None,
     ) -> None:
         self.backend = backend or BackendAPIAdapter()
         self.llm = llm or LLMAdapter()
         self.decode_pipeline = decode_pipeline or DecodePipeline()
+        self.gen_angles_pipeline = gen_angles_pipeline or GenAnglesPipeline()
         # Not injectable: get_config() is ContextVar-aware so isolated_workflow_config can
         # swap it per test/run. Capturing an injected instance would defeat that.
         self.config = get_config()
@@ -337,8 +337,21 @@ class StegoPipeline:
         posts: list[dict[str, Any]],
         max_frames_per_post: int = 3,
     ) -> dict[str, Any]:
-        return _plan_payload_frames(
-            payload, self._prepare_multi_frame_payload_bits(payload), posts, max_frames_per_post
+        prepared = self._prepare_multi_frame_payload_bits(payload)
+        if get_workflow_context_sampler() != "context_weighted_v2":
+            return _plan_payload_frames(payload, prepared, posts, max_frames_per_post)
+        cache: dict[tuple[str, str | None], dict[str, Any]] = {}
+
+        def resolve(post: dict[str, Any], parent_id: str | None) -> dict[str, Any]:
+            key = (str(post.get("id")), parent_id)
+            if key not in cache:
+                cache[key] = self.gen_angles_pipeline.preview_post(
+                    post, selected_parent_id=parent_id
+                )["post"]
+            return cache[key]
+
+        return _plan_payload_frames_contextual(
+            payload, prepared, posts, max_frames_per_post, resolve
         )
 
     def encode_payload_frames(
@@ -356,7 +369,7 @@ class StegoPipeline:
         encoded_frames: list[dict[str, Any]] = []
         created_utc_base = int(time.time())
         for global_frame_index, frame in enumerate(plan["frames"]):
-            post = posts[frame["post_index"]]
+            post = frame.get("_context_post") or posts[frame["post_index"]]
             embedding_plan = frame.get("embedding_plan", {})
             selection_bits = embedding_plan.get("fullEncodedBits", frame["frame_bits"])
             result = self.encode_binary_selection_bits(
@@ -366,6 +379,7 @@ class StegoPipeline:
                 max_retries=max_retries,
             )
             frame_result = dict(frame)
+            frame_result.pop("_context_post", None)
             frame_result["succeeded"] = bool(result.get("succeeded"))
             frame_result["error"] = result.get("error")
             if not result.get("succeeded"):
@@ -871,62 +885,6 @@ class StegoPipeline:
         )
         return str(revised).strip()
 
-    def _replace_synthetic_anchor_for_naturalness_gate(
-        self,
-        *,
-        validation: dict[str, Any],
-        encoded_results: list[dict[str, Any]],
-        tangents_db: list[dict[str, Any]],
-        selected_angle: dict[str, Any],
-        post_augmentation: PostAugmentation,
-        encode_run_id: str,
-        llm_timings: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Require a contextual revision when the gate selected an anchor fallback."""
-        if not naturalness_gate_enabled() or not validation.get("succeeded"):
-            return validation
-        accepted = validation.get("accepted_candidate") or {}
-        if not _is_synthetic_anchor_text(str(accepted.get("text", ""))):
-            return validation
-        group_index = int(accepted.get("group_index", -1))
-        if group_index < 0 or group_index >= len(encoded_results):
-            return validation
-        source_group = encoded_results[group_index]
-        revised_text = self._revise_candidate_text_contextually(
-            candidate_text=str(accepted.get("text", "")),
-            sample=source_group,
-            comment_embedding=post_augmentation["commentEmbedding"],
-            encode_run_id=encode_run_id,
-            sample_index=group_index,
-            llm_timings=llm_timings,
-        )
-        revised_validation = self._evaluate_candidate_groups(
-            encoded_results=[
-                {
-                    "category": source_group.get("category"),
-                    "source_quote": source_group.get("source_quote"),
-                    "tangent": source_group.get("tangent"),
-                    "prompt_style": "natural_sharpened",
-                    "texts": [revised_text],
-                    "generation_mode": "context_sharpen",
-                }
-            ],
-            tangents_db=tangents_db,
-            selected_angle=selected_angle,
-            post_augmentation=post_augmentation,
-            encode_run_id=encode_run_id,
-        )
-        revised_candidate = revised_validation.get("accepted_candidate") or {}
-        if revised_validation.get("succeeded") and not _is_synthetic_anchor_text(
-            str(revised_candidate.get("text", ""))
-        ):
-            return revised_validation
-        return {
-            **revised_validation,
-            "succeeded": False,
-            "synthetic_anchor_replacement_failed": True,
-        }
-
     def encode(
         self,
         payload: str,
@@ -1100,15 +1058,6 @@ class StegoPipeline:
                     selected_angle=selected_angle,
                     post_augmentation=post_augmentation,
                     encode_run_id=encode_run_id,
-                )
-                validation = self._replace_synthetic_anchor_for_naturalness_gate(
-                    validation=validation,
-                    encoded_results=encoded_results,
-                    tangents_db=tangents_db,
-                    selected_angle=selected_angle,
-                    post_augmentation=post_augmentation,
-                    encode_run_id=encode_run_id,
-                    llm_timings=llm_timings,
                 )
                 validate_ms = _elapsed_ms_since(t_val)
                 attempt_ms = _elapsed_ms_since(t_attempt)
@@ -1393,15 +1342,6 @@ class StegoPipeline:
                     selected_angle=selected_angle,
                     post_augmentation=post_augmentation,
                     encode_run_id=encode_run_id,
-                )
-                validation = self._replace_synthetic_anchor_for_naturalness_gate(
-                    validation=validation,
-                    encoded_results=encoded_results,
-                    tangents_db=tangents_db,
-                    selected_angle=selected_angle,
-                    post_augmentation=post_augmentation,
-                    encode_run_id=encode_run_id,
-                    llm_timings=llm_timings,
                 )
                 if validation.get("succeeded"):
                     accepted_candidate = validation.get("accepted_candidate") or {}

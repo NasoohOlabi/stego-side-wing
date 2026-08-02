@@ -6,10 +6,6 @@ from collections.abc import Callable
 from typing import Any
 
 from workflows.contracts import PostAugmentation
-from workflows.pipelines.stego_anchor_text import (
-    is_synthetic_anchor_text,
-    with_selected_angle_anchor_variants,
-)
 from workflows.pipelines.stego_contextuality import contextuality_gate
 from workflows.pipelines.stego_results import angle_summary
 
@@ -73,8 +69,6 @@ class StegoCandidateEngine:
                 encode_run_id=encode_run_id,
                 llm_timings=llm_timings,
             )
-            if _same_angle(sample, selected_angle):
-                texts = with_selected_angle_anchor_variants(texts, selected_angle)
             groups.append(
                 {
                     "category": sample.get("category"),
@@ -224,7 +218,6 @@ class StegoCandidateEngine:
             key=lambda item: (
                 0 if item["accepted"] else 1,
                 0 if item["context_gate"]["passes"] else 1,
-                1 if is_synthetic_anchor_text(str(item["text"])) else 0,
                 0
                 if item["distance_bucket"] == "exact"
                 else (1 if item["distance_bucket"] == "adjacent" else 2),
@@ -263,7 +256,6 @@ class StegoCandidateEngine:
                             "context_gate",
                         )
                     }
-                    | {"is_synthetic_anchor": is_synthetic_anchor_text(str(item["text"]))}
                     for item in evaluations
                 ],
             },

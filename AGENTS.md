@@ -1,11 +1,15 @@
 ﻿# Agent rules
 
-- **LLM prompt red line:** Never change workflow/system LLM prompts without double-checking with the user first. Any edit to prompt text in `config/workflow_llm_prompts.json`, `src/workflows/utils/workflow_llm_prompts.py`, or related prompt files requires explicit confirmation twice before making the change. unless you commit the changes to the prompts in a single git commit that only includes the prompt changes
+- **LLM prompt red line:** Never change workflow/system LLM prompts without double-checking with the user first. Any edit to prompt text in `config/workflow_llm_prompts.json`, `src/workflows/utils/workflow_llm_prompts.py`, or related prompt files requires explicit confirmation twice before making the change. A prompt-only commit does not replace those confirmations.
 - **Local/dev API assumption:** This repository is treated as local/dev-only by default. Do not repeatedly raise missing auth on admin/state endpoints as a blocking issue unless the user indicates non-local exposure (LAN/public deploy, shared host, reverse proxy, or cloud runtime).
 
 # Project
 
 **stego-side-wing** â€” Python backend and workflow runtime for stego pipelines. Package manager: **uv** (`pyproject.toml`, `uv.lock`). Python **3.13+**.
+
+For the method structure, official ZLG comparison protocol, metric caveats, and
+the `ssh asus` GPU workflow, read
+[`.agents/method-and-zlg-benchmark.md`](.agents/method-and-zlg-benchmark.md).
 
 ## Commands
 
@@ -66,7 +70,7 @@ even though CI does run `ruff` over `scripts`.
 
 ## Layout (high level)
 
-- `docs/` â€” API and operator-facing spec ([`docs/reference/api-spec.md`](docs/reference/api-spec.md)); workflow LLM copy lives in `config/workflow_llm_prompts.json` (see API spec / prompts routes). Sample-generation scripts (incl. multi-frame e2e) are documented in [`docs/results/workload-runs-and-artifacts.md`](docs/results/workload-runs-and-artifacts.md).
+- `docs/` â€” start at [`docs/README.md`](docs/README.md) for the API, operations, and benchmark index. Workflow LLM copy lives in `config/workflow_llm_prompts.json`; sample-generation artifacts are documented in [`docs/results/workload-runs-and-artifacts.md`](docs/results/workload-runs-and-artifacts.md).
 - `scripts/` â€” **repo-root** standalone scripts (e.g. `avg_perplexity.py`, `avg_kld.py`; run as `uv run python scripts/<name>.py`)
 - `metrics/` â€” default output for metrics JSON reports (created on first run)
 - `src/app/` â€” Flask app factory, routes (e.g. `routes/api_v1_routes.py`), schemas

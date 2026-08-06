@@ -29,6 +29,7 @@ from loguru import logger  # noqa: E402
 from infrastructure.config import (  # noqa: E402
     get_workflow_encoding_secret,
     get_workflow_encoding_settings,
+    override_workflow_context_sampler,
 )
 from infrastructure.json_logging import configure_api_logging  # noqa: E402
 from infrastructure.process_tracking import append_current_pid_to_log  # noqa: E402
@@ -139,6 +140,19 @@ def read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def angle_path_for_post_id(angles_dir: Path, post_id: str) -> Path:
+    """Resolve a legacy ``<post>.json`` or isolated ``<post>_<tag>.json`` artifact."""
+    direct = angles_dir / f"{post_id}.json"
+    if direct.exists():
+        return direct
+    tagged = sorted(angles_dir.glob(f"{post_id}_*.json"))
+    if len(tagged) == 1:
+        return tagged[0]
+    if not tagged:
+        raise FileNotFoundError(f"No angle artifact found for post ID {post_id!r} in {angles_dir}")
+    raise ValueError(f"Ambiguous tagged angle artifacts for post ID {post_id!r}: {tagged}")
+
+
 def _metric_progress(label: str, current: int, total: int) -> None:
     logger.bind(component="ActualWorkloadE2E").info(
         "metric_progress",
@@ -180,7 +194,7 @@ def validate_angle_artifact_identity(angles_dir: Path, post_ids: Sequence[str]) 
     """Reject a sample lane that silently combines different angle-generation versions."""
     identities: dict[str, dict[str, Any]] = {}
     for post_id in dict.fromkeys(post_ids):
-        post = read_json(angles_dir / f"{post_id}.json")
+        post = read_json(angle_path_for_post_id(angles_dir, post_id))
         identity = angle_artifact_identity(post)
         key = json.dumps(identity, sort_keys=True, ensure_ascii=True)
         identities[key] = identity
@@ -282,7 +296,8 @@ def select_post_ids(
     for path in sorted(angles_dir.glob("*.json")):
         if len(selected) >= samples_per_profile and not allow_post_reuse:
             break
-        baseline_path = dataset_dir / path.name
+        post_id = str(path.stem).split("_", maxsplit=1)[0]
+        baseline_path = dataset_dir / f"{post_id}.json"
         if not baseline_path.exists():
             continue
         try:
@@ -290,7 +305,7 @@ def select_post_ids(
         except Exception:
             continue
         if has_usable_angles(post):
-            selected.append(path.stem)
+            selected.append(post_id)
     if len(selected) < samples_per_profile:
         if allow_post_reuse and selected:
             return _cycle_to_length(selected, samples_per_profile)
@@ -400,7 +415,7 @@ def _run_sample(
             "adaptive_attempt": adaptive_attempts,
         }
         try:
-            post = read_json(angles_dir / f"{post_id}.json")
+            post = read_json(angle_path_for_post_id(angles_dir, post_id))
             baseline_post = read_json(dataset_dir / f"{post_id}.json")
             envelope.update(summarize_input_post(post, baseline_post))
             post, angle_gate_report = _apply_e2e_angle_relevance_gate(post, baseline_post)
@@ -1000,6 +1015,12 @@ def main() -> None:
     parser.add_argument("--post-id", action="append", default=[])
     parser.add_argument("--angles-dir", default=str(_REPO_ROOT / "datasets" / "news_angles"))
     parser.add_argument("--dataset-dir", default=str(_REPO_ROOT / "datasets" / "news_cleaned"))
+    parser.add_argument(
+        "--context-sampler",
+        choices=("context_weighted_v2", "post_level_v1"),
+        default="post_level_v1",
+        help="Sampler used to reconstruct LUCID or legacy angle contexts.",
+    )
     parser.add_argument("--run-dir", default=None)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--max-retries", type=int, default=1)
@@ -1058,26 +1079,27 @@ def main() -> None:
         )
     profiles = tuple(args.profile or ("balanced",))
     variants = tuple(args.variant) if args.variant else tuple(args.profile or DEFAULT_VARIANTS)
-    run_actual_workload_e2e(
-        profiles=profiles,
-        variants=variants,
-        samples_per_profile=args.samples_per_profile,
-        post_ids=args.post_id,
-        angles_dir=Path(args.angles_dir),
-        dataset_dir=Path(args.dataset_dir),
-        run_dir=Path(args.run_dir).resolve() if args.run_dir else None,
-        overwrite=bool(args.overwrite),
-        max_retries=args.max_retries,
-        force_model_generation=not bool(args.profile_default_generation),
-        skip_receiver_decode=bool(args.skip_receiver_decode),
-        allow_post_reuse=bool(args.allow_post_reuse),
-        fail_fast=bool(args.fail_fast),
-        max_transient_sample_retries=args.max_transient_sample_retries,
-        transient_sample_retry_base_delay_seconds=(args.transient_sample_retry_base_delay_seconds),
-        feedback_run_dir=Path(args.feedback_run_dir) if args.feedback_run_dir else None,
-        adaptive_feedback=bool(args.adaptive_feedback),
-        max_adaptive_sample_retries=args.max_adaptive_sample_retries,
-    )
+    with override_workflow_context_sampler(args.context_sampler):
+        run_actual_workload_e2e(
+            profiles=profiles,
+            variants=variants,
+            samples_per_profile=args.samples_per_profile,
+            post_ids=args.post_id,
+            angles_dir=Path(args.angles_dir),
+            dataset_dir=Path(args.dataset_dir),
+            run_dir=Path(args.run_dir).resolve() if args.run_dir else None,
+            overwrite=bool(args.overwrite),
+            max_retries=args.max_retries,
+            force_model_generation=not bool(args.profile_default_generation),
+            skip_receiver_decode=bool(args.skip_receiver_decode),
+            allow_post_reuse=bool(args.allow_post_reuse),
+            fail_fast=bool(args.fail_fast),
+            max_transient_sample_retries=args.max_transient_sample_retries,
+            transient_sample_retry_base_delay_seconds=(args.transient_sample_retry_base_delay_seconds),
+            feedback_run_dir=Path(args.feedback_run_dir) if args.feedback_run_dir else None,
+            adaptive_feedback=bool(args.adaptive_feedback),
+            max_adaptive_sample_retries=args.max_adaptive_sample_retries,
+        )
 
 
 if __name__ == "__main__":

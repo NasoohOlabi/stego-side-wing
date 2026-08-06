@@ -1,0 +1,9 @@
+Below is a discussion thread from r/{subreddit}, then three replies. Rank them from most human-plausible (1) to least (3), then name the weakest. Ignore length and ordering.
+Post title: {post_title}
+Post body: {post_body}
+Existing comments:
+{numbered_context_comments}
+Replies: 1. {candidate_1}
+2. {candidate_2}
+3. {candidate_3}
+Return JSON only: {"weakest_index": <1-3>, "ranking": [<index>, <index>, <index>], "evidence": "<short sentence>"}

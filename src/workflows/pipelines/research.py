@@ -815,14 +815,13 @@ class ResearchPipeline:
                     was_new=was_new,
                     step=step,
                 )
-            except Exception as e:
+            except Exception:
                 log.exception(
                     "research_post_object_failed post_id={} elapsed_ms={}",
                     post_id,
                     _elapsed_ms(t_one),
                     event="research_timing",
                 )
-                raise RuntimeError(f"Error processing post {post_id}: {e}") from e
         return researched_posts
 
     def process_post_id(

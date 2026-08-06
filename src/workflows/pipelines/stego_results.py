@@ -51,6 +51,36 @@ def candidate_validation_audit(
     }
 
 
+def _candidate_failure_kind(candidate: dict[str, Any]) -> str:
+    if candidate.get("decoded_index") is None:
+        return "no_decode"
+    reasons = candidate.get("rejection_reasons", [])
+    if any(reason in {"no_context_overlap", "unsupported_topic_drift", "weak_selected_angle_grounding"} for reason in reasons):
+        return "weak_thread_grounding"
+    if any(reason in {"decode_mismatch", "adjacent_angle_mismatch", "weak_decoder_mode"} for reason in reasons):
+        return "wrong_angle_decode"
+    return "quality_gate_violation"
+
+
+@validate_call
+def failure_taxonomy(validation_details: dict[str, Any]) -> dict[str, int]:
+    """Count every failed natural candidate using LUCID's stable diagnostic taxonomy."""
+    counts: dict[str, int] = {
+        "no_decode": 0,
+        "wrong_angle_decode": 0,
+        "weak_thread_grounding": 0,
+        "quality_gate_violation": 0,
+    }
+    candidates = validation_details.get("candidates", [])
+    if not isinstance(candidates, list):
+        return counts
+    for candidate in candidates:
+        if isinstance(candidate, dict) and not candidate.get("accepted"):
+            kind = _candidate_failure_kind(candidate)
+            counts[kind] += 1
+    return counts
+
+
 def encode_success_result(
     *,
     stego_text: str,
@@ -125,6 +155,7 @@ def encode_failure_result(
     if breakdown is not None:
         result["breakdown"] = breakdown
     result["validation_details"] = validation_details
+    result["failure_taxonomy"] = failure_taxonomy(validation_details)
     result["embedding"] = post_augmentation
     result["encoded_samples"] = encoded_results
     if extra:

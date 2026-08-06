@@ -28,7 +28,10 @@ dependencies = [
 
 [project.optional-dependencies]
 metrics = [
+    "bert-score>=0.3.13",
     "nltk>=3.9.1",
+    "rouge-score>=0.1.2",
+    "sacrebleu>=2.5.1",
     "torch>=2.6.0",
     "transformers>=4.50.0",
 ]

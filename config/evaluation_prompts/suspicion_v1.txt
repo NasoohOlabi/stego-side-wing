@@ -1,0 +1,8 @@
+You moderate r/{subreddit}. Score the reviewed comment from 0 (genuine human) to 100 (machine-generated or edited). Do not treat bluntness, mistakes, or poor punctuation as evidence.
+Post title: {post_title}
+Post body: {post_body}
+Recent comments:
+{numbered_context_comments}
+Comment: {candidate}
+Select applicable tells from generic_could_fit_any_thread, ignores_thread_specifics, register_mismatch, unnatural_phrasing, repetition, over_hedged, over_polished, contradicts_thread_facts, none.
+Return JSON only: {"suspicion": <0-100>, "tells": ["<tell>"], "evidence": "<short sentence>"}

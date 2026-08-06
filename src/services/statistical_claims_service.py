@@ -196,9 +196,10 @@ def _variant_from_lane(lane: dict[str, Any], fallback_post_ids: list[str]) -> Va
             evidence.context_drift_failures += 1
         metrics = _as_mapping(entry.get("sample_metrics"))
         receiver_decode = entry.get("receiver_decode")
-        if bool(metrics.get("receiver_success")) or (
+        succeeded = bool(metrics.get("receiver_success")) or (
             isinstance(receiver_decode, dict) and receiver_decode.get("succeeded") is True
-        ):
+        )
+        if succeeded:
             evidence.receiver_successes += 1
         if isinstance(receiver_decode, dict):
             if isinstance(receiver_decode.get("decoded_angle_index"), int):
@@ -226,17 +227,32 @@ def _variant_from_lane(lane: dict[str, Any], fallback_post_ids: list[str]) -> Va
                 dest.append(value)
         post_id = entry.get("post_id")
         if isinstance(post_id, str):
-            values = evidence.per_post_metric_values.setdefault(post_id, {})
-            for key in ("matched_post_jsd", "matched_post_kl", "perplexity"):
-                value = _quality_series(entry, key)
-                if value is not None:
-                    values.setdefault(key, []).append(value)
-            evidence.per_post_metrics[post_id] = {
-                key: sum(metric_values) / len(metric_values)
-                for key, metric_values in values.items()
-                if metric_values
-            }
+            _record_post_metrics(evidence, entry, post_id, succeeded=succeeded)
     return evidence
+
+
+def _record_post_metrics(
+    evidence: VariantEvidence,
+    entry: dict[str, Any],
+    post_id: str,
+    *,
+    succeeded: bool,
+) -> None:
+    """Index every per-sample metric under its post so claims can cluster on post_id."""
+    values = evidence.per_post_metric_values.setdefault(post_id, {})
+    for key in ("matched_post_jsd", "matched_post_kl", "perplexity"):
+        value = _quality_series(entry, key)
+        if value is not None:
+            values.setdefault(key, []).append(value)
+    capacity = _collect_float(entry, "capacity_metrics", "bps_selection")
+    if capacity is not None:
+        values.setdefault("bps_selection", []).append(capacity)
+    values.setdefault("receiver_success", []).append(1.0 if succeeded else 0.0)
+    evidence.per_post_metrics[post_id] = {
+        key: sum(metric_values) / len(metric_values)
+        for key, metric_values in values.items()
+        if metric_values
+    }
 
 
 def collect_variant_evidence(artifacts: list[dict[str, Any]]) -> list[VariantEvidence]:
@@ -334,16 +350,39 @@ def _apply_gates(status: str, gates: dict[str, Any]) -> str:
     return status
 
 
+def post_level_values(variants: list[VariantEvidence], metric: str) -> list[float]:
+    """One value per (variant, post).
+
+    Repeated samples drawn from the same post are correlated, so bootstrapping over raw
+    samples produces intervals that are too narrow. Averaging within a post first makes
+    the post the independent unit, matching ``analyze_attack_recovery`` and
+    ``_clustered_paired_stats``.
+    """
+    values: list[float] = []
+    for variant in variants:
+        for metrics in variant.per_post_metric_values.values():
+            samples = [float(v) for v in metrics.get(metric, []) if math.isfinite(float(v))]
+            if samples:
+                values.append(sum(samples) / len(samples))
+    return values
+
+
 def _claim_receiver(
     variants: list[VariantEvidence], gates: dict[str, Any], threshold: float
 ) -> dict[str, Any]:
     successes = sum(v.receiver_successes for v in variants)
     total = sum(v.successful_samples + v.failed_samples for v in variants)
-    ci = wilson_ci(successes, total)
+    pooled = wilson_ci(successes, total)
+    clustered = bootstrap_mean_ci(post_level_values(variants, "receiver_success"))
+    ci = clustered if clustered["n"] > 1 else pooled
     return {
         "id": "receiver_recovery_reliability",
         "status": _apply_gates(_status_from_min_ci(ci, threshold), gates),
-        "metric": {"receiver_success_rate_ci": ci},
+        "metric": {
+            "receiver_success_rate_ci": ci,
+            "receiver_success_rate_ci_pooled_wilson": pooled,
+            "inference_unit": "post_id" if clustered["n"] > 1 else "sample",
+        },
     }
 
 
@@ -368,20 +407,27 @@ def _claim_no_invisible(
 def _claim_capacity(
     variants: list[VariantEvidence], gates: dict[str, Any], threshold: float
 ) -> dict[str, Any]:
-    values = [value for variant in variants for value in variant.bps_selection]
+    clustered = post_level_values(variants, "bps_selection")
+    values = clustered or [value for variant in variants for value in variant.bps_selection]
     ci = bootstrap_mean_ci(values)
     return {
         "id": "selection_channel_capacity_accounting",
         "status": _apply_gates(_status_from_min_ci(ci, threshold), gates),
-        "metric": {"bps_selection_mean_ci": ci},
+        "metric": {
+            "bps_selection_mean_ci": ci,
+            "bps_selection_unit": "bits_per_stego_utf8_byte",
+            "inference_unit": "post_id" if clustered else "sample",
+        },
     }
 
 
 def _claim_naturalness(
     variants: list[VariantEvidence], gates: dict[str, Any], threshold: float
 ) -> dict[str, Any]:
-    jsd_values = [value for variant in variants for value in variant.matched_post_jsd]
-    ppl_values = [value for variant in variants for value in variant.perplexity]
+    clustered_jsd = post_level_values(variants, "matched_post_jsd")
+    clustered_ppl = post_level_values(variants, "perplexity")
+    jsd_values = clustered_jsd or [v for variant in variants for v in variant.matched_post_jsd]
+    ppl_values = clustered_ppl or [v for variant in variants for v in variant.perplexity]
     jsd_ci = bootstrap_mean_ci(jsd_values)
     status = _status_from_max_ci(jsd_ci, threshold)
     return {
@@ -392,6 +438,11 @@ def _claim_naturalness(
             "perplexity_ci": bootstrap_mean_ci(ppl_values),
             "kld_smoothing_alpha_required": True,
             "headline_divergence": "JSD",
+            "inference_unit": "post_id" if clustered_jsd else "sample",
+            # A raw JSD near this threshold is not evidence on its own: real human text
+            # scores far from zero too. Read it against human_control_matched_post in the
+            # divergence report.
+            "requires_human_control_comparison": True,
         },
     }
 

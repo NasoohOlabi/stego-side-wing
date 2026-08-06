@@ -1,0 +1,1 @@
+{"type":"object","required":["inserted_index","confidence","runner_up_index","evidence"],"properties":{"inserted_index":{"type":"integer","minimum":1,"maximum":10},"confidence":{"type":"integer","minimum":0,"maximum":100},"runner_up_index":{"type":"integer","minimum":1,"maximum":10},"evidence":{"type":"string"}},"additionalProperties":false}

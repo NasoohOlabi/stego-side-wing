@@ -1,3 +1,5 @@
+import json
+import math
 import os
 from collections import Counter
 from pathlib import Path
@@ -13,6 +15,71 @@ from services.stego_metrics_service import (
     list_metrics_history,
     run_single_post_metrics,
 )
+
+
+@pytest.mark.parametrize("seq_len", [2, 30, 511, 512, 600, 1024, 1500, 2600])
+def test_perplexity_windows_cover_each_token_exactly_once(seq_len: int) -> None:
+    """Every token must be scored once: the old window arithmetic double-counted them."""
+    windows = sms.perplexity_windows(seq_len, stride=512, max_length=1024)
+
+    assert sum(target_len for _, _, target_len in windows) == seq_len
+    prev_end = 0
+    for begin, end, target_len in windows:
+        assert begin <= end - target_len, "target span must start at or after the window start"
+        assert end - target_len == prev_end, "windows must be contiguous with no overlap"
+        assert end - begin <= 1024, "window must not exceed the model context"
+        prev_end = end
+    assert prev_end == seq_len
+
+
+def test_perplexity_windows_single_pass_for_short_text() -> None:
+    """Short stego comments must stay a single full-context pass."""
+    assert sms.perplexity_windows(23, stride=512, max_length=1024) == [(0, 23, 23)]
+
+
+def test_control_length_window_matches_stego_distribution() -> None:
+    from pathlib import Path as _Path
+
+    samples = [
+        (_Path(f"s{i}.json"), "p1", Counter({f"w{j}": 1 for j in range(length)}))
+        for i, length in enumerate([5, 10, 20, 20, 25, 30, 40])
+    ]
+
+    low, high = sms.control_length_window(samples)
+
+    assert low <= 20 <= high
+    assert low >= 1 and high >= low
+
+
+def test_human_control_holds_comment_out_of_its_own_baseline(tmp_path: Path) -> None:
+    """A leaked hold-out would score ~0 and make the control useless as a floor."""
+    ds = tmp_path / "datasets"
+    ds.mkdir()
+    (ds / "p1.json").write_text(
+        '{"comments": [{"body": "alpha beta gamma delta epsilon"},'
+        ' {"body": "zeta eta theta iota kappa"},'
+        ' {"body": "lambda mu nu xi omicron"}]}',
+        encoding="utf-8",
+    )
+
+    stats = sms.evaluate_human_control(ds, {"p1"}, (1, 100), 1e-6, None)
+
+    assert stats.comparisons == 1
+    assert stats.avg_kl > 1.0, "held-out comment must not appear in its own baseline"
+    assert 0.0 < stats.avg_jsd <= math.log(2)
+
+
+def test_alpha_sensitivity_grows_as_smoothing_shrinks() -> None:
+    from pathlib import Path as _Path
+
+    stego = [(_Path("a.json"), "p1", Counter({"unseen": 3, "shared": 1}))]
+    baselines = {"p1": Counter({"shared": 5, "other": 5})}
+
+    ladder = sms.alpha_sensitivity(stego, baselines, grid=(1e-2, 1e-4, 1e-6))
+    values = [ladder["0.01"], ladder["0.0001"], ladder["1e-06"]]
+
+    assert all(v is not None for v in values)
+    assert values[0] < values[1] < values[2]  # type: ignore[operator]
 
 
 def test_kl_divergence_identical_smoothed_near_zero() -> None:
@@ -50,6 +117,84 @@ def test_extract_stego_text_unified_list_then_dict() -> None:
     assert extract_stego_text_unified([{"stegoText": "from array"}]) == "from array"
     assert extract_stego_text_unified({"stegoText": "camel"}) == "camel"
     assert extract_stego_text_unified({"stego_text": "snake"}) == "snake"
+
+
+def test_extract_comment_counter_includes_nested_replies(tmp_path: Path) -> None:
+    post = tmp_path / "p1.json"
+    post.write_text(
+        json.dumps(
+            {
+                "comments": [
+                    {
+                        "body": "top alpha beta",
+                        "replies": [
+                            {
+                                "body": "reply gamma delta",
+                                "replies": [{"body": "nested epsilon"}],
+                            },
+                            {"body": "[deleted]"},
+                            {"body": "  [removed]  "},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    counter = sms.extract_comment_counter(post)
+
+    assert counter["alpha"] == 1
+    assert counter["gamma"] == 1
+    assert counter["epsilon"] == 1
+    assert "deleted" not in counter
+    assert "removed" not in counter
+
+
+def test_load_global_stats_counts_nested_bodies(tmp_path: Path) -> None:
+    ds = tmp_path / "dataset"
+    ds.mkdir()
+    (ds / "p1.json").write_text(
+        json.dumps(
+            {
+                "comments": [
+                    {
+                        "body": "one two",
+                        "replies": [{"body": "three four"}, {"body": "[deleted]"}],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    total_posts, global_counter, nonempty = sms.load_global_stats(ds, None)
+
+    assert total_posts == 1
+    assert nonempty == 2
+    assert global_counter["one"] == 1
+    assert global_counter["three"] == 1
+    assert "deleted" not in global_counter
+
+
+def test_post_comment_counters_walk_replies(tmp_path: Path) -> None:
+    post = tmp_path / "p1.json"
+    post.write_text(
+        json.dumps(
+            {
+                "comments": [
+                    {"body": "parent tokens here", "replies": [{"body": "child tokens here"}]}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    counters = sms._post_comment_counters(post)
+
+    assert len(counters) == 2
+    assert sum(counters[0].values()) > 0
+    assert sum(counters[1].values()) > 0
 
 
 def test_run_single_post_metrics_one_file(tmp_path: Path, monkeypatch) -> None:

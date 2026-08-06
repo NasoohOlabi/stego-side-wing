@@ -96,3 +96,11 @@ def test_capacity_matched_mode_uses_one_explicit_payload_target() -> None:
         == mod.ComparisonInput.payload_bits_candidates
     )
     assert mod._payload_candidates_for_mode("capacity_matched", 21, (8, 16)) == (8, 16)
+
+
+def test_source_entries_reads_current_e2e_profile_summaries() -> None:
+    mod = _load_module()
+    entries = mod._source_entries(
+        {"profile_summaries": [{"entries": [{"output_file": "one.json"}]}]}
+    )
+    assert entries == [{"output_file": "one.json"}]

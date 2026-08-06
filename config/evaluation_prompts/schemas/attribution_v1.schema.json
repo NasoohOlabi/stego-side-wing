@@ -1,0 +1,1 @@
+{"type":"object","required":["thread_index","confidence","evidence"],"properties":{"thread_index":{"type":"integer","minimum":1,"maximum":4},"confidence":{"type":"integer","minimum":0,"maximum":100},"evidence":{"type":"string"}},"additionalProperties":false}

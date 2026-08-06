@@ -3,6 +3,9 @@
 import logging
 import os
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,6 +20,14 @@ dotenv.load_dotenv(dotenv_path=ENV_FILE_PATH if ENV_FILE_PATH.exists() else None
 _dotenv_values_cache: dict[str, str | None] | None = None
 _capacity_unbounded_warning_emitted = False
 _LOG = logging.getLogger(__name__)
+_workflow_step_dirs_override: ContextVar[dict[str, tuple[Path, Path]] | None] = ContextVar(
+    "workflow_step_dirs_override", default=None
+)
+_workflow_context_sampler_override: ContextVar[
+    Literal["post_level_v1", "context_weighted_v2"] | None
+] = ContextVar(
+    "workflow_context_sampler_override", default=None
+)
 
 
 def _load_dotenv_values() -> dict[str, str | None]:
@@ -109,6 +120,7 @@ WorkflowEncodingProfile = Literal["balanced", "robustness", "capacity", "securit
 WorkflowAnglesGenerationMode = Literal["model", "extractive_zero_kld"]
 WorkflowStegoGenerationMode = Literal["model", "extractive_zero_kld", "hybrid_extract"]
 WorkflowPayloadTransform = Literal["plain", "hmac_xor_v1", "secure_compact_v2"]
+WorkflowContextSampler = Literal["post_level_v1", "context_weighted_v2"]
 WorkflowStegoPromptStyle = Literal[
     "natural",
     "anchored",
@@ -602,6 +614,47 @@ def get_workflow_dictionary_max_comments() -> int:
     return _capacity_value("WORKFLOW_DICTIONARY_MAX_COMMENTS", low=low, mid=mid, high=high)
 
 
+def get_workflow_context_sampler() -> WorkflowContextSampler:
+    """Selected angle-input sampler; legacy remains the migration-safe default."""
+    override = _workflow_context_sampler_override.get()
+    if override is not None:
+        return override
+    raw = (_workflow_env_raw("WORKFLOW_CONTEXT_SAMPLER") or "post_level_v1").lower()
+    return "context_weighted_v2" if raw == "context_weighted_v2" else "post_level_v1"
+
+
+@contextmanager
+def override_workflow_context_sampler(sampler: WorkflowContextSampler) -> Iterator[None]:
+    """Temporarily select a sampler from an explicit CLI argument."""
+    token = _workflow_context_sampler_override.set(sampler)
+    try:
+        yield
+    finally:
+        _workflow_context_sampler_override.reset(token)
+
+
+def get_workflow_context_comment_weight() -> int:
+    return _workflow_env_positive_int("WORKFLOW_CONTEXT_COMMENT_WEIGHT", 3)
+
+
+def get_workflow_context_research_weight() -> int:
+    return _workflow_env_positive_int("WORKFLOW_CONTEXT_RESEARCH_WEIGHT", 1)
+
+
+def get_workflow_context_max_ancestors() -> int:
+    return _workflow_env_positive_int(
+        "WORKFLOW_CONTEXT_MAX_ANCESTORS", 8, min_value=0
+    )
+
+
+def get_workflow_context_include_children() -> bool:
+    return _workflow_env_on_off("WORKFLOW_CONTEXT_INCLUDE_CHILDREN", default=True)
+
+
+def get_workflow_context_global_fallback() -> bool:
+    return _workflow_env_on_off("WORKFLOW_CONTEXT_GLOBAL_FALLBACK", default=True)
+
+
 def get_workflow_angles_max_input_blocks() -> int:
     """Maximum total text blocks passed into angle generation / shared dictionary users."""
     low, mid, high = WORKFLOW_CAPACITY_TIER_ANGLES_MAX_INPUT_BLOCKS
@@ -859,6 +912,9 @@ def get_step_dirs(step: str) -> tuple[Path, Path]:
     """
     if step not in STEPS:
         raise ValueError(f"Invalid step: {step}")
+    overrides = _workflow_step_dirs_override.get()
+    if overrides is not None and step in overrides:
+        return overrides[step]
     source_rel = STEPS[step]["source_dir"]
     dest_rel = STEPS[step]["dest_dir"]
     root = get_workflow_dataset_root()
@@ -868,3 +924,22 @@ def get_step_dirs(step: str) -> tuple[Path, Path]:
     source_dir = _rebase_step_dir(source_rel, root, seed_global=seed_global)
     dest_dir = _rebase_step_dir(dest_rel, root, seed_global=seed_global)
     return source_dir, dest_dir
+
+
+@contextmanager
+def override_step_dirs(
+    overrides: dict[str, tuple[Path, Path]],
+) -> Iterator[None]:
+    """Temporarily supply explicit CLI-owned workflow paths without environment mutation."""
+    unknown = set(overrides) - set(STEPS)
+    if unknown:
+        raise ValueError(f"Invalid workflow step overrides: {sorted(unknown)}")
+    resolved = {
+        step: (source.resolve(), destination.resolve())
+        for step, (source, destination) in overrides.items()
+    }
+    token = _workflow_step_dirs_override.set(resolved)
+    try:
+        yield
+    finally:
+        _workflow_step_dirs_override.reset(token)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import statistics
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -37,17 +38,30 @@ def _model(examples: list[tuple[str, int, str]]) -> tuple[Counter[str], Counter[
 
 
 def _score(text: str, model: tuple[Counter[str], Counter[str]]) -> float:
+    """Mean per-n-gram log-likelihood ratio.
+
+    The summed ratio scales with text length, so an unnormalized score lets a length
+    difference between the stego and human arms masquerade as detectability. Dividing by
+    the n-gram count makes the statistic length-invariant.
+    """
     positive, negative = model
     vocab = set(positive) | set(negative)
     pos_total = sum(positive.values()) + len(vocab)
     neg_total = sum(negative.values()) + len(vocab)
-    return sum(
-        count
-        * (
-            math.log((positive[token] + 1) / max(1, pos_total))
-            - math.log((negative[token] + 1) / max(1, neg_total))
+    ngrams = _ngrams(text)
+    length = sum(ngrams.values())
+    if length == 0:
+        return 0.0
+    return (
+        sum(
+            count
+            * (
+                math.log((positive[token] + 1) / max(1, pos_total))
+                - math.log((negative[token] + 1) / max(1, neg_total))
+            )
+            for token, count in ngrams.items()
         )
-        for token, count in _ngrams(text).items()
+        / length
     )
 
 
@@ -61,24 +75,44 @@ def _auc(labels: list[int], scores: list[float]) -> float | None:
     return (wins + 0.5 * ties) / (len(positives) * len(negatives))
 
 
+def _mean_length(examples: list[tuple[str, int, str]], label: int) -> float | None:
+    lengths = [
+        len(" ".join(text.lower().split()))
+        for _, row_label, text in examples
+        if row_label == label
+    ]
+    return statistics.fmean(lengths) if lengths else None
+
+
 def analyze(rows: list[dict[str, Any]], method: str, folds: int = 5) -> dict[str, Any]:
     examples = _examples(rows, method)
     post_ids = sorted({post_id for post_id, _, _ in examples})
     fold_by_post = {post_id: index % folds for index, post_id in enumerate(post_ids)}
-    labels: list[int] = []
-    scores: list[float] = []
+    fold_aucs: list[float] = []
+    scored = 0
     for fold in range(folds):
         train = [row for row in examples if fold_by_post[row[0]] != fold]
         test = [row for row in examples if fold_by_post[row[0]] == fold]
+        if not train or not test:
+            continue
         model = _model(train)
-        labels.extend(label for _, label, _ in test)
-        scores.extend(_score(text, model) for _, _, text in test)
+        auc = _auc([label for _, label, _ in test], [_score(text, model) for _, _, text in test])
+        scored += len(test)
+        if auc is not None:
+            fold_aucs.append(auc)
     return {
         "method": method,
-        "roc_auc": _auc(labels, scores),
-        "examples": len(labels),
+        # Each fold trains its own model, so scores across folds share no common scale and
+        # must not be pooled into a single ranking. AUC is computed per fold, then averaged.
+        "roc_auc": statistics.fmean(fold_aucs) if fold_aucs else None,
+        "roc_auc_per_fold": fold_aucs,
+        "roc_auc_stdev": statistics.pstdev(fold_aucs) if len(fold_aucs) > 1 else None,
+        "examples": scored,
         "independent_post_clusters": len(post_ids),
         "folds": folds,
+        # Residual length imbalance between arms is the main confounder for this detector.
+        "mean_stego_chars": _mean_length(examples, 1),
+        "mean_human_chars": _mean_length(examples, 0),
     }
 
 

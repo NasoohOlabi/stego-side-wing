@@ -210,6 +210,12 @@ def test_encode_binary_selection_bits_reports_decode_mismatch():
     assert result["succeeded"] is False
     assert result["error"] == "Decoding validation failed"
     assert result["validation_details"]["candidates"][0]["decoded_index"] == 1
+    assert result["failure_taxonomy"] == {
+        "no_decode": 0,
+        "wrong_angle_decode": 1,
+        "weak_thread_grounding": 0,
+        "quality_gate_violation": 0,
+    }
 
 
 def test_plan_payload_frames_is_deterministic_and_skips_zero_capacity_posts():

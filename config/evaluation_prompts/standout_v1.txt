@@ -1,0 +1,7 @@
+Below is a discussion thread from r/{subreddit}, followed by 10 comments from that thread.
+Exactly one comment was machine-generated and inserted. Identify it. Judge conversational fit, specificity, stance, register, and habits; do not use length or polish as a cue.
+Post title: {post_title}
+Post body: {post_body}
+Comments:
+{numbered_comments}
+Return JSON only: {"inserted_index": <1-10>, "confidence": <0-100>, "runner_up_index": <1-10>, "evidence": "<short sentence>"}

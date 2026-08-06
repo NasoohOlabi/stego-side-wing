@@ -69,7 +69,14 @@ def build_sample_experiment_metrics(
     )
     comment_bits_count = _safe_int(comment_dict.get("bitsCount")) or len(comment_bits)
     angle_bits_count = _safe_int(angle_dict.get("bitsCount")) or len(angle_bits)
-    selection_bits = comment_bits_count + angle_bits_count
+    physical_selection_bits = comment_bits_count + angle_bits_count
+    comment_recoverable_bits = _safe_int(comment_dict.get("recoverableBitsCount"))
+    angle_recoverable_bits = _safe_int(angle_dict.get("recoverableBitsCount"))
+    selection_bits = (
+        comment_recoverable_bits + angle_recoverable_bits
+        if "recoverableBitsCount" in comment_dict or "recoverableBitsCount" in angle_dict
+        else physical_selection_bits
+    )
 
     hidden_payload = extract_invisible_payload(stego_text) or ""
     hidden_payload_bytes = len(hidden_payload.encode("utf-8"))
@@ -95,13 +102,23 @@ def build_sample_experiment_metrics(
             "comment_bits_count": comment_bits_count,
             "angle_bits_count": angle_bits_count,
             "selection_bits": selection_bits,
+            "physical_selection_bits": physical_selection_bits,
+            "recoverable_selection_bits": selection_bits,
         },
         "capacity_metrics": {
+            # bps_* are bits per UTF-8 byte of stego text, NOT bits per word or per token.
+            # They are roughly an order of magnitude below any BPW figure and are not
+            # comparable to literature capacity numbers; see analyze_publication_results
+            # for the paper-aligned pooled BPW/BPT.
+            "capacity_unit": "bits_per_stego_utf8_byte",
             "bps_hidden": hidden_payload_bits / stego_bytes,
             "bps_selection": selection_bits / stego_bytes,
+            # hidden_payload_bits is 0 whenever the forbidden-carrier rule holds, so
+            # bps_total normally equals bps_selection. It is a guard, not a capacity gain.
             "bps_total": total_bits / stego_bytes,
             "hidden_payload_bits": hidden_payload_bits,
             "selection_bits": selection_bits,
+            "physical_selection_bits": physical_selection_bits,
             "total_bits": total_bits,
             "stego_bytes": stego_bytes,
         },

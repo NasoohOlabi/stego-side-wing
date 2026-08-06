@@ -1,0 +1,10 @@
+Evaluate factual grounding of a Reddit-style candidate against only the supplied thread evidence. Do not use outside knowledge. Extract only externally checkable claims; opinions and predictions are not claims. Return JSON only: {"score":1-5,"claim_count":integer,"supported_claim_count":integer,"contradicted_claim_count":integer,"rationale":"short evidence-based explanation"}. A score of 5 means all checkable claims are supported or the candidate makes no checkable claims; 1 means material unsupported/contradicted claims.
+
+THREAD EVIDENCE:
+{thread_context}
+
+MATCHED HUMAN REFERENCE:
+{reference_text}
+
+CANDIDATE:
+{candidate}

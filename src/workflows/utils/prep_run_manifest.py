@@ -16,6 +16,7 @@ from infrastructure.config import (
     get_workflow_angles_max_output,
     get_workflow_capacity_profile,
     get_workflow_capacity_settings,
+    get_workflow_context_sampler,
     get_workflow_dataset_root,
     get_workflow_tangent_db_builder,
     resolve_path,
@@ -72,7 +73,11 @@ def build_prep_run_manifest(*, run_id: str, notes: str = "") -> PrepRunManifest:
         step_dirs=step_dirs,
         artifact_namespace=ANGLE_ARTIFACT_NAMESPACE,
         angle_generator_version=ANGLE_GENERATOR_VERSION,
-        angle_sampler_version=DICTIONARY_SAMPLER_VERSION,
+        angle_sampler_version=(
+            "context_weighted_v2"
+            if get_workflow_context_sampler() == "context_weighted_v2"
+            else DICTIONARY_SAMPLER_VERSION
+        ),
         angle_generation_mode=get_workflow_angles_generation_mode(),
         capacity_settings=get_workflow_capacity_settings(),
         notes=notes,

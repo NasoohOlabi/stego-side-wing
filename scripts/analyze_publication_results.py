@@ -17,7 +17,10 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from services.stego_metrics_service import run_single_post_metrics  # noqa: E402
+from services.stego_metrics_service import (  # noqa: E402
+    count_model_tokens,
+    run_single_post_metrics,
+)
 
 METHODS = ("our_method", "official_zgls")
 
@@ -72,6 +75,42 @@ def _mean(values: list[float]) -> float | None:
     return statistics.fmean(finite) if finite else None
 
 
+def _row_capacity_bits(row: dict[str, Any]) -> int:
+    """Selection-channel capacity offered by the carriers used in one attempt."""
+    frames = row.get("frames") or []
+    return sum(int(f.get("capacity") or 0) for f in frames if isinstance(f, dict))
+
+
+def _capacity_summary(accepted: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pooled capacity metrics exactly as defined in the paper.
+
+    The paper's BPW/BPT are ratios of totals; ``effective_recovered_bits_per_word`` is a
+    mean of per-sample ratios (matching the ZGLS baseline's ``evaluate/bpw.py``). The two
+    differ whenever sample lengths vary, so both are reported side by side.
+    """
+    total_bits = sum(float(row.get("payload_bits_encoded") or 0) for row in accepted)
+    total_words = sum(int(row.get("word_count") or 0) for row in accepted)
+    total_embedded = sum(float(row.get("total_embedded_bits") or 0) for row in accepted)
+    total_capacity = sum(_row_capacity_bits(row) for row in accepted)
+    texts = [str(text) for row in accepted for text in row.get("stegotexts", [])]
+    total_tokens = count_model_tokens(texts)
+    return {
+        "bits_per_word_pooled": (total_bits / total_words) if total_words else None,
+        "bits_per_token_pooled": (total_bits / total_tokens) if total_tokens else None,
+        "embedding_rate_mean_bits": _mean(
+            [float(row.get("payload_bits_encoded") or 0) for row in accepted]
+        ),
+        "utilization_rate_percent": (
+            100.0 * total_embedded / total_capacity if total_capacity else None
+        ),
+        "total_payload_bits": total_bits,
+        "total_words": total_words,
+        "total_tokens": total_tokens,
+        "total_selection_capacity_bits": total_capacity,
+        "bits_per_token_model": "gpt2" if total_tokens is not None else None,
+    }
+
+
 def _method_summary(
     rows: list[dict[str, Any]], quality: list[dict[str, Any]], method: str
 ) -> dict[str, Any]:
@@ -89,6 +128,7 @@ def _method_summary(
         "exact_recovery_rate": sum(bool(row.get("decode_ok")) for row in attempts) / len(attempts)
         if attempts
         else 0.0,
+        # Macro-average (mean of per-sample ratios), kept for ZGLS comparability.
         "effective_recovered_bits_per_word": _mean(
             [
                 float(row.get("payload_bits_encoded") or 0)
@@ -96,6 +136,7 @@ def _method_summary(
                 for row in accepted
             ]
         ),
+        "capacity_metrics": _capacity_summary(accepted),
         "latency_ms": _mean([float(row.get("latency_ms") or 0) for row in attempts]),
         "perplexity": _mean(
             [row["perplexity"] for row in qrows if isinstance(row.get("perplexity"), (int, float))]

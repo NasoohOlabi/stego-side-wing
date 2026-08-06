@@ -8,6 +8,7 @@ from typing import Any, cast
 from loguru import logger
 
 from infrastructure.config import (
+    get_workflow_context_sampler,
     get_workflow_decode_strict_default,
     get_workflow_encoding_secret,
     get_workflow_payload_transform,
@@ -428,6 +429,7 @@ class ReceiverPipeline:
         self,
         pre_sender_post: dict[str, Any],
         *,
+        selected_parent_id: str | None = None,
         use_fetch_cache: bool = True,
         use_terms_cache: bool = True,
         persist_terms_cache: bool = True,
@@ -469,7 +471,14 @@ class ReceiverPipeline:
             "receiver.regen_angles",
             {"post_id": post_id, "tags": ["workflow"]},
         )
-        ga = self.gen_angles.preview_post(post_rs, allow_fallback=allow_fallback)
+        if get_workflow_context_sampler() == "context_weighted_v2":
+            ga = self.gen_angles.preview_post(
+                post_rs,
+                allow_fallback=allow_fallback,
+                selected_parent_id=selected_parent_id,
+            )
+        else:
+            ga = self.gen_angles.preview_post(post_rs, allow_fallback=allow_fallback)
         rebuilt = ga["post"]
         dictionary_report = build_dictionary_report(rebuilt)
 
@@ -653,6 +662,15 @@ class ReceiverPipeline:
                 )
                 continue
             context = build_pre_sender_post_all(post, sender_user_id)
+            if get_workflow_context_sampler() == "context_weighted_v2":
+                context = self.gen_angles.preview_post(
+                    context,
+                    selected_parent_id=(
+                        str(comment.get("parent_id"))
+                        if comment.get("parent_id") is not None
+                        else None
+                    ),
+                )["post"]
             angles = flatten_nested_angles(context)
             body = comment.get("body")
             decoded_index = (
@@ -745,6 +763,11 @@ class ReceiverPipeline:
 
         rebuilt, rebuild_info = self.rebuild_context(
             pre_sender,
+            selected_parent_id=(
+                str(located.get("parent_id"))
+                if located.get("parent_id") is not None
+                else None
+            ),
             use_fetch_cache=use_fetch_cache,
             use_terms_cache=use_terms_cache,
             persist_terms_cache=persist_terms_cache,

@@ -1,0 +1,5 @@
+Five genuine r/{subreddit} comments show the community register:
+{numbered_context_comments}
+Judge this comment's style only: {candidate}
+Score tone_formality, length_norm, mechanics, insider_knowledge, and overall 1 (out of place) to 5 (indistinguishable).
+Return JSON only: {"tone_formality": <1-5>, "length_norm": <1-5>, "mechanics": <1-5>, "insider_knowledge": <1-5>, "overall": <1-5>, "evidence": "<short sentence>"}

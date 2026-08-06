@@ -9,9 +9,18 @@ from loguru import logger
 from infrastructure.config import (
     WORKFLOW_CAPACITY_EFFECTIVELY_UNBOUNDED,
     get_workflow_angles_generation_mode,
+    get_workflow_angles_max_input_blocks,
     get_workflow_angles_max_output,
     get_workflow_angles_raw_target,
     get_workflow_angles_raw_target_multiplier,
+    get_workflow_context_comment_weight,
+    get_workflow_context_global_fallback,
+    get_workflow_context_include_children,
+    get_workflow_context_max_ancestors,
+    get_workflow_context_research_weight,
+    get_workflow_context_sampler,
+    get_workflow_dictionary_max_comments,
+    get_workflow_dictionary_max_search_results,
     get_workflow_llm_backend,
     get_workflow_tangent_db_builder,
     resolve_workflow_llm_provider_and_model,
@@ -24,6 +33,7 @@ from workflows.utils.angle_artifact import (
     ANGLE_ARTIFACT_NAMESPACE,
     ANGLE_ARTIFACT_SCHEMA_VERSION,
     ANGLE_GENERATOR_VERSION,
+    CONTEXT_ANGLE_ARTIFACT_NAMESPACE,
 )
 from workflows.utils.angles_llm_config import (
     SYSTEM_PROMPT as ANGLES_SYSTEM_PROMPT,
@@ -37,11 +47,16 @@ from workflows.utils.angles_llm_config import (
 from workflows.utils.angles_llm_config import (
     angles_model_name,
 )
+from workflows.utils.context_sampler import (
+    ContextSamplerConfig,
+    build_context_dictionary_bundle,
+)
 from workflows.utils.naturalness_gate import (
     filter_angles_for_post,
     naturalness_gate_enabled,
 )
 from workflows.utils.protocol_utils import stable_hash, text_preview
+from workflows.utils.stego_codec import comment_selection_choice_count
 from workflows.utils.tangent_db import (
     AngleCandidate,
     PostContext,
@@ -105,9 +120,16 @@ def _finalize_angles(
 
 def _angle_artifact_metadata(report: dict[str, Any]) -> dict[str, Any]:
     """Version metadata that lets readers distinguish refactor output from legacy posts."""
-    return {
-        "schema_version": ANGLE_ARTIFACT_SCHEMA_VERSION,
-        "artifact_namespace": ANGLE_ARTIFACT_NAMESPACE,
+    metadata = {
+        "schema_version": (
+            3 if report.get("input_sampler_version") == "context_weighted_v2"
+            else ANGLE_ARTIFACT_SCHEMA_VERSION
+        ),
+        "artifact_namespace": (
+            CONTEXT_ANGLE_ARTIFACT_NAMESPACE
+            if report.get("input_sampler_version") == "context_weighted_v2"
+            else ANGLE_ARTIFACT_NAMESPACE
+        ),
         "generator_version": ANGLE_GENERATOR_VERSION,
         "sampler_version": report.get("input_sampler_version"),
         "selection_strategy": report.get("input_selection_strategy"),
@@ -121,6 +143,30 @@ def _angle_artifact_metadata(report: dict[str, Any]) -> dict[str, Any]:
         "angles_target_reached": report.get("angles_target_reached"),
         "angles_target_shortfall": report.get("angles_target_shortfall"),
     }
+    if report.get("input_sampler_version") == "context_weighted_v2":
+        metadata.update(
+            {
+                "selected_parent_id": report.get("selected_parent_id"),
+                "frozen_research_hash": report.get("frozen_research_hash"),
+                "relationship_counts": report.get("relationship_counts"),
+                "requested_allocations": report.get("requested_allocations"),
+                "effective_allocations": report.get("effective_allocations"),
+                "tangent_hash": report.get("angles_hash"),
+                "tangent_count": report.get("tangent_count"),
+                "parent_recoverable_width": report.get("parent_recoverable_width"),
+                "tangent_recoverable_width": report.get("tangent_recoverable_width"),
+                "post_id": report.get("post_id"),
+            }
+        )
+    tangent_report = report.get("tangent_db_report")
+    if isinstance(tangent_report, dict):
+        metadata["tangent_db"] = {
+            "builder_version": tangent_report.get("builder_version"),
+            "config_hash": tangent_report.get("config_hash"),
+            "kept_count": tangent_report.get("kept_count"),
+            "revamped_tangents": True,
+        }
+    return metadata
 
 
 def _probe_llm_run_id(pipeline: Any) -> str:
@@ -218,6 +264,12 @@ def _apply_tangent_db_builder(
 def _post_with_angles(
     post: dict[str, Any], angles: list[dict[str, Any]], report: dict[str, Any]
 ) -> dict[str, Any]:
+    report["post_id"] = str(post.get("id") or "<unknown>")
+    report["tangent_count"] = len(angles)
+    report["parent_recoverable_width"] = (
+        comment_selection_choice_count(post).bit_length() - 1
+    )
+    report["tangent_recoverable_width"] = len(angles).bit_length() - 1
     processed = dict(
         post,
         angles=angles,
@@ -281,8 +333,22 @@ class GenAnglesPipeline:
         """Public alias for workflow runner / tools that need the same inputs as gen_angles."""
         return self._build_dictionary(post)
 
-    def build_dictionary_bundle_for_post(self, post: dict[str, Any]) -> dict[str, Any]:
+    def build_dictionary_bundle_for_post(
+        self, post: dict[str, Any], *, selected_parent_id: str | None = None
+    ) -> dict[str, Any]:
         """Texts plus deterministic dictionary observability metadata."""
+        if get_workflow_context_sampler() == "context_weighted_v2":
+            config = ContextSamplerConfig(
+                max_blocks=get_workflow_angles_max_input_blocks(),
+                comment_cap=get_workflow_dictionary_max_comments(),
+                research_cap=get_workflow_dictionary_max_search_results(),
+                comment_weight=get_workflow_context_comment_weight(),
+                research_weight=get_workflow_context_research_weight(),
+                max_ancestors=get_workflow_context_max_ancestors(),
+                include_children=get_workflow_context_include_children(),
+                global_fallback=get_workflow_context_global_fallback(),
+            )
+            return build_context_dictionary_bundle(post, selected_parent_id, config)
         return build_post_text_dictionary_bundle(post, apply_capacity_profile=True)
 
     def _generate_angles_extractive(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -295,10 +361,14 @@ class GenAnglesPipeline:
         self,
         post: dict[str, Any],
         allow_fallback: bool = False,
+        *,
+        selected_parent_id: str | None = None,
     ) -> dict[str, Any]:
         """Generate angles without mutating or saving artifacts."""
         post_id = str(post.get("id") or "<unknown>")
-        dictionary_bundle = self.build_dictionary_bundle_for_post(post)
+        dictionary_bundle = self.build_dictionary_bundle_for_post(
+            post, selected_parent_id=selected_parent_id
+        )
         entry_bundle = list(dictionary_bundle.get("entries", []))
         dictionary = list(dictionary_bundle["texts"])
         dictionary_report = dict(dictionary_bundle["report"])
@@ -354,6 +424,11 @@ class GenAnglesPipeline:
             "input_sampler_version": dictionary_report.get("sampler_version"),
             "input_selection_strategy": dictionary_report.get("selection_strategy"),
             "input_sample_entries": dictionary_report["sample_entries"],
+            "selected_parent_id": dictionary_report.get("selected_parent_id"),
+            "frozen_research_hash": dictionary_report.get("frozen_research_hash"),
+            "relationship_counts": dictionary_report.get("relationship_counts"),
+            "requested_allocations": dictionary_report.get("requested_allocations"),
+            "effective_allocations": dictionary_report.get("effective_allocations"),
         }
         if not dictionary:
             max_angles = get_workflow_angles_max_output()

@@ -112,6 +112,33 @@ def test_process_posts_saves_local_for_all_and_remote_for_new_only():
     assert remote_saves == ["new"]
 
 
+def test_process_post_objects_skips_failed_post_and_continues_batch():
+    """A single post's research failure must not abort the rest of the batch."""
+    saved = []
+    pipeline = _research_pipeline_stub()
+    pipeline.backend = SimpleNamespace(
+        save_post_local=lambda post, step: saved.append(post["id"]),
+        save_post=lambda *a, **k: None,
+    )
+
+    def _pair(post, step, **kwargs):
+        if post["id"] == "bad":
+            raise RuntimeError("web search failed")
+        return {**post, "processed": True}, {"post_id": post["id"]}
+
+    pipeline._research_post_pair = _pair
+
+    posts = [
+        {"id": "good1", "search_results": []},
+        {"id": "bad", "search_results": []},
+        {"id": "good2", "search_results": []},
+    ]
+    result = pipeline.process_post_objects(posts=posts, step="filter-researched")
+
+    assert [p["id"] for p in result] == ["good1", "good2"]
+    assert saved == ["good1", "good2"]
+
+
 def test_process_post_objects_include_breakdown_appends_reports():
     pipeline = _research_pipeline_stub()
     pipeline.gen_terms = SimpleNamespace(preview_generation=lambda **kwargs: {"terms": ["t1"]})

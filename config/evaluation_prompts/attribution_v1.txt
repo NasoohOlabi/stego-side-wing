@@ -1,0 +1,11 @@
+Below is a comment and four discussion threads. The comment belongs to exactly one thread. Choose the most likely thread even if uncertain.
+Comment: {candidate}
+1. r/{sub_1} — {title_1}
+{snippet_1}
+2. r/{sub_2} — {title_2}
+{snippet_2}
+3. r/{sub_3} — {title_3}
+{snippet_3}
+4. r/{sub_4} — {title_4}
+{snippet_4}
+Return JSON only: {"thread_index": <1-4>, "confidence": <0-100>, "evidence": "<short sentence>"}

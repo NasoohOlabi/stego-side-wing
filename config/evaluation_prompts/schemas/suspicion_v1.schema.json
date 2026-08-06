@@ -1,0 +1,1 @@
+{"type":"object","required":["suspicion","tells","evidence"],"properties":{"suspicion":{"type":"integer","minimum":0,"maximum":100},"tells":{"type":"array","items":{"type":"string"}},"evidence":{"type":"string"}},"additionalProperties":false}

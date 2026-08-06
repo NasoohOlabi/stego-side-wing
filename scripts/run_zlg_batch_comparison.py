@@ -42,6 +42,23 @@ def _read_json_obj(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _source_entries(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read both legacy profile summaries and the current top-level E2E summary shape."""
+    direct = summary.get("entries", [])
+    if isinstance(direct, list) and direct:
+        return [entry for entry in direct if isinstance(entry, dict)]
+    profiles = summary.get("profile_summaries", [])
+    if not isinstance(profiles, list):
+        return []
+    return [
+        entry
+        for profile in profiles
+        if isinstance(profile, dict)
+        for entry in profile.get("entries", [])
+        if isinstance(entry, dict)
+    ]
+
+
 def _clip(text: str, max_chars: int) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
         return text
@@ -365,8 +382,7 @@ def main() -> int:
 
     source_summary = Path(args.source_summary).resolve()
     source = _read_json_obj(source_summary)
-    entries_raw = source.get("entries", [])
-    entries = [e for e in entries_raw if isinstance(e, dict) and e.get("output_file")]
+    entries = [entry for entry in _source_entries(source) if entry.get("output_file")]
     if args.limit > 0:
         entries = entries[: args.limit]
 

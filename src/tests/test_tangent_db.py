@@ -5,6 +5,9 @@ from __future__ import annotations
 import pytest
 
 from infrastructure.config import get_workflow_tangent_db_builder
+from workflows.pipelines.gen_angles import (
+    _angle_artifact_metadata,  # pyright: ignore[reportPrivateUsage]
+)
 from workflows.utils.tangent_db import (
     AngleCandidate,
     PostContext,
@@ -142,4 +145,22 @@ def test_empty_candidates_yield_empty_db() -> None:
         "max": 0.0,
         "threshold": 0.12,
         "scores_kept": [],
+    }
+
+
+def test_angle_artifact_marks_revamped_tangents() -> None:
+    metadata = _angle_artifact_metadata(
+        {
+            "tangent_db_report": {
+                "builder_version": "tangent_db_v1",
+                "config_hash": "frozen-hash",
+                "kept_count": 4,
+            }
+        }
+    )
+    assert metadata["tangent_db"] == {
+        "builder_version": "tangent_db_v1",
+        "config_hash": "frozen-hash",
+        "kept_count": 4,
+        "revamped_tangents": True,
     }

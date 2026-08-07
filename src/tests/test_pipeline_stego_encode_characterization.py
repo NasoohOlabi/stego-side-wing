@@ -20,7 +20,13 @@ import pytest
 
 from workflows.pipelines.stego import StegoPipeline
 
-LLM_TEXTS = ["Candidate alpha text.", "Candidate beta text.", "Candidate gamma text."]
+# Grounded in POST angles/context so encode can succeed without any post-generation
+# synthetic-anchor fallback (removed; see 2026-08-02 synthetic-anchor incident).
+LLM_TEXTS = [
+    "The 7-2 council margin on the transit line still feels narrow but overdue.",
+    "Start next spring is ambitious for the tunnelling section they still have to fund.",
+    "That bus route down 5th has been overloaded for years, so the transit vote matters.",
+]
 
 POST: dict[str, Any] = {
     "id": "charac-post-1",
@@ -152,25 +158,41 @@ def test_encode_succeeds_and_returns_the_expected_artifact_shape() -> None:
 
 
 @pytest.mark.usefixtures("clear_workflow_capacity_env")
-def test_encode_substitutes_a_synthetic_anchor_when_candidates_lack_context() -> None:
-    """Documents real behaviour: generic candidates do not ship as-is.
+def test_encode_never_substitutes_a_synthetic_anchor_reply() -> None:
+    """Regression: post-generation code must not manufacture a carrier reply.
 
-    The fake LLM returns text with no connection to the selected angle. Rather than
-    emitting it, encode replaces it with a synthetic sentence anchored on the angle's
-    source quote. Worth pinning because it means ``stego_text`` is not guaranteed to be
-    one of the model's candidates.
+    Generic model candidates that lack angle context must not be rewritten into a
+    templated ``I can see why people keep coming back to …`` sentence. Decode/context
+    failure is a legitimate encode failure (see synthetic-anchor incident report).
     """
+
+    class _DisconnectedLLM:
+        last_call_metadata: ClassVar[dict[str, Any]] = {"elapsed_ms": 1}
+
+        def call_llm(self, prompt: str, **kwargs: Any) -> str:
+            if prompt.startswith("Revise the draft reply"):
+                return json.dumps({"text": ""})
+            return json.dumps(
+                ["Totally unrelated alpha.", "Totally unrelated beta.", "Totally unrelated gamma."]
+            )
+
     decode = _AlwaysSelectedDecode()
-    pipeline = _build_pipeline(decode)
+    pipeline = _build_pipeline(decode, llm=_DisconnectedLLM())
     augmentation = pipeline._augment_post("x", POST)
-    selected = augmentation["angleEmbedding"]["selectedAngle"]
-    decode.selected_idx = int(selected["idx"])
+    decode.selected_idx = int(augmentation["angleEmbedding"]["selectedAngle"]["idx"])
 
-    result = pipeline.encode(payload="meet at noon", post=POST, tag="charac")
+    result = pipeline.encode(payload="meet at noon", post=POST, tag="charac", max_retries=0)
 
-    assert result["succeeded"] is True
-    assert result["stego_text"] not in LLM_TEXTS
-    assert str(selected["source_quote"]) in result["stego_text"]
+    blob = json.dumps(result).casefold()
+    assert "i can see why people keep coming back to" not in blob
+    if result["succeeded"]:
+        assert result["stego_text"] in {
+            "Totally unrelated alpha.",
+            "Totally unrelated beta.",
+            "Totally unrelated gamma.",
+        }
+    else:
+        assert result.get("stego_text", "") == ""
 
 
 @pytest.mark.usefixtures("clear_workflow_capacity_env")
@@ -235,8 +257,8 @@ def test_encode_returns_early_when_no_samples_are_built() -> None:
 def test_encode_accepts_a_context_sharpened_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
     """The context-sharpen arm: drafts miss, a revised candidate is accepted instead.
 
-    Reaching it needs the naturalness gate off, otherwise the synthetic-anchor
-    replacement rescues the attempt first and sharpening never runs.
+    Reaching it needs the naturalness gate off so drafts survive long enough for
+    the revise path to run.
     """
     monkeypatch.setenv("WORKFLOW_NATURALNESS_GATE_ENABLED", "0")
 

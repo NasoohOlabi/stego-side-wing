@@ -2,7 +2,7 @@
 
 Date: 2026-05-27  
 Reporter environment: `D:\Master\code\stego\stego-side-wing`  
-ZGLS API: `http://192.168.100.136:9000`  
+ZGLS API: `http://192.168.100.136:9000` (historical LAN URL; canonical now is `http://127.0.0.1:9000` from sibling `D:\Master\code\stego\zero-shot-GLS` on ASUS)  
 API docs endpoint observed: `GET /docs` returned `200`  
 OpenAPI title/version observed: `Zero-shot GLS API`, version `0.3.0`
 

@@ -2,7 +2,9 @@
 
 **Date:** 2026-08-02  
 **Severity:** Security and protocol-integrity breach  
-**Status:** Contained; permanent redesign planned
+**Status:** Contained; remnant purge completed 2026-08-06 (contaminated
+`zlg_batch_scale300` comparison run + e2e failure/summary residues deleted;
+characterization test now asserts no synthetic substitution)
 
 ## What happened
 

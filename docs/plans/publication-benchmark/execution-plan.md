@@ -25,12 +25,13 @@ losing the work.
 ## Phase 1 — Live infrastructure
 
 1. Recover or implement the versioned ZLG service (`/health`, `/hide`, `/reveal`,
-   `/capacity_probe`) against the official codec in `tmp_zero_shot_gls_official`.
-   `scripts/stego_api_server.py` (documented in workspace `STEGO_API_SERVER.md`) is absent
-   from disk and history — treat the doc as the spec, not evidence of existing code.
-2. Deploy it beside the remote Qwen3.5-9B GGUF on the `asus` SSH host
+   `/capacity_probe`) against the official codec. Live service checkout is sibling
+   `D:\Master\code\stego\zero-shot-GLS` (`scripts/stego_api_server.py`; see workspace
+   `STEGO_API_SERVER.md`). `tmp_zero_shot_gls_official` remains the vendored codec reference.
+2. Confirm the service beside the local Qwen3.5-9B GGUF on this ASUS host
    (`C:\Users\ASUS\.lmstudio\models\lmstudio-community\Qwen3.5-9B-GGUF`); record its commit
-   or image digest for `--zlg-server-version`.
+   or image digest for `--zlg-server-version`. Use `http://127.0.0.1:9000` from
+   `stego-side-wing` runners (no SSH tunnel).
 3. Install / make available the frozen Gemma judge+paraphraser model (cross-family from the
    Qwen generator, per `config/benchmark_models.json`).
 

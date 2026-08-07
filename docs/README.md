@@ -20,7 +20,8 @@ Agent-friendly map for project documentation. Root `README.md` remains the proje
 ## Results And Benchmarks
 
 - [Current research state (2026-08-03)](reports/2026-08-03-current-research-state.md) - authoritative status for the active LUCID bulk lane and latest unpaired ZLG lane.
-- [Method and ZLG benchmark guide](../.agents/method-and-zlg-benchmark.md) - method structure, metric interpretation, and ASUS GPU operating workflow.
+- [context_weighted_v2 vs ZLG benchmark (2026-07-30)](reports/2026-07-30-context-weighted-v2-zlg-benchmark.md) - paired 304-row comparison report and pipeline fixes from that run.
+- [Method and ZLG benchmark guide](../.agents/method-and-zlg-benchmark.md) - method structure, metric interpretation, and on-ASUS GPU workflow (localhost ZLG).
 - [Results findings](results/results-findings.md) - interpretation of saved metric artifacts and current highlights.
 - [Sample size plan](results/sample-size-plan.md) - plan for clean, current-code benchmark sample collection.
 - [Workload runs and artifacts](results/workload-runs-and-artifacts.md) - where run outputs and logs are stored.

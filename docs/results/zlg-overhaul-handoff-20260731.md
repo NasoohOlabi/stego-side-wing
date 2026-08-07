@@ -5,6 +5,12 @@
 smoke runs found and fixed two further bugs the plan hadn't anticipated (below), and the
 full 554-sample re-run is now running against `metrics/zlg_comparison_runs/zlg_batch_scale300_recalibrated`.
 
+> **Relocation (2026-08-07):** Live ZLG is now sibling
+> `D:\Master\code\stego\zero-shot-GLS` on this ASUS host (`http://127.0.0.1:9000`).
+> Commands below that use `D:\Master\code\zero-shot\zero-shot-GLS`, `ssh asus`, or
+> `http://192.168.100.136:9000` are historical — substitute the sibling path and
+> localhost.
+
 Read [`zlg-benchmark-failure-taxonomy-20260731.md`](zlg-benchmark-failure-taxonomy-20260731.md)
 first — it is the evidence base for every decision below. The original plan is at
 `C:\Users\OMEN\.claude\plans\write-a-plan-to-calm-music.md`.

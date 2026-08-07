@@ -102,7 +102,7 @@ payload conditions. Dirty trees are refused by default; use
 
 Use the frozen-manifest runner for a capacity-matched or maximum-capacity
 comparison. Start with the [documentation index](docs/README.md), then follow
-the [method and ASUS GPU guide](.agents/method-and-zlg-benchmark.md) and the
+the [method and on-ASUS GPU guide](.agents/method-and-zlg-benchmark.md) and the
 [publication benchmark plan](docs/plans/publication-benchmark/README.md).
 
 ## Lint and format

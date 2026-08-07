@@ -256,10 +256,10 @@ The normal path:
 4. `_generate_stego_texts()` builds a prompt from `stego_encode_prompts_for_style()`.
 5. It calls `LLMAdapter.call_llm()` through `resolve_workflow_llm_provider_and_model()`.
 6. It expects exactly three non-empty candidate strings in JSON form.
-7. It parses those candidate strings.
-8. `_with_selected_angle_anchor_variants()` may add a more anchored variant for the selected angle.
+7. It parses those candidate strings and returns only model output (no post-generation
+   templated/synthetic candidate replies).
 
-The generated text must be ordinary visible text. New sender code must not use zero-width, invisible, control-format, homoglyph, or non-rendering Unicode carriers.
+The generated text must be ordinary visible text. New sender code must not use zero-width, invisible, control-format, homoglyph, or non-rendering Unicode carriers. Post-generation code must not create, append, splice, or template a visible candidate from an angle, tangent, source quote, payload, or decoder result.
 
 ## 9. Sender Candidate Validation
 

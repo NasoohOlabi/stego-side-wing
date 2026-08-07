@@ -1,5 +1,21 @@
 # Method, ZLG Baseline, and ASUS GPU Workflow
 
+## Host layout (canonical)
+
+This entire workspace (`D:\Master\code\stego`) runs **on the ASUS GPU desktop**.
+Do not SSH to a remote `asus` host, open an SSH tunnel for `:9000`, or use the
+old paths `D:\Master\code\zero-shot\zero-shot-GLS` /
+`D:\Master\code\stego-side-wing`. Those describe the pre-move OMEN→ASUS split.
+
+| Role | Path / URL |
+| --- | --- |
+| Our method + runners | `D:\Master\code\stego\stego-side-wing` |
+| Live ZLG service | `D:\Master\code\stego\zero-shot-GLS` |
+| Vendored codec reference | `D:\Master\code\stego\tmp_zero_shot_gls_official` |
+| LM Studio | `http://127.0.0.1:8081` |
+| llama-server (ZLG) | `http://127.0.0.1:8090` |
+| ZLG `/hide` + `/reveal` | `http://127.0.0.1:9000` |
+
 ## Our method: visible selection channel
 
 `stego-side-wing` hides a payload by selecting ordinary visible linguistic
@@ -29,12 +45,13 @@ claim padding or aliased bit patterns as useful payload.
 
 ## Comparison design
 
-The vendored reference implementation lives in `tmp_zero_shot_gls_official`;
-do not modify it for normal project work. A comparison must use a recovered or
-implemented, versioned service that preserves the official token-probability
-hide/extract behavior—not a generic text-generation endpoint. ZLG embeds bits
-across generated tokens, so it has a different and potentially much higher
-capacity profile than this selection channel. See
+The vendored reference implementation lives in `tmp_zero_shot_gls_official`
+(sibling of `stego-side-wing`); do not modify it for normal project work. Live
+benchmarks call the versioned HTTP service in sibling `zero-shot-GLS`, which
+must preserve the official token-probability hide/extract behavior—not a
+generic text-generation endpoint. ZLG embeds bits across generated tokens, so
+it has a different and potentially much higher capacity profile than this
+selection channel. See
 [`docs/zlg_endpoint_capacity_spec.md`](../docs/zlg_endpoint_capacity_spec.md)
 for the service contract and accounting requirements.
 
@@ -59,55 +76,36 @@ first 25 frozen posts; `--stage auto` expands to all 100 only after its
 predeclared gate passes. A normal run requires a clean worktree, a manifest of
 at least 100 unique posts, and matching frozen angle hashes.
 
-## ASUS desktop: run the GPU ZLG service
+## Run the GPU ZLG service (on this machine)
 
-The SSH host alias `asus` connects to the higher-GPU desktop. Use it only for
-the ZLG baseline repository at `D:\Master\code\zero-shot\zero-shot-GLS`.
-The remote `D:\Master\code\stego-side-wing` checkout is abandoned: never use,
-update, or inspect it. This workspace remains the authoritative location for
-our method and every comparison runner. Connect interactively with:
+Work from the live service checkout:
 
 ```powershell
-ssh asus
-```
-
-The remote OpenSSH session starts under `cmd.exe`; start PowerShell and move
-to the checkout before running repository commands:
-
-```powershell
-powershell -NoProfile
-$ZlgRoot = 'D:\Master\code\zero-shot\zero-shot-GLS'
+$ZlgRoot = 'D:\Master\code\stego\zero-shot-GLS'
 Set-Location $ZlgRoot
 ```
 
-Start the versioned ZLG service from `$ZlgRoot` using the protocol and model
-settings documented in [`STEGO_API_SERVER.md`](../../STEGO_API_SERVER.md).
-The local `llama-server` backend must already be running. In a second remote
-PowerShell, verify the service before starting a benchmark:
+Start `llama-server` and the ZLG API (see `start_llama.bat` / `start_stego_api.bat`,
+or the protocol in [`STEGO_API_SERVER.md`](../../STEGO_API_SERVER.md)). Verify:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:9000/health
 ```
 
-Run the paired benchmark from this local `stego-side-wing` checkout, pointing
-`--zlg-server-url` at the remote service and supplying
+Run paired benchmarks from this local `stego-side-wing` checkout with
+`--zlg-server-url http://127.0.0.1:9000`. Supply
 `--zlg-server-version <commit-or-image-digest>` if `/health` does not return a
-version. Prefer an SSH tunnel rather than exposing the service on the network:
+version.
 
-```powershell
-ssh -N -L 9000:127.0.0.1:9000 asus
-```
+The single RTX GPU cannot cold-load both LM Studio’s 9B and ZLG’s 9B at once.
+Unload LM Studio before bringing up `:8090` + `:9000`, and vice versa.
 
-With that tunnel open, the local runner can use
-`--zlg-server-url http://127.0.0.1:9000`.
-
-Before any long run, record the remote Git revision, model identifier, service
-version/digest, GPU configuration, and exact command. The benchmark requires
-`/health` to identify the loaded model and a service version (or an explicit
-`--zlg-server-version`). Copy the resulting run directory back before opening
-it in `stego-results-viewer`; preserve `attempts.jsonl`, summaries, manifest,
-and `zlg_server_identity.json` together. The run artifacts are generated
-locally, so no copy-back from the abandoned remote checkout is needed.
+Before any long run, record the Git revision in `zero-shot-GLS`, model
+identifier, service version/digest, GPU configuration, and exact command. The
+benchmark requires `/health` to identify the loaded model and a service version
+(or an explicit `--zlg-server-version`). Keep `attempts.jsonl`, summaries,
+manifest, and `zlg_server_identity.json` together under the local run directory
+before opening them in `stego-results-viewer`.
 
 ## Metrics: what they mean
 

@@ -5,6 +5,9 @@
 **Reported before:** 554 trials, 54.9% acceptance, 8.8 effective payload bits/attempt
 **Reported after:** 460 trials, 66.1% acceptance, 10.6 effective payload bits/attempt
 
+> **Relocation (2026-08-07):** Live ZLG path is now `D:\Master\code\stego\zero-shot-GLS`
+> on this ASUS host. Mentions of a separate `asus` service checkout are historical.
+
 ## Summary
 
 The headline failure rate was not a property of the ZLG baseline. It combined three

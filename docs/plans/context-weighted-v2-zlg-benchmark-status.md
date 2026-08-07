@@ -10,8 +10,9 @@ against the ZLG baseline. This is a run log and decision record, not a spec.
 ## 1. Objective
 
 Generate samples from our method with `WORKFLOW_CONTEXT_SAMPLER=context_weighted_v2` and compare
-them against the upstream ZLG baseline (`tmp_zero_shot_gls_official` / the `zero-shot-GLS` repo
-deployed on the `asus` box).
+them against the upstream ZLG baseline (live service:
+`D:\Master\code\stego\zero-shot-GLS` on this ASUS host; codec reference:
+`tmp_zero_shot_gls_official`).
 
 Target size is 300 samples. Current agreement is to validate on a 25-sample batch first, because
 the end-to-end path had never been run with this sampler before.
@@ -28,18 +29,21 @@ the end-to-end path had never been run with this sampler before.
 
 ## 2. Environment
 
-The `asus` box (LAN `192.168.100.136`) hosts every model backend. Nothing model-related runs
-locally.
+**Canonical host:** this workspace is on the ASUS GPU desktop
+(`D:\Master\code\stego`). All model backends are local. Pre-move notes that
+assumed an OMEN client + LAN `192.168.100.136` / `ssh asus` are obsolete for
+operations (they remain accurate as history).
 
 | Endpoint | What | Used by |
 |---|---|---|
-| `192.168.100.136:8081` | LM Studio, serving `qwen/qwen3.5-9b` | our method (`LM_STUDIO_URL`, `WORKFLOW_LLM_BACKEND=lm_studio`) |
-| `192.168.100.136:8090` | `llama-server` | backend for the ZLG API |
-| `192.168.100.136:9000` | `zero-shot-GLS/scripts/stego_api_server.py` (`/hide`, `/reveal`) | ZLG baseline comparison |
+| `127.0.0.1:8081` | LM Studio, serving `qwen/qwen3.5-9b` | our method (`LM_STUDIO_URL`, `WORKFLOW_LLM_BACKEND=lm_studio`) |
+| `127.0.0.1:8090` | `llama-server` | backend for the ZLG API |
+| `127.0.0.1:9000` | `zero-shot-GLS/scripts/stego_api_server.py` (`/hide`, `/reveal`) | ZLG baseline comparison |
 
-The `8090` + `9000` pair was started via the `claude` CLI on `asus`, spawned detached through
-WMI `Win32_Process.Create` so they survive SSH session teardown (a plain `Start-Process` from a
-one-shot SSH command does not — see the `asus-remote-process-detachment` note).
+Start `:8090` / `:9000` from `D:\Master\code\stego\zero-shot-GLS`
+(`start_llama.bat` / `start_stego_api.bat`). Detached WMI spawn is only needed
+when launching from a short-lived remote session; on-box interactive starts can
+use the bat files directly.
 
 ### GPU contention (important)
 
@@ -182,7 +186,7 @@ must be re-derived rather than diffed.
    engages: `selected_parent_id` non-null, tangent width varying per parent, capacity no longer
    pinned at 5 bits.
 3. **ZLG comparison** — `scripts/run_zlg_batch_comparison.py --source-summary <summary.json>
-   --server-url http://192.168.100.136:9000`. Restart `8090`/`9000` first if they were stopped for
+   --server-url http://127.0.0.1:9000`. Restart `8090`/`9000` first if they were stopped for
    VRAM headroom, and do this after generation finishes.
 4. **Merge and report** — `scripts/build_zlg_method_comparison_dataset.py`.
 5. **Scale to 300**, if the 25-sample run validates. Blocker: `datasets/news_researched` holds only

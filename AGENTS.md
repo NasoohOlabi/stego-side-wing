@@ -8,7 +8,7 @@
 **stego-side-wing** â€” Python backend and workflow runtime for stego pipelines. Package manager: **uv** (`pyproject.toml`, `uv.lock`). Python **3.13+**.
 
 For the method structure, official ZLG comparison protocol, metric caveats, and
-the `ssh asus` GPU workflow, read
+the on-ASUS GPU workflow (this workspace is the GPU host), read
 [`.agents/method-and-zlg-benchmark.md`](.agents/method-and-zlg-benchmark.md).
 
 ## Commands

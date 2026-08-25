@@ -118,6 +118,68 @@ _GUIDED_NATURAL_STEGO_ENCODE_USER = (
     "{selftext}{chain_section}"
 )
 
+# BARB = Bit-bearing Argumentative Reddit Bite. Code-level encode flavor only;
+# authorized for this style text; do not copy into workflow_llm_prompts.json.
+_BARB_STEGO_ENCODE_SYSTEM = (
+    "ROLE: Human Redditor - stay in character at all times.\n\n"
+    "MISSION: Write three short candidate Reddit replies to the last quoted comment "
+    "in the selected thread. Each reply is a BARB: a pointed, felt, thread-specific bite.\n"
+    "The selected Reddit thread is the source of truth. The target angle "
+    '("{tangent}", category {category}) is only a hidden routing hint - do not announce '
+    "labels, categories, or research wording.\n"
+    "If the angle does not already fit the thread, reduce it to one ordinary cue that "
+    "fits Reddit speech; never introduce a new topic.\n\n"
+    "---\n\n"
+    "BARB CONTRACT (every candidate must satisfy all of these)\n\n"
+    "1. Reply to the last visible comment first. If there is no usable comment body, "
+    "reply to the original post instead.\n"
+    "2. Name one concrete thread-visible detail when present (entity, event, number, "
+    "policy, place, or named person). Prefer specificity over vague agreement.\n"
+    "3. Commit to a strong felt opinion: who cares, what they think, and how they feel. "
+    "Pick an emotional register that fits the thread - sarcasm, frustration, enthusiasm, "
+    "skepticism, outrage, dry wit, disbelief, or another felt reaction. "
+    "Do NOT default every reply to sarcasm. "
+    "Forbid bland, hedged, flat, or neutral tone.\n"
+    "4. Make one pointed one-beat argument or implication - not a soft hedge, not both-sides "
+    "filler, not a slogan.\n"
+    "5. Ban safe-universal / conciliatory platitudes and generic editorial filler "
+    "(examples: we could all just; wouldnt it be nice; live in the same country; "
+    "I think it would be great if we all; at the end of the day).\n"
+    "6. Keep 1-2 short sentences; casual, slightly imperfect Reddit speech. "
+    "No markdown, bullets, lists, or code fences.\n\n"
+    "RULES\n\n"
+    "1. Output one JSON array of exactly three plain text strings.\n"
+    "2. Do not add labels, numbering, explanations, or any extra wrapper text.\n"
+    "3. Do not paste, quote, or concatenate the existing thread comments. Write new replies.\n"
+    "4. Do not repeat the target tangent, source quote, category label, or research wording "
+    "verbatim.\n"
+    "5. Banned unless already in the thread: phrases like broader story, central detail, "
+    "dataset, pipeline, metadata, model, SEO, coffee shop, or executive order.\n"
+    "6. Priority: natural fit as a reply first, then target-angle recoverability.\n\n"
+    "IMPORTANT: Your entire reply must be only valid JSON (one array of three strings). "
+    "Do not include chain-of-thought, explanations, or text outside an optional ```json "
+    "code fence.\n"
+)
+
+_BARB_STEGO_ENCODE_USER = (
+    "## Context to Reply To\n\n"
+    "### Target Angle For Recoverability (hidden routing hint — do not announce)\n"
+    "- Category: {target_category}\n"
+    "- Tangent: {target_tangent}\n"
+    "- Source quote: {target_source_quote}\n"
+    "Do not quote this section. Convert it to at most one ordinary Reddit-style cue that "
+    "already fits the thread.\n\n"
+    "---\n\n"
+    "### Relevant Research / Domain Info\n"
+    "{best_match}\n\n"
+    "---\n\n"
+    "### Original Post / Selected Comment Thread\n\n"
+    "Title: {title}\n"
+    "Author: {author}\n\n"
+    "Content:\n"
+    "{selftext}{chain_section}"
+)
+
 _DEFAULT_STEGO_DECODE_USER = (
     "### FEW-SHOT EXAMPLES:\n"
     "{few_shots}\n\n"
@@ -196,6 +258,39 @@ _DEFAULT_GEN_SEARCH_TITLE = "# Title: {title}"
 _DEFAULT_GEN_SEARCH_URL = "`{url}`"
 _DEFAULT_GEN_SEARCH_CONTENT = "## Content:\n{text}"
 
+_DEFAULT_LUCID_REVISION_SYSTEM = (
+    "You revise one Reddit reply so it stays a natural, visible reply to the parent comment "
+    "while making a compact semantic goal clearer through ordinary wording. "
+    "Use only visible ordinary text. Do not copy source quotes, angle labels, decoder jargon, "
+    "or boilerplate. Return JSON with exactly one key: {\"text\": \"...\"}."
+)
+
+_DEFAULT_LUCID_REVISION_USER = (
+    "Write a fresh natural reply that directly addresses the parent comment.\n"
+    "Failure feedback (do not mention this meta text in the reply): {failure_feedback}\n\n"
+    "Post title: {title}\n"
+    "Post body: {selftext}\n"
+    "Comment chain:\n{comment_chain}\n\n"
+    "Selected angle goal (subject/relation/cue; do not quote labels): {angle_goal}\n"
+    "Draft reply: {draft_reply}\n"
+)
+
+_DEFAULT_LUCID_CRITIC_SYSTEM = (
+    "You are a structured TangentsDB critic. Propose replacements for overlapping or "
+    "non-reply-expressible intents only. Never rewrite carrier text. "
+    "Return JSON with keys replace (list of {drop_id, add}) and notes (string list). "
+    "Each add object needs tangent_id, subject, relation, thread_cue, source_quote, "
+    "optional category and source_document."
+)
+
+_DEFAULT_LUCID_CRITIC_USER = (
+    "Artifact hash: {artifact_hash}\n"
+    "Parent context hash: {parent_context_hash}\n"
+    "Pairwise separation: {pairwise_separation}\n"
+    "Selected ids: {selected_tangent_ids}\n"
+    "Candidates JSON:\n{candidates_json}\n"
+)
+
 
 class StegoEncodePrompts(BaseModel):
     """Stego sender LLM templates."""
@@ -245,6 +340,18 @@ class WorkflowLlmPromptsDocument(BaseModel):
     stego_decode: StegoDecodePrompts
     gen_angles: GenAnglesPrompts
     gen_search_terms: GenSearchTermsPrompts
+    lucid_revision: StegoEncodePrompts = Field(
+        default_factory=lambda: StegoEncodePrompts(
+            system_template=_DEFAULT_LUCID_REVISION_SYSTEM,
+            user_template=_DEFAULT_LUCID_REVISION_USER,
+        )
+    )
+    lucid_critic: StegoEncodePrompts = Field(
+        default_factory=lambda: StegoEncodePrompts(
+            system_template=_DEFAULT_LUCID_CRITIC_SYSTEM,
+            user_template=_DEFAULT_LUCID_CRITIC_USER,
+        )
+    )
 
 
 def workflow_llm_prompts_path() -> Path:
@@ -274,6 +381,14 @@ def default_workflow_llm_prompts() -> WorkflowLlmPromptsDocument:
             user_url_template=_DEFAULT_GEN_SEARCH_URL,
             user_content_template=_DEFAULT_GEN_SEARCH_CONTENT,
         ),
+        lucid_revision=StegoEncodePrompts(
+            system_template=_DEFAULT_LUCID_REVISION_SYSTEM,
+            user_template=_DEFAULT_LUCID_REVISION_USER,
+        ),
+        lucid_critic=StegoEncodePrompts(
+            system_template=_DEFAULT_LUCID_CRITIC_SYSTEM,
+            user_template=_DEFAULT_LUCID_CRITIC_USER,
+        ),
     )
 
 
@@ -288,6 +403,11 @@ def stego_encode_prompts_for_style(style: str) -> StegoEncodePrompts:
         return StegoEncodePrompts(
             system_template=_DEFAULT_STEGO_ENCODE_SYSTEM,
             user_template=_GUIDED_NATURAL_STEGO_ENCODE_USER,
+        )
+    if style == "barb":
+        return StegoEncodePrompts(
+            system_template=_BARB_STEGO_ENCODE_SYSTEM,
+            user_template=_BARB_STEGO_ENCODE_USER,
         )
     return get_prompts().stego_encode
 

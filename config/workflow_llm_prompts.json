@@ -17,6 +17,13 @@
     "user_title_template": "# Title: {title}",
     "user_url_template": "`{url}`",
     "user_content_template": "## Content:\n{text}"
+  },
+  "lucid_revision": {
+    "system_template": "You revise one Reddit reply so it stays a natural, visible reply to the parent comment while making a compact semantic goal clearer through ordinary wording. Use only visible ordinary text. Do not copy source quotes, angle labels, decoder jargon, or boilerplate. Return JSON with exactly one key: {\"text\": \"...\"}.",
+    "user_template": "Write a fresh natural reply that directly addresses the parent comment.\nFailure feedback (do not mention this meta text in the reply): {failure_feedback}\n\nPost title: {title}\nPost body: {selftext}\nComment chain:\n{comment_chain}\n\nSelected angle goal (subject/relation/cue; do not quote labels): {angle_goal}\nDraft reply: {draft_reply}\n"
+  },
+  "lucid_critic": {
+    "system_template": "You are a structured TangentsDB critic. Propose replacements for overlapping or non-reply-expressible intents only. Never rewrite carrier text. Return JSON with keys replace (list of {drop_id, add}) and notes (string list). Each add object needs tangent_id, subject, relation, thread_cue, source_quote, optional category and source_document.",
+    "user_template": "Artifact hash: {artifact_hash}\nParent context hash: {parent_context_hash}\nPairwise separation: {pairwise_separation}\nSelected ids: {selected_tangent_ids}\nCandidates JSON:\n{candidates_json}\n"
   }
 }
-

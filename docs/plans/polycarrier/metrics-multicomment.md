@@ -389,6 +389,7 @@ Prefer restricting smoke/pilot analysis to **sample_index** as the descriptive u
 Five metrics: `standout`, `weak_link`, `suspicion`, `attribution`, `register`.
 
 ```powershell
+# Default: Claude Haiku. Codex Luna: add --backend codex --model gpt-5.6-luna
 uv run python scripts/run_codex_judge_campaign.py `
   --run-dir metrics/zlg_comparison_runs/zlg_polycarrier_256b_smoke `
   --phase auto --pilot-limit 50 --max-workers 4

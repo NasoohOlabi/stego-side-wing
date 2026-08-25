@@ -170,7 +170,7 @@ def test_encode_never_substitutes_a_synthetic_anchor_reply() -> None:
         last_call_metadata: ClassVar[dict[str, Any]] = {"elapsed_ms": 1}
 
         def call_llm(self, prompt: str, **kwargs: Any) -> str:
-            if prompt.startswith("Revise the draft reply"):
+            if "Draft reply:" in prompt or "failure feedback" in prompt.casefold():
                 return json.dumps({"text": ""})
             return json.dumps(
                 ["Totally unrelated alpha.", "Totally unrelated beta.", "Totally unrelated gamma."]
@@ -268,7 +268,7 @@ def test_encode_accepts_a_context_sharpened_candidate(monkeypatch: pytest.Monkey
         last_call_metadata: ClassVar[dict[str, Any]] = {"elapsed_ms": 1}
 
         def call_llm(self, prompt: str, **kwargs: Any) -> str:
-            if prompt.startswith("Revise the draft reply"):
+            if "Draft reply:" in prompt or "failure feedback" in prompt.casefold():
                 return json.dumps({"text": "SHARPENED start next spring reply."})
             return json.dumps(LLM_TEXTS)
 
@@ -317,7 +317,7 @@ def test_natural_sharpened_style_is_selectable_and_sharpens_on_the_first_attempt
         last_call_metadata: ClassVar[dict[str, Any]] = {"elapsed_ms": 1}
 
         def call_llm(self, prompt: str, **kwargs: Any) -> str:
-            if prompt.startswith("Revise the draft reply"):
+            if "Draft reply:" in prompt or "failure feedback" in prompt.casefold():
                 return json.dumps({"text": "SHARPENED start next spring reply."})
             return json.dumps(LLM_TEXTS)
 

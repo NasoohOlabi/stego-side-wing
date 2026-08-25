@@ -95,6 +95,21 @@ def _exception_snippet(exc: BaseException, limit: int = 400) -> str:
     return text[:limit] + ("..." if len(text) > limit else "")
 
 
+def _provider_retry_delay_sec(exc: BaseException) -> float:
+    """Read Retry-After or Gemini's textual retryDelay without trusting unbounded waits."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        raw_header = headers.get("Retry-After")
+        try:
+            return min(120.0, max(0.0, float(raw_header)))
+        except (TypeError, ValueError):
+            pass
+    message = getattr(exc, "message", None) or str(exc)
+    match = re.search(r'(?:retry in|retryDelay["\s:]*)\s*([0-9]+(?:\.[0-9]+)?)s', message, re.I)
+    return min(120.0, float(match.group(1))) if match else 0.0
+
+
 def _gemini_response_text(response: Any) -> str:
     text = getattr(response, "text", None)
     if isinstance(text, str) and text.strip():
@@ -645,9 +660,9 @@ class LLMAdapter:
                     }
                 )
                 if retryable and attempt < attempts:
-                    wait = _llm_retry_backoff_sec(attempt - 1) + _llm_retry_jitter_sec(
-                        _llm_retry_backoff_sec(attempt - 1)
-                    )
+                    base_wait = _llm_retry_backoff_sec(attempt - 1)
+                    provider_wait = _provider_retry_delay_sec(exc)
+                    wait = max(base_wait, provider_wait) + _llm_retry_jitter_sec(base_wait)
                     self.last_call_metadata["wait_sec"] = wait
                     _LLM_ADAPTER_LOG.warning(
                         "llm_request_retry",

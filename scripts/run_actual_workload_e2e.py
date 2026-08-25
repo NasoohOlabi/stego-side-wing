@@ -8,9 +8,11 @@ fabricate synthetic posts or bypass model encode/decode work.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Sequence
@@ -46,6 +48,7 @@ from services.stego_feedback_service import (  # noqa: E402
     AdaptiveSampleState,
     StegoFeedbackRun,
     classify_failure,
+    encode_failure_projection,
     plan_adaptive_action,
     summarize_input_post,
     summarize_receiver_decode,
@@ -231,6 +234,18 @@ def _apply_e2e_angle_relevance_gate(
     filtered_post["angles"] = filtered
     filtered_post["options_count"] = len(filtered)
     return filtered_post, report
+
+
+def _failure_fields_from_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Lift LUCID encode-failure diagnostics onto the top-level failure artifact."""
+    projection = envelope.get("encode_failure")
+    if not isinstance(projection, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in ("failure_taxonomy", "angle_index", "retry_count", "selected_angle", "error_details"):
+        if key in projection:
+            out[key] = projection[key]
+    return out
 
 
 def _aggregate_angle_gate_reports(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -443,6 +458,7 @@ def _run_sample(
                 )
             envelope["stego_encode"] = summarize_stego_result(stego_result)
             if not stego_result.get("succeeded") or not stego_result.get("stego_text"):
+                envelope["encode_failure"] = encode_failure_projection(stego_result)
                 raise RuntimeError(str(stego_result.get("error") or "stego encode failed"))
             receiver_info = {}
             if not skip_receiver_decode:
@@ -676,6 +692,7 @@ def run_profile(
                 failure_envelope = getattr(exc, "feedback_envelope", None)
                 if isinstance(failure_envelope, dict):
                     failure["envelope"] = failure_envelope
+                    failure.update(_failure_fields_from_envelope(failure_envelope))
                 failures.append(failure)
                 _write_json(failures_dir / f"{sample_label}.json", failure)
                 logger.bind(component="ActualWorkloadE2E").exception(
@@ -748,6 +765,35 @@ def _classify_failure(error_text: str) -> str:
     return classify_failure(error_text)
 
 
+def _git(*args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _git_provenance() -> dict[str, Any]:
+    return {
+        "git_commit": _git("rev-parse", "HEAD"),
+        "git_branch": _git("branch", "--show-current"),
+        "git_status_clean": not bool(_git("status", "--porcelain")),
+    }
+
+
+def _source_manifest_hash(post_ids: Sequence[str], angles_dir: Path) -> str:
+    payload = {
+        "post_ids": list(post_ids),
+        "angles_dir": str(angles_dir.resolve()),
+        "angle_files": sorted(path.name for path in angles_dir.glob("*.json")),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+
+
 def _build_progress_payload(
     *,
     run_id: str,
@@ -757,6 +803,9 @@ def _build_progress_payload(
     variant_names: Sequence[str],
     profile_summaries: Sequence[dict[str, Any]],
     summary_path: Path,
+    command: Sequence[str] | None = None,
+    model_identity: dict[str, Any] | None = None,
+    source_manifest_hash: str = "",
 ) -> dict[str, Any]:
     lanes: list[dict[str, Any]] = []
     total_failures = {
@@ -767,6 +816,7 @@ def _build_progress_payload(
         "data_failure": 0,
         "judge_failure": 0,
     }
+    git_meta = _git_provenance()
     for name, lane_summary in zip(variant_names, profile_summaries, strict=False):
         failures = lane_summary.get("failures")
         failures_list = failures if isinstance(failures, list) else []
@@ -826,9 +876,12 @@ def _build_progress_payload(
         "status": status,
         "stage": "pilot" if samples_per_profile <= 25 else "main",
         "target_successful_samples_per_lane": samples_per_profile,
-        "git_commit": "",
-        "git_branch": "",
-        "git_status_clean": False,
+        "git_commit": git_meta["git_commit"],
+        "git_branch": git_meta["git_branch"],
+        "git_status_clean": git_meta["git_status_clean"],
+        "command": list(command or sys.argv),
+        "model_identity": model_identity or get_workflow_encoding_settings(),
+        "source_manifest_hash": source_manifest_hash,
         "dataset_manifest": {"post_ids": list(selected_post_ids)},
         "lanes": lanes,
         "artifacts": {
@@ -981,6 +1034,9 @@ def run_actual_workload_e2e(
         variant_names=variant_names,
         profile_summaries=profile_summaries,
         summary_path=resolved_run_dir / "summary.json",
+        command=sys.argv,
+        model_identity=get_workflow_encoding_settings(),
+        source_manifest_hash=_source_manifest_hash(selected_post_ids, angles_dir),
     )
     _write_json(resolved_run_dir / "progress.json", progress)
     _write_json(RUNS_ROOT / "latest_actual_workload_e2e.json", summary)

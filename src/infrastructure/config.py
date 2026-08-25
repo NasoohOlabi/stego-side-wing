@@ -130,6 +130,8 @@ WorkflowStegoPromptStyle = Literal[
     # only on the last retry. StegoPipeline has always implemented this, but it was absent
     # from this Literal and from the parser below, so it could not be selected.
     "natural_sharpened",
+    # BARB: strong-opinion / strong-emotion, thread-specific, anti-platitude flavor.
+    "barb",
 ]
 
 # --- Workflow capacity & URL fetch (defaults in code; WORKFLOW_* overrides: process env only) ---
@@ -456,7 +458,14 @@ def get_workflow_stego_prompt_style() -> WorkflowStegoPromptStyle:
         return "anchored"
     if raw in ("natural_sharpened", "sharpened", "natural_sharpen"):
         return "natural_sharpened"
+    if raw in ("barb", "argumentative", "reddit_bite"):
+        return "barb"
     return "natural"
+
+
+def get_workflow_barb_stance_gate() -> bool:
+    """When True, contextuality rejects safe-universal / weak thread-specificity carriers."""
+    return _workflow_env_on_off("WORKFLOW_BARB_STANCE_GATE", default=False)
 
 
 def get_workflow_stego_sample_angle_count() -> int:
@@ -685,10 +694,14 @@ def get_workflow_angles_raw_target() -> int | None:
     return retained_target * get_workflow_angles_raw_target_multiplier()
 
 
-def get_workflow_tangent_db_builder() -> Literal["legacy", "v1"]:
-    """Tangent-DB shadow report: ``legacy`` (off) or ``v1`` (compute without selection)."""
+def get_workflow_tangent_db_builder() -> Literal["legacy", "v1", "lucid"]:
+    """Angle codebook builder: ``legacy`` (passthrough), ``v1``, or Project LUCID ``lucid``."""
     raw = (_workflow_env_raw("WORKFLOW_TANGENT_DB_BUILDER") or "legacy").lower()
-    return "v1" if raw == "v1" else "legacy"
+    if raw == "v1":
+        return "v1"
+    if raw == "lucid":
+        return "lucid"
+    return "legacy"
 
 
 def get_workflow_tangent_db_min_relevance() -> float:
@@ -770,6 +783,7 @@ def get_workflow_encoding_settings() -> dict[str, str | int | float | bool | Non
         "decode_llm_max_tries": get_workflow_decode_llm_max_tries(),
         "stego_llm_temperature": get_workflow_stego_llm_temperature(),
         "decode_strict_default": get_workflow_decode_strict_default(),
+        "barb_stance_gate": get_workflow_barb_stance_gate(),
         "lm_studio_model": get_workflow_lm_studio_model(),
         "google_ai_studio_model": get_google_ai_studio_model(),
         "has_encoding_secret": bool(get_workflow_encoding_secret()),

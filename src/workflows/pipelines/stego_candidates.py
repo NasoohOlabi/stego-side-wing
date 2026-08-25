@@ -93,9 +93,14 @@ class StegoCandidateEngine:
     ) -> tuple[dict[str, Any], dict[str, Any]] | None:
         if self.evaluate_groups is None:
             raise RuntimeError("Candidate evaluation callback is required for sharpening")
-        for promising in validation.get("promising_candidates") or []:
+        for revision_attempt, promising in enumerate(validation.get("promising_candidates") or [], start=1):
             group_index = int(promising.get("group_index", 0))
             source = encoded_results[group_index]
+            failure_feedback = ", ".join(
+                str(reason)
+                for reason in (promising.get("rejection_reasons") or [])
+                if str(reason).strip()
+            ) or str(promising.get("distance_bucket") or "decode_or_quality_failure")
             text = self.revise_candidate(
                 candidate_text=str(promising.get("text", "")),
                 sample=source,
@@ -103,14 +108,19 @@ class StegoCandidateEngine:
                 encode_run_id=encode_run_id,
                 sample_index=group_index,
                 llm_timings=llm_timings,
+                failure_feedback=failure_feedback,
+                revision_attempt=revision_attempt,
             )
             sharpened = {
                 "category": source.get("category"),
                 "source_quote": source.get("source_quote"),
                 "tangent": source.get("tangent"),
-                "prompt_style": "natural_sharpened",
+                "lucid_intent": source.get("lucid_intent"),
+                "prompt_style": "lucid_revision",
                 "texts": [text],
                 "generation_mode": "context_sharpen",
+                "revision_attempt": revision_attempt,
+                "failure_feedback": failure_feedback,
             }
             sharpen_validation = self.evaluate_groups(
                 encoded_results=[sharpened],

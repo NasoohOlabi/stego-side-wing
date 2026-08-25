@@ -63,6 +63,7 @@ from workflows.utils.output_results_shape import (
     assert_valid_n8n_stego_artifact,
     n8n_save_object_body,
 )
+from workflows.utils.protocol_utils import stable_hash
 from workflows.utils.stego_codec import (
     augment_post as codec_augment_post,
 )
@@ -80,7 +81,7 @@ from workflows.utils.stego_codec import (
     from_binary_utf8,
     protect_payload,
 )
-from workflows.utils.workflow_llm_prompts import stego_encode_prompts_for_style
+from workflows.utils.workflow_llm_prompts import get_prompts, stego_encode_prompts_for_style
 
 # Backward-compatible names for tests and callers.
 MAX_LITERAL_LEN = stego_codec.MAX_LITERAL_LEN
@@ -809,6 +810,8 @@ class StegoPipeline:
         encode_run_id: str = "",
         sample_index: int = 0,
         llm_timings: list[dict[str, Any]] | None = None,
+        failure_feedback: str = "",
+        revision_attempt: int = 1,
     ) -> str:
         context = comment_embedding.get("context", {})
         picked_chain = comment_embedding.get("pickedCommentChain", [])
@@ -823,25 +826,27 @@ class StegoPipeline:
                 body = " ".join(body.split())
                 if body:
                     chain_lines.append(f"{name}: {body}")
-        user_prompt = (
-            "Revise the draft reply with minimal edits so it stays a plausible Reddit reply to the thread.\n"
-            "Rules:\n"
-            "1. Keep the same stance, topic, and overall tone.\n"
-            "2. Do not add new facts, slogans, or broad policy framing.\n"
-            "3. Keep it grounded in the post and comment chain.\n"
-            "4. Make the target tangent slightly clearer using only ideas already present in the context.\n"
-            '5. Return JSON with exactly one key: {"text": "..."}.\n\n'
-            f"Post title: {context.get('title', '')}\n"
-            f"Post body: {context.get('selftext', '')}\n"
-            f"Comment chain:\n" + "\n".join(chain_lines) + "\n\n"
-            f"Target tangent: {sample.get('tangent', '')}\n"
-            f"Target source quote: {sample.get('source_quote', '')}\n"
-            f"Best supporting match: {sample.get('best_match', '')}\n"
-            f"Draft reply: {candidate_text}"
+        intent = sample.get("lucid_intent") if isinstance(sample.get("lucid_intent"), dict) else {}
+        angle_goal = (
+            " / ".join(
+                str(intent.get(key) or "").strip()
+                for key in ("subject", "relation", "thread_cue")
+                if str(intent.get(key) or "").strip()
+            )
+            or str(sample.get("tangent") or "")
         )
-        system_message = (
-            "You are revising one Reddit reply for contextual faithfulness and decodability. "
-            "Use only visible ordinary text. Preserve plausibility and avoid generic editorial language."
+        prompts = get_prompts().lucid_revision
+        user_prompt = prompts.user_template.format(
+            failure_feedback=failure_feedback or "decode or quality gate failed",
+            title=context.get("title", ""),
+            selftext=context.get("selftext", ""),
+            comment_chain="\n".join(chain_lines) or "(no comment chain)",
+            angle_goal=angle_goal,
+            draft_reply=candidate_text,
+        )
+        system_message = prompts.system_template
+        prompt_hash = stable_hash(
+            {"system": system_message, "user": prompts.user_template, "style": "lucid_revision"}
         )
         provider, model = resolve_workflow_llm_provider_and_model(STEGO_LLM_MODEL)
         t_llm = time.perf_counter()
@@ -859,7 +864,10 @@ class StegoPipeline:
             llm_timings.append(
                 {
                     "sample_index": sample_index,
-                    "prompt_style": "natural_sharpened",
+                    "prompt_style": "lucid_revision",
+                    "revision_attempt": revision_attempt,
+                    "failure_feedback": failure_feedback,
+                    "prompt_hash": prompt_hash,
                     "provider": provider,
                     "model": model,
                     "llm_wall_ms": llm_wall_ms,
@@ -876,6 +884,8 @@ class StegoPipeline:
             sample_index=sample_index,
             llm_wall_ms=llm_wall_ms,
             llm_adapter_reported_ms=llm_adapter_ms,
+            revision_attempt=revision_attempt,
+            prompt_hash=prompt_hash,
         ).info(
             "category={} ok={} llm_wall_ms={} llm_adapter_reported_ms={}",
             sample.get("category"),

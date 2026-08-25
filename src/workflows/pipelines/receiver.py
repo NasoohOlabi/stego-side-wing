@@ -245,6 +245,36 @@ def _tangent_db_parity_mismatch(
     }
 
 
+def _lucid_tangents_db_parity_mismatch(
+    pre_sender_post: dict[str, Any], gen_angles_report: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Compare frozen LUCID TangentsDB content hashes between sender artifact and rebuild."""
+    sender_report = pre_sender_post.get("lucid_tangents_db_report")
+    if not isinstance(sender_report, dict):
+        artifact = pre_sender_post.get("angle_artifact")
+        if isinstance(artifact, dict):
+            nested = artifact.get("lucid_tangents_db")
+            sender_report = nested if isinstance(nested, dict) else None
+    if not isinstance(sender_report, dict):
+        return None
+    receiver_report = gen_angles_report.get("lucid_tangents_db_report")
+    if not isinstance(receiver_report, dict):
+        return {
+            "sender_content_hash": sender_report.get("content_hash"),
+            "receiver_content_hash": None,
+            "artifact_namespace": sender_report.get("artifact_namespace"),
+        }
+    sender_hash = sender_report.get("content_hash")
+    receiver_hash = receiver_report.get("content_hash")
+    if sender_hash == receiver_hash:
+        return None
+    return {
+        "sender_content_hash": sender_hash,
+        "receiver_content_hash": receiver_hash,
+        "artifact_namespace": sender_report.get("artifact_namespace"),
+    }
+
+
 def _payload_transform_from_audit(sender_audit: SenderAudit | None) -> str:
     if not isinstance(sender_audit, dict):
         return get_workflow_payload_transform()
@@ -508,6 +538,10 @@ class ReceiverPipeline:
         if parity_mismatch is not None:
             self._log.warning("tangent_db_config_mismatch", post_id=post_id, **parity_mismatch)
             summary["tangent_db_config_mismatch"] = parity_mismatch
+        lucid_mismatch = _lucid_tangents_db_parity_mismatch(pre_sender_post, ga["report"])
+        if lucid_mismatch is not None:
+            self._log.warning("lucid_tangents_db_hash_mismatch", post_id=post_id, **lucid_mismatch)
+            summary["lucid_tangents_db_hash_mismatch"] = lucid_mismatch
         reports = {"data_load": dl_report, "research": rs["report"], "gen_angles": ga["report"]}
         return rebuilt, {"summary": summary, "reports": reports}
 

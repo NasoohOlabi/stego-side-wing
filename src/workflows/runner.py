@@ -420,8 +420,9 @@ class WorkflowRunner:
         *,
         iteration: int,
         posts: list[dict[str, Any]],
+        disable_search_fallback: bool = True,
     ) -> list[dict[str, Any]] | None:
-        """Research one batch. Returns ``None`` once Google search quota is hit.
+        """Research one batch. Returns ``None`` once search quota is hit.
 
         A quota error is the designed stop signal for the prep phase, so it is reported and
         swallowed. Every other failure propagates.
@@ -431,7 +432,7 @@ class WorkflowRunner:
             results = self.research.process_post_objects(
                 posts=posts,
                 step=RESEARCH_STEP,
-                disable_bing_fallback=True,
+                disable_bing_fallback=disable_search_fallback,
             )
         except Exception as exc:
             if not is_likely_google_quota_error(exc):
@@ -487,6 +488,7 @@ class WorkflowRunner:
         iteration: int,
         batch_count: int,
         batch_size: int,
+        disable_search_fallback: bool = True,
     ) -> "_PrepBatchOutcome":
         """Run data-load → research → angles once, reporting what it did and whether to stop."""
         data_results = self._run_prep_data_load_stage(
@@ -504,6 +506,7 @@ class WorkflowRunner:
             on_progress,
             iteration=iteration,
             posts=data_results,
+            disable_search_fallback=disable_search_fallback,
         )
         if research_results is None:
             return _PrepBatchOutcome(
@@ -532,8 +535,9 @@ class WorkflowRunner:
         *,
         batch_count: int,
         batch_size: int,
+        disable_search_fallback: bool = True,
     ) -> dict[str, Any]:
-        """Prepare posts batch after batch until the corpus runs dry or Google quota is hit."""
+        """Prepare posts batch after batch until the corpus runs dry or search quota is hit."""
         totals = {
             "data_load_processed": 0,
             "research_processed": 0,
@@ -559,6 +563,7 @@ class WorkflowRunner:
                 iteration=iterations,
                 batch_count=batch_count,
                 batch_size=batch_size,
+                disable_search_fallback=disable_search_fallback,
             )
             totals["data_load_processed"] += outcome.data_load_processed
             totals["research_processed"] += outcome.research_processed
@@ -572,6 +577,31 @@ class WorkflowRunner:
             **totals,
             "quota_detected": outcome.quota_detected,
             "stop_reason": outcome.stop_reason,
+        }
+
+    def run_prep_until_search_quota(
+        self,
+        *,
+        batch_count: int = 1,
+        batch_size: int = 5,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+        use_search_fallbacks: bool = True,
+    ) -> dict[str, Any]:
+        """Run data-load → research → gen-angles until search quota or the seed corpus ends.
+
+        Does not run stego. When ``use_search_fallbacks`` is true, Google quota falls through
+        to DuckDuckGo then Bing before the day-cycle stop fires.
+        """
+        prep = self._run_prep_phase(
+            on_progress,
+            batch_count=batch_count,
+            batch_size=batch_size,
+            disable_search_fallback=not use_search_fallbacks,
+        )
+        return {
+            "workflow": "prep-until-search-quota",
+            "prep": prep,
+            "use_search_fallbacks": use_search_fallbacks,
         }
 
     def _emit_stego_batch_summary(

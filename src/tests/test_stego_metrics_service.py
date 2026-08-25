@@ -1,8 +1,10 @@
 import json
 import math
 import os
+import sys
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -177,6 +179,19 @@ def test_load_global_stats_counts_nested_bodies(tmp_path: Path) -> None:
     assert "deleted" not in global_counter
 
 
+def test_load_global_stats_reuses_one_dataset_scan(tmp_path: Path, monkeypatch) -> None:
+    ds = tmp_path / "dataset"
+    ds.mkdir()
+    (ds / "p1.json").write_text('{"comments": [{"body": "one two"}]}', encoding="utf-8")
+    sms._GLOBAL_STATS_CACHE.pop(ds.resolve(), None)
+
+    _, first, _ = sms.load_global_stats(ds, None)
+    monkeypatch.setattr(sms, "_iter_comment_bodies", lambda _: [])
+    _, second, _ = sms.load_global_stats(ds, None)
+
+    assert first == second == Counter({"one": 1, "two": 1})
+
+
 def test_post_comment_counters_walk_replies(tmp_path: Path) -> None:
     post = tmp_path / "p1.json"
     post.write_text(
@@ -255,6 +270,40 @@ def test_run_single_post_metrics_skips_perplexity_without_torch(
     data = run_single_post_metrics(out / "x_version_9.json", ds)
     assert data["perplexity"] is None
     assert any("Perplexity skipped" in w for w in data["warnings"])
+
+
+def test_perplexity_reuses_model_and_tokenizer(monkeypatch) -> None:
+    loads = {"tokenizer": 0, "model": 0}
+
+    class Tokenizer:
+        @classmethod
+        def from_pretrained(cls, _: str, **__: object) -> "Tokenizer":
+            loads["tokenizer"] += 1
+            return cls()
+
+    class Model:
+        config = SimpleNamespace(n_positions=1024)
+
+        @classmethod
+        def from_pretrained(cls, _: str, **__: object) -> "Model":
+            loads["model"] += 1
+            return cls()
+
+        def to(self, _: str) -> "Model":
+            return self
+
+        def eval(self) -> None:
+            return None
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoModelForCausalLM=Model, AutoTokenizer=Tokenizer))
+    monkeypatch.setattr(sms, "compute_text_perplexity", lambda *args: 12.0)
+    sms._MODEL_TOKENIZERS.pop("cache-test", None)
+    sms._PERPLEXITY_MODELS.pop(("cache-test", "cpu"), None)
+
+    assert sms._perplexity_one_text("first", "cache-test", 512, "cpu")[0] == 12.0
+    assert sms._perplexity_one_text("second", "cache-test", 512, "cpu")[0] == 12.0
+    assert loads == {"tokenizer": 1, "model": 1}
 
 
 def test_delete_metrics_output_sample_removes_file(tmp_path: Path) -> None:

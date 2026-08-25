@@ -880,11 +880,15 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         pure_channel_bits = int(capacity_report.get("recoverable_capacity_bits") or 0)
         if pure_channel_bits <= 0:
             pure_channel_bits = int(capacity_metrics.get("total_bits") or 0)
-        our_metrics = run_single_post_metrics(source_file, dataset_dir, device=args.device)
+        our_metrics = (
+            {}
+            if args.skip_model_metrics
+            else run_single_post_metrics(source_file, dataset_dir, device=args.device)
+        )
         our_quality = _quality(our_text)
         our_reference_metrics = (
             {}
-            if args.skip_reference_metrics
+            if args.skip_reference_metrics or args.skip_model_metrics
             else score_reference_metrics(our_text, reference_text, device=args.device)
         )
         rows.append(
@@ -930,11 +934,15 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             / f"{source_entry.get('post_id')}_version_zlg_{source_entry.get('sample_index')}_{pair_id}.json"
         )
         _write_temp_output(zlg_metric_file, zlg_text)
-        zlg_metrics = run_single_post_metrics(zlg_metric_file, dataset_dir, device=args.device)
+        zlg_metrics = (
+            {}
+            if args.skip_model_metrics
+            else run_single_post_metrics(zlg_metric_file, dataset_dir, device=args.device)
+        )
         zlg_quality = _quality(zlg_text)
         zlg_reference_metrics = (
             {}
-            if args.skip_reference_metrics
+            if args.skip_reference_metrics or args.skip_model_metrics
             else score_reference_metrics(zlg_text, reference_text, device=args.device)
         )
         zlg_capacity = _zlg_capacity_fields(zlg)
@@ -970,7 +978,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         )
         pair_id += 1
 
-    if not args.skip_reference_metrics:
+    if not args.skip_reference_metrics and not args.skip_model_metrics:
         for row in rows:
             alternatives = [
                 str(other.get("stegotext") or "")
@@ -1000,6 +1008,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "zlg_run_dir": str(zlg_run_dir),
         "rows": len(rows),
         "paired_posts": len({(r["post_id"], r["sample_index"]) for r in rows}) if rows else 0,
+        "skip_model_metrics": bool(args.skip_model_metrics),
+        "skip_reference_metrics": bool(args.skip_reference_metrics or args.skip_model_metrics),
         "methods": _summary(rows),
         "methods_clustered_by_post": _clustered_method_summary(rows),
         "comparison_modes": sorted({str(r.get("comparison_mode")) for r in rows}),
@@ -1046,6 +1056,15 @@ def main() -> int:
         "--skip-reference-metrics",
         action="store_true",
         help="Do not run BLEU/ROUGE/BERTScore/self-consistency while building rows.",
+    )
+    parser.add_argument(
+        "--skip-model-metrics",
+        action="store_true",
+        help=(
+            "Skip GPT-2 perplexity, KL/JSD, and reference metrics. "
+            "Use to rebuild paired_rows/capacity/gates quickly when CUDA torch "
+            "is unavailable or a full rescore can run later."
+        ),
     )
     parser.add_argument("--minimum-diversity-ratio", type=float, default=1.0)
     parser.add_argument(

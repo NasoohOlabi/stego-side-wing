@@ -1,13 +1,16 @@
-# Codex Judge progress and resume
+# Codex / Claude Judge progress and resume
 
-The five Codex metrics write all artifacts under a comparison run's
+The five LLM-judge metrics write all artifacts under a comparison run's
 `comparison_dataset/codex_judgments/` directory. They are designed for an
 interrupted local/overnight run: judgments are append-only and a completed
 `task_id` is never sent again.
 
+Default backend is **Claude Code** (`--backend claude`, model `haiku`).
+Codex remains available via `--backend codex` (model `gpt-5.6-luna`).
+
 ## Monitoring
 
-Each metric writes `<metric>_progress.json` after every completed Codex call.
+Each metric writes `<metric>_progress.json` after every completed judge call.
 It contains `total_tasks`, `completed`, `pending`, `errors`, and `complete`.
 The JSONL file is flushed after every row, so progress survives process loss.
 
@@ -26,6 +29,12 @@ the pilot, and only then continues to the full run:
 uv run python scripts\run_codex_judge_campaign.py --run-dir $Run --phase auto --pilot-limit 50 --max-workers 4
 ```
 
+Switch back to Codex Luna when credits allow:
+
+```powershell
+uv run python scripts\run_codex_judge_campaign.py --run-dir $Run --phase auto --backend codex --model gpt-5.6-luna
+```
+
 Use `--phase pilot` to stop after the audit or `--phase full` to resume a
 previously approved pilot. Every operation is idempotent and uses the same
 append-only cache.
@@ -39,8 +48,9 @@ uv run python scripts\score_codex_judgments.py --metric suspicion --run-dir $Run
 ```
 
 After the pilot passes, omit `--limit` to evaluate every paired row. Keep the
-same model, reasoning effort, prompts, and schemas: these fields are included
-in `task_id`, so a changed evaluation configuration creates a distinct cache.
+same backend, model, reasoning effort, prompts, and schemas: these fields are
+included in `task_id`, so a changed evaluation configuration creates a distinct
+cache.
 
 For unattended work, gate the full run on the pilot progress files: require
 every metric's `complete` field to be true and every `errors` field to be zero.

@@ -15,6 +15,16 @@
       }
     },
     {
+      "name": "barb",
+      "base_profile": "balanced",
+      "description": "BARB: strong-opinion / strong-emotion, thread-specific, anti-platitude encode flavor (sarcasm optional, not mandatory).",
+      "env_overrides": {
+        "WORKFLOW_STEGO_PROMPT_STYLE": "barb",
+        "WORKFLOW_BARB_STANCE_GATE": "1",
+        "WORKFLOW_NATURALNESS_GATE_ENABLED": "1"
+      }
+    },
+    {
       "name": "capacity",
       "base_profile": "capacity",
       "description": "Frozen high-capacity baseline."

@@ -111,40 +111,76 @@ def _chain_bodies(post: dict[str, Any], parent_id: str | None) -> list[dict[str,
 
 
 def _context_block(post: dict[str, Any]) -> dict[str, Any]:
-    return {
+    """Post fields the Artifact Explorer Result tab expects (URL, search, etc.)."""
+    block: dict[str, Any] = {
         "id": post.get("id"),
         "title": post.get("title"),
         "author": post.get("author"),
         "selftext": post.get("selftext"),
         "permalink": post.get("permalink"),
     }
+    if post.get("url") is not None:
+        block["url"] = post.get("url")
+    # Always emit search_results when present so the viewer can show an empty list vs missing.
+    if "search_results" in post:
+        block["search_results"] = post.get("search_results") or []
+    return block
+
+
+def _angle_embedding_for_frame(frame: dict[str, Any]) -> dict[str, Any] | None:
+    """Prefer the planned selection-channel angleEmbedding (selected-first ordering)."""
+    plan = frame.get("embedding_plan")
+    if not isinstance(plan, dict):
+        return None
+    angle_embedding = plan.get("angleEmbedding")
+    return angle_embedding if isinstance(angle_embedding, dict) else None
+
+
+def _comment_embedding_for_frame(
+    frame: dict[str, Any], post: dict[str, Any], frame_bits: int
+) -> dict[str, Any]:
+    plan = frame.get("embedding_plan") if isinstance(frame.get("embedding_plan"), dict) else {}
+    planned_comment = plan.get("commentEmbedding") if isinstance(plan, dict) else None
+    comment: dict[str, Any] = {
+        "bitsCount": frame_bits,
+        "context": _context_block(post),
+        "pickedCommentChain": _chain_bodies(post, frame.get("parent_id")),
+    }
+    if isinstance(planned_comment, dict):
+        for key in ("bitsUsed", "bitsCount", "recoverableBitsCount", "insufficientBits"):
+            if key in planned_comment:
+                comment[key] = planned_comment[key]
+        # Frame capacity is parent+tangent; keep that as the displayed embedded width when set.
+        if frame_bits:
+            comment["bitsCount"] = frame_bits
+    return comment
 
 
 def _frame_output_rows(
     frame: dict[str, Any], post: dict[str, Any], payload: str, frame_bits: int
 ) -> list[dict[str, Any]]:
     """Shape one frame like the single-frame output-results contract."""
+    embedding: dict[str, Any] = {
+        "compression": {"payload": payload},
+        "commentEmbedding": _comment_embedding_for_frame(frame, post, frame_bits),
+        "multiFrame": {
+            "parentId": frame.get("parent_id"),
+            "parentRecoverableWidth": frame.get("parent_recoverable_width"),
+            "tangentRecoverableWidth": frame.get("tangent_recoverable_width"),
+            "contextDictionaryId": frame.get("context_dictionary_id"),
+            "tangentHash": frame.get("tangent_hash"),
+            "selectedAngleIndex": frame.get("selected_angle_index"),
+        },
+        "senderAudit": frame.get("sender_audit"),
+    }
+    angle_embedding = _angle_embedding_for_frame(frame)
+    if angle_embedding is not None:
+        embedding["angleEmbedding"] = angle_embedding
     return [
         {
             "stegoText": frame.get("stego_text", ""),
             "post": _context_block(post),
-            "embedding": {
-                "compression": {"payload": payload},
-                "commentEmbedding": {
-                    "bitsCount": frame_bits,
-                    "context": _context_block(post),
-                    "pickedCommentChain": _chain_bodies(post, frame.get("parent_id")),
-                },
-                "multiFrame": {
-                    "parentId": frame.get("parent_id"),
-                    "parentRecoverableWidth": frame.get("parent_recoverable_width"),
-                    "tangentRecoverableWidth": frame.get("tangent_recoverable_width"),
-                    "contextDictionaryId": frame.get("context_dictionary_id"),
-                    "tangentHash": frame.get("tangent_hash"),
-                    "selectedAngleIndex": frame.get("selected_angle_index"),
-                },
-                "senderAudit": frame.get("sender_audit"),
-            },
+            "embedding": embedding,
         }
     ]
 

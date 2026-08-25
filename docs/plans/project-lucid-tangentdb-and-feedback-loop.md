@@ -15,9 +15,6 @@ Project LUCID replaces forced recoverability with two upstream safeguards:
 If those safeguards cannot yield an exact decode within a bounded budget, the
 encode attempt fails honestly.
 
-No implementation is authorized by this plan. Prompt edits require the
-separate double-confirmation process in `AGENTS.md`.
-
 ## Non-negotiable invariants
 
 - The visible carrier is an LLM-produced reply, never a deterministic template.
@@ -29,107 +26,152 @@ separate double-confirmation process in `AGENTS.md`.
 - Exhaustion produces a failed attempt with diagnostics, never a fabricated
   success.
 
-## Workstream A — TangentsDB distinctness
+## Status (2026-08-08) — refactor complete; code frozen pending clean samples
 
-### A1. Define distinctness before generation
+| Item | State | Notes |
+| --- | --- | --- |
+| A1–A2 schemas + deterministic scoring | ✅ | `lucid_tangent_db.py` |
+| A3 LLM structured critic | ✅ | `lucid_critic.py` + re-score gate |
+| A4 freeze/version artifact | ✅ | content hash + post/report persistence |
+| Wire `lucid` builder into `gen_angles` | ✅ | `WORKFLOW_TANGENT_DB_BUILDER=lucid` (default still `legacy`) |
+| Sender/receiver codebook hash parity | ✅ | `_lucid_tangents_db_parity_mismatch` |
+| B1 failure taxonomy persistence | ✅ | e2e `encode_failure` projection |
+| B2 revision prompts | ✅ | `lucid_revision` in workflow prompts JSON |
+| B3 revalidate revisions + provenance | ✅ | sharpen path + attempt/feedback/prompt_hash |
+| B4 honest stop + typed failure | ✅ | encode failure dict + e2e taxonomy fields |
+| Dashboard / benchmark accounting | ✅ | `/lucid` failure codes + taxonomy + baseline banner |
+| Git provenance on workload runs | ✅ | commit/branch/dirty/command/manifest hash |
+| Frozen-manifest pilot scaffold | ✅ | `scripts/prepare_lucid_tangents_db_pilot.py` + `datasets/prep_runs/LUCID/tangents_db_v1/pilot.json` |
 
-Specify a TangentsDB entry as a compact, reply-expressible semantic intent:
-one subject/frame, one stance or causal relation, and one thread-grounded cue.
-Reject entries that are merely category relabels, generic analysis tasks, or
-phrases that cannot be spoken naturally in the selected reply context.
+**Code freeze:** the LUCID refactor implementation is considered complete. Do **not**
+change TangentsDB admission, promising-candidate / sharpen selection, encode or
+decode prompts, or failure taxonomy based on the first TangentsDB-v1 bulk run
+until a clean researched corpus yields enough uncontaminated samples. Ship only
+docs, accounting, or unrelated work unless a change is independently justified
+outside that contaminated evidence.
 
-### A2. Generate a candidate pool, then select a codebook
+### Empirical evidence (do not over-claim)
 
-Generate more angle candidates than needed. Score each candidate for:
+**Sampler baseline (not TangentsDB-v1):**
+`metrics/e2e_runs/LUCID_context_weighted_v2_balanced_500`
+(**381 / 500**, 76.2% ITT; 64 reused posts; dirty worktree based on `0353848`):
 
-- grounding in the post and selected parent comment;
-- semantic separation from every retained angle;
-- lexical overlap risk with neighboring angles;
-- reply realizability by a small generation probe; and
-- receiver confusion risk using pairwise decode probes.
+- Failure codes: **108** `receiver_angle_mismatch`, **11** `generation_failure`.
+- Candidate rejects dominated by far `decode_mismatch`.
+- Angle artifacts were **context-weighted v2**, **not** TangentsDB-v1.
 
-Select the final fixed-size codebook globally rather than accepting angles in
-generation order. The selection objective should maximize the minimum
-pairwise separation while preserving category and source diversity.
+**First TangentsDB-v1 bulk attempt (contaminated research cache — not decision-grade):**
+`metrics/e2e_runs/LUCID_tangents_db_v1_balanced_500`
+(**371 / 500**, 74.2% ITT; 197 unique angle posts with reuse; builder `lucid`):
 
-### A3. Use an LLM only as a structured critic, not as hidden repair
+- Failures: **121** `receiver_angle_mismatch`, **7** `generation_failure`,
+  **1** `stego_invalid_json`.
+- Angles were regenerated with `WORKFLOW_TANGENT_DB_BUILDER=lucid` under
+  `datasets/prep_runs/LUCID/tangents_db_v1/lucid/news_angles`, but
+  `search_results` were copied unchanged from `datasets/news_researched`
+  (cached mid-2025 / written early 2026). That cache is research-contaminated
+  for some posts (off-thread articles mixed into the dictionary).
 
-An LLM critic may identify overlapping entries and propose replacements. Its
-output must be structured, versioned, and independently checked by
-deterministic similarity and probe-decode measures. It may change the
-TangentsDB before generation; it may not rewrite an already-generated carrier
-outside the normal feedback loop.
+Treat that TangentsDB-v1 run as a **pipeline smoke / accounting check**, not as
+evidence that TangentsDB admission or the revision loop must change.
 
-### A4. Version and freeze the result
+## Conclusion (2026-08-08) — end of LUCID refactor phase
 
-Persist the full TangentsDB, generation inputs, selected-parent context,
-candidate scores, rejection reasons, prompt hashes, model identity, and a
-content hash. Sender and receiver must reference that frozen artifact.
+### What the refactor delivered
 
-## Workstream B — Helpful, bounded feedback loop
+Project LUCID’s implementation goal is done: a versioned TangentsDB builder,
+honest encode exhaustion with typed failure taxonomy, optional LLM critic and
+revision prompts, sender/receiver hash-parity checks, dashboard/accounting
+separation of sampler baseline vs TangentsDB-v1, and a frozen-pilot scaffold.
+Default builder remains `legacy`; TangentsDB-v1 is opt-in via
+`WORKFLOW_TANGENT_DB_BUILDER=lucid`.
 
-### B1. Diagnose the failure
+### What we learned from the first TangentsDB-v1 500-run (and what we must not conclude)
 
-For each natural candidate, record whether failure is due to no decode,
-wrong-angle decode, weak thread grounding, unsupported detail, or a quality
-gate violation. Do not expose the payload bits to the LLM.
+A traced mismatch on post `1lqptry` (hot-car death thread, selected angle about
+**organ procurement**) showed:
 
-### B2. Request an LLM revision with useful constraints
+1. The decoder and context gate behaved coherently: generated replies stayed on
+   the hot-car thread and decoded to other on-thread angles.
+2. The selected intent’s `relation` came from **old cached `search_results`**,
+   not from a fresh research pass. The TangentsDB angle regen reused
+   `datasets/news_researched` byte-identically (including dozens of Kentucky
+   organ-harvest articles on a Texas hot-car post).
+3. A thin shared phrase (“incident … under investigation by state and federal
+   officials”) let an off-thread research topic into the codebook.
+4. The same post/angle sometimes succeeded only when a draft lexically echoed
+   that thin cue — stochastic, not proof of stable recoverability.
+5. Far decode mismatches leave `promising_candidates` empty, so revision may
+   not run — noted as a hypothesis only; **not** a fix authorization while
+   inputs are contaminated.
 
-The revision input should include the original candidate, selected parent
-comment, post context, selected angle as a compact semantic goal, and concise
-failure feedback. It should ask for a fresh natural reply that directly
-addresses the parent comment while making the selected angle clearer through
-ordinary wording. It must forbid copying source quotes, angle labels, and
-decoder-oriented boilerplate.
+**Decision rule:** do not authorize TangentsDB, sharpen, or prompt changes from
+contaminated-cache failures. Step back; keep the current code; gather enough
+samples on a clean researched set first.
 
-Prompt design will be proposed and reviewed separately; this plan does not
-modify any prompt text.
+### Freeze and next gate
 
-### B3. Revalidate from scratch
+| Allowed now | Not allowed yet |
+| --- | --- |
+| Cite refactor as implementation-complete | “Fix mismatch rate” patches motivated by the contaminated 500-run |
+| Keep collecting / cleaning research + angles | Prompt edits without the usual double confirmation |
+| Report ITT with contamination caveats | Claiming TangentsDB-v1 quality vs sampler baseline as settled |
+| ZLG pairing only on frozen clean manifests | Treating `news_researched` organ-polluted posts as TangentsDB ground truth |
 
-Every revision goes through the same context, naturalness, and receiver-decode
-checks as an initial candidate. The decoder receives no special handling for
-revisions. Retain all attempts and outcomes.
+**Next gate before any LUCID code change:** a researched corpus (or explicit
+filter) with thread-faithful `search_results`, TangentsDB-v1 angles rebuilt from
+that corpus, and enough encode/decode samples for failure inspection that are
+not dominated by known cache contamination. Until then, the LUCID refactor
+phase is closed and the code stays as cemented above.
 
-### B4. Stop honestly
+Authoritative status note:
+[`docs/reports/2026-08-08-current-research-state.md`](../reports/2026-08-08-current-research-state.md).
 
-Use a small, configurable retry budget. On exhaustion, return a typed encode
-failure containing the selected angle ID, failure taxonomy, candidate
-provenance, and safe diagnostics. Count it as a failure in all evaluations.
+## Architecture note — three angle layers
 
-## Refactoring sequence
+1. **Context-weighted sampler** (`context_weighted_v2`) — candidate pool source.
+2. **`tangent_db` v1** — legacy dict distinctness (`WORKFLOW_TANGENT_DB_BUILDER=v1`).
+3. **Project LUCID TangentsDB** — `{subject, relation, thread_cue}` intents
+   (`WORKFLOW_TANGENT_DB_BUILDER=lucid`, namespace `project_lucid/tangents_db/v1`).
 
-1. Specify TangentsDB schemas, distinctness metrics, codebook selection, and
-   artifact versioning.
-2. Add pure deterministic scoring and tests for duplicate, adjacent, generic,
-   and non-reply-expressible tangents.
-3. Add the LLM structured-critic interface behind the new artifact contract.
-4. Add sender/receiver compatibility checks for the frozen codebook.
-5. Design and obtain confirmation for feedback-loop prompts.
-6. Implement bounded revision orchestration with attempt provenance.
-7. Add failure taxonomy, dashboard rendering, and benchmark accounting.
-8. Run a frozen-manifest pilot, inspect failures manually, then gate any
-   broader benchmark run on predefined recovery and naturalness thresholds.
+## How to run the TangentsDB-v1 pilot
+
+```powershell
+uv run python scripts/prepare_lucid_tangents_db_pilot.py `
+  --root datasets/prep_runs/LUCID/tangents_db_v1 `
+  --pilot-id lucid_tangents_db_v1_pilot `
+  --materialize-from datasets/news_researched `
+  --limit 25
+
+$env:WORKFLOW_TANGENT_DB_BUILDER = "lucid"
+uv run python scripts/run_actual_workload_e2e.py `
+  --variant balanced `
+  --samples-per-profile 25 `
+  --angles-dir datasets/prep_runs/LUCID/tangents_db_v1/lucid/news_angles `
+  --dataset-dir datasets/news_cleaned `
+  --run-dir metrics/e2e_runs/LUCID_tangents_db_v1_pilot_25 `
+  --max-retries 1 `
+  --log-level INFO
+```
+
+Gate any broader benchmark on recovery + naturalness thresholds after manual
+failure inspection. Do not pair with unpaired ZLG lanes.
 
 ## Acceptance criteria
 
 - No code path can emit a visible carrier that did not come from an LLM call.
 - TangentsDB builds report pairwise separation and reject ambiguous entries.
-- A held-out probe set demonstrates materially lower angle-confusion than the
-  current generator at equal codebook size.
 - Failed decode attempts remain visible in artifacts and metrics.
 - Every accepted carrier has exact receiver recovery and passes the existing
   contextuality/naturalness gates.
 - A reviewer can reproduce an output from its frozen TangentsDB and recorded
   LLM provenance without relying on process memory.
+- Dashboard and summaries distinguish “LUCID-named sampler baseline” from
+  “TangentsDB-v1 codebook evaluation.”
 
 ## Risks to manage
 
-- Greater semantic separation can reduce the number of usable angles and thus
-  capacity; report that trade-off explicitly.
-- LLM critics can introduce new generic or overly academic language; retain
-  deterministic filters and probe decoding.
-- Feedback loops can overfit to the decoder; use held-out receiver probes and
-  human-facing quality gates.
-- Prompt changes are high-risk and require explicit review before any use.
+- Greater semantic separation can reduce usable angles and thus capacity.
+- LLM critics can introduce generic language; retain deterministic filters.
+- Feedback loops can overfit to the decoder; keep human-facing quality gates.
+- Naming confusion: `LUCID_context_weighted_v2_*` is not TangentsDB-v1.

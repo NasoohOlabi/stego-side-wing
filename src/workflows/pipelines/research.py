@@ -1,5 +1,6 @@
 """Research pipeline: generate search terms, search, and fetch content."""
 
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -102,6 +103,7 @@ class ResearchPipeline:
         self.gen_terms = gen_terms or GenSearchTermsPipeline()
         self.fetch_content = fetch_content or FetchUrlContentPipeline()
         self.last_research_breakdown_posts: list[dict[str, Any]] = []
+        self._google_quota_detected = False
 
     def _fetch_url_with_timeout_retries(
         self,
@@ -183,6 +185,68 @@ class ResearchPipeline:
             "snippet_hash": stable_hash(result.get("snippet", "")),
         }
 
+    def _try_fallback_search(
+        self,
+        *,
+        provider: str,
+        search_fn: Any,
+        query: str,
+        first: int,
+        count: int,
+        post_id: str,
+    ) -> dict[str, Any] | None:
+        """Run one fallback provider; return results dict or None when empty/unusable."""
+        self._log.warning(
+            "research_search_fallback",
+            event="research",
+            provider=provider,
+            post_id=post_id,
+            term_preview=_term_preview(query),
+        )
+        try:
+            payload = search_fn(query=query, first=first, count=count)
+        except Exception as exc:
+            self._log.warning(
+                "research_search_fallback_failed",
+                event="research",
+                provider=provider,
+                post_id=post_id,
+                error=str(exc)[:300],
+            )
+            return None
+        results = payload.get("results") if isinstance(payload, dict) else None
+        if isinstance(results, list):
+            relevant = self._relevant_fallback_results(query, results)
+            if relevant:
+                return {**payload, "results": relevant}
+        return None
+
+    @staticmethod
+    def _relevant_fallback_results(
+        query: str, results: list[Any]
+    ) -> list[dict[str, Any]]:
+        """Reject quota-fallback hits with little lexical connection to the term."""
+        ignored = {
+            "about", "analysis", "core", "details", "elements", "from", "into",
+            "key", "more", "news", "study", "than", "that", "their", "this",
+            "topic", "versus", "what", "when", "where", "with",
+        }
+        tokens = {
+            token for token in re.findall(r"[a-z0-9]+", query.lower())
+            if len(token) >= 4 and token not in ignored
+        }
+        if not tokens:
+            return []
+        threshold = min(2, len(tokens))
+        relevant: list[dict[str, Any]] = []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            haystack = f"{item.get('title', '')} {item.get('snippet', '')}".lower()
+            if sum(token in haystack for token in tokens) >= threshold:
+                relevant.append(item)
+        return relevant
+
     def _web_search_google_or_bing(
         self,
         query: str,
@@ -192,29 +256,48 @@ class ResearchPipeline:
         *,
         disable_bing_fallback: bool = False,
     ) -> dict[str, Any]:
-        """Google CSE first; on quota-style failures try Bing (ScrapingDog) if configured."""
-        from services.search_service import search_bing
+        """Search with free fallbacks before the metered Bing provider."""
+        from services.search_service import (
+            search_bing,
+            search_bing_news_rss,
+            search_duckduckgo,
+            search_google_news_rss,
+            search_yahoo_news,
+        )
+        from workflows.errors import QuotaExceededError
 
-        try:
-            return self.backend.google_search(query=query, first=first, count=count)
-        except Exception as e:
-            if not is_likely_google_quota_error(e):
-                raise
-            if disable_bing_fallback:
-                raise
-            self._log.warning(
-                "research_google_bing_fallback",
-                event="research",
-                post_id=post_id,
-                term_preview=_term_preview(query),
-            )
+        google_error: Exception = QuotaExceededError("Google quota circuit is open")
+        if not getattr(self, "_google_quota_detected", False):
             try:
-                return search_bing(query=query, first=first, count=count)
-            except Exception as e2:
-                raise RuntimeError(
-                    f"Google search failed for post {post_id} and term {query!r}; "
-                    f"Bing fallback failed: {e2}"
-                ) from e2
+                return self.backend.google_search(query=query, first=first, count=count)
+            except Exception as exc:
+                if not is_likely_google_quota_error(exc):
+                    raise
+                self._google_quota_detected = True
+                google_error = exc
+        if disable_bing_fallback:
+            raise google_error
+        for provider, fn in (
+            ("duckduckgo", search_duckduckgo),
+            ("yahoo_news", search_yahoo_news),
+            ("google_news_rss", search_google_news_rss),
+            ("bing_news_rss", search_bing_news_rss),
+            ("bing", search_bing),
+        ):
+            hit = self._try_fallback_search(
+                provider=provider,
+                search_fn=fn,
+                query=query,
+                first=first,
+                count=count,
+                post_id=post_id,
+            )
+            if hit is not None:
+                return hit
+        raise QuotaExceededError(
+            f"Google search quota exhausted for post {post_id} and term {query!r}; "
+            "DuckDuckGo, news RSS, and Bing API fallbacks returned no usable results"
+        ) from google_error
 
     def preview_post(
         self,
@@ -304,6 +387,23 @@ class ResearchPipeline:
                 post_text=_post_text,
             )
         if not search_terms:
+            fallback_query = str(post.get("title") or "").strip()
+            if fallback_query:
+                search_terms = [fallback_query]
+                terms_report = {
+                    **terms_report,
+                    "terms": search_terms,
+                    "fallback": "post_title",
+                }
+                log.warning(
+                    "research_terms_title_fallback",
+                    event="research_timing",
+                    post_id=post_id,
+                    terms_phase_ms=terms_phase_ms,
+                    error=terms_report.get("error"),
+                )
+
+        if not search_terms:
             preview_total_ms = _elapsed_ms(t_preview0)
             timing = {
                 "trace_id": trace_id,
@@ -376,6 +476,16 @@ class ResearchPipeline:
                 )
                 raw_results = search_response.get("results", [])
                 raw_results_by_term.append(list(raw_results))
+            except QuotaExceededError as e:
+                log.warning(
+                    "research_term_skipped_no_search_results",
+                    event="research",
+                    post_id=post_id,
+                    term_preview=_term_preview(term),
+                    error=str(e)[:300],
+                )
+                raw_results = []
+                raw_results_by_term.append([])
             except Exception as e:
                 log.exception("web search failed post_id={} term={}", post_id, term)
                 raise RuntimeError(
@@ -452,6 +562,8 @@ class ResearchPipeline:
             selected_url_cap_hit=selected_url_cap_hit,
             max_selected_urls=max_selected_urls,
         )
+        if not all_search_results:
+            raise RuntimeError(f"No relevant search results found for post {post_id}")
         if _dbg_dir:
             _corpus = f"{_post_title or ''}\n{_post_text or ''}"
             write_research_results_debug(
@@ -575,6 +687,8 @@ class ResearchPipeline:
             pages_recorded=len(fetched_pages),
             **_fetch_progress_fields(total_urls, total_urls),
         )
+        if not fetched_texts:
+            raise RuntimeError(f"No usable research pages fetched for post {post_id}")
 
         post_copy = dict(post)
         post_copy["search_results"] = fetched_texts

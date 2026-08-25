@@ -25,6 +25,8 @@ ALPHA_SENSITIVITY_GRID = (1e-2, 1e-3, 1e-4, 1e-6, 1e-8)
 
 _METRICS_CLI_LOG = logger.bind(component="StegoMetricsCLI")
 _MODEL_TOKENIZERS: dict[str, Any] = {}
+_PERPLEXITY_MODELS: dict[tuple[str, str], Any] = {}
+_GLOBAL_STATS_CACHE: dict[Path, tuple[int, Counter, int]] = {}
 
 
 def _from_pretrained_offline_first(cls: Any, model_name: str) -> Any:
@@ -459,7 +461,11 @@ def load_global_stats(
     dataset_dir: Path,
     hook: Callable[[str, int, int], None] | None,
 ) -> tuple[int, Counter, int]:
-    post_paths = sorted(dataset_dir.glob("*.json"))
+    cache_key = dataset_dir.resolve()
+    cached = _GLOBAL_STATS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    post_paths = sorted(cache_key.glob("*.json"))
     total_posts = len(post_paths)
     global_counter: Counter = Counter()
     nonempty_bodies = 0
@@ -471,7 +477,9 @@ def load_global_stats(
             nonempty_bodies += 1
         global_counter.update(post_counter)
         _maybe_progress(hook, "Loading global baseline", idx, total_posts)
-    return total_posts, global_counter, nonempty_bodies
+    result = total_posts, global_counter, nonempty_bodies
+    _GLOBAL_STATS_CACHE[cache_key] = result
+    return result
 
 
 def _smoothed_prob(
@@ -820,10 +828,17 @@ def _perplexity_one_text(
     except ImportError as exc:
         return None, None, f"Perplexity skipped: missing transformers/torch ({exc})."
     resolved = resolve_device(torch, device)
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    causal_lm = cast(Any, AutoModelForCausalLM.from_pretrained(model_name))
-    causal_lm.to(resolved)
-    causal_lm.eval()
+    tokenizer = _MODEL_TOKENIZERS.get(model_name)
+    if tokenizer is None:
+        tokenizer = _from_pretrained_offline_first(AutoTokenizer, model_name)
+        _MODEL_TOKENIZERS[model_name] = tokenizer
+    model_key = (model_name, resolved)
+    causal_lm = _PERPLEXITY_MODELS.get(model_key)
+    if causal_lm is None:
+        causal_lm = cast(Any, _from_pretrained_offline_first(AutoModelForCausalLM, model_name))
+        causal_lm.to(resolved)
+        causal_lm.eval()
+        _PERPLEXITY_MODELS[model_key] = causal_lm
     max_length = int(getattr(causal_lm.config, "n_positions", 1024))
     ppl = compute_text_perplexity(
         tokenizer,

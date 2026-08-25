@@ -74,6 +74,36 @@ def _split_sentences(text: str) -> list[str]:
     return [part.strip() for part in parts if part.strip()]
 
 
+_JSONISH_COVER = re.compile(r"^\s*[\[{]")
+_MARKDOWN_CHROME = re.compile(r"\[Show more\]|\.\.\.\s*\[", re.IGNORECASE)
+
+
+def _is_usable_cover_sentence(text: str) -> bool:
+    """Drop research JSON and UI chrome that ZLG copies into stegotext."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if _JSONISH_COVER.match(stripped):
+        return False
+    return not _MARKDOWN_CHROME.search(stripped)
+
+
+def _prose_from_news_json(value: Any) -> list[str]:
+    rows = [value] if isinstance(value, dict) else []
+    if isinstance(value, list):
+        rows = [item for item in value if isinstance(item, dict)]
+    parts: list[str] = []
+    for row in rows:
+        for key in ("title", "summary"):
+            field = str(row.get(key) or "").strip()
+            if field:
+                parts.append(field)
+        points = row.get("key_points")
+        if isinstance(points, list):
+            parts.extend(str(item).strip() for item in points if str(item).strip())
+    return parts
+
+
 def _extract_selftext_sentences(raw_selftext: str, max_selftext_chars: int) -> list[str]:
     clipped = _clip(raw_selftext, max_selftext_chars)
     if not clipped:
@@ -81,23 +111,12 @@ def _extract_selftext_sentences(raw_selftext: str, max_selftext_chars: int) -> l
     try:
         parsed = json.loads(clipped)
     except Exception:
-        return _split_sentences(clipped)
-    if not isinstance(parsed, dict):
-        return _split_sentences(clipped)
-    parts: list[str] = []
-    title = str(parsed.get("title") or "").strip()
-    summary = str(parsed.get("summary") or "").strip()
-    author = str(parsed.get("author") or "").strip()
-    key_points = parsed.get("key_points")
-    if title:
-        parts.append(title)
-    if summary:
-        parts.append(summary)
-    if isinstance(key_points, list):
-        parts.extend(str(item).strip() for item in key_points if str(item).strip())
-    if author and author.lower() != "unknown":
-        parts.append(author)
-    return [part for sentence in parts for part in _split_sentences(sentence)]
+        parsed = None
+    if parsed is not None:
+        prose = _prose_from_news_json(parsed)
+        if prose:
+            return [part for sentence in prose for part in _split_sentences(sentence)]
+    return [s for s in _split_sentences(clipped) if _is_usable_cover_sentence(s)]
 
 
 MIN_COVER_TEXTS = 2
@@ -134,7 +153,10 @@ def _preferred_comment_sentences(comment_lines: list[str]) -> list[str]:
     for line in comment_lines:
         candidates.extend(_split_sentences(line))
     return [
-        sentence for sentence in candidates if 4 <= len(_tokens_for_prompt(sentence)) <= 60
+        sentence
+        for sentence in candidates
+        if 4 <= len(_tokens_for_prompt(sentence)) <= 60
+        and _is_usable_cover_sentence(sentence)
     ]
 
 
@@ -149,7 +171,7 @@ def _fallback_cover_sentences(
     candidates.extend(_extract_selftext_sentences(selftext, max_selftext_chars))
     for line in comment_lines:
         candidates.extend(_split_sentences(line))
-    return candidates
+    return [sentence for sentence in candidates if _is_usable_cover_sentence(sentence)]
 
 
 def _tokens_for_prompt(text: str) -> list[str]:
@@ -199,6 +221,26 @@ def _entry_key(entry: dict[str, Any]) -> str:
         f"{entry.get('post_id')}|{entry.get('sample_index')}|"
         f"{entry.get('payload_hash')}|{entry.get('output_file')}"
     )
+
+
+def _drop_failed_result_rows(results_jsonl: Path, archive_path: Path) -> int:
+    """Keep accepted rows; archive failures so they can be retried."""
+    if not results_jsonl.exists():
+        return 0
+    kept: list[str] = []
+    failed: list[str] = []
+    for line in results_jsonl.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if isinstance(row, dict) and bool(row.get("accepted")):
+            kept.append(line)
+        else:
+            failed.append(line)
+    if failed:
+        archive_path.write_text("\n".join(failed) + "\n", encoding="utf-8")
+    results_jsonl.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+    return len(failed)
 
 
 def _load_processed(results_jsonl: Path) -> set[str]:
@@ -321,6 +363,11 @@ def main() -> int:
     parser.add_argument("--sleep-seconds", type=float, default=0.0)
     parser.add_argument("--no-reveal-check", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Archive rejected rows and rerun them; keep accepted results.",
+    )
     parser.add_argument("--max-selftext-chars", type=int, default=2500)
     parser.add_argument("--max-chain-chars", type=int, default=1400)
     parser.add_argument(
@@ -398,6 +445,8 @@ def main() -> int:
     summary_path = run_dir / "summary.json"
     if args.overwrite and results_jsonl.exists():
         results_jsonl.unlink()
+    if args.retry_failed and results_jsonl.exists():
+        _drop_failed_result_rows(results_jsonl, run_dir / "results.failed_before_retry.jsonl")
 
     done = _load_processed(results_jsonl)
     processed, accepted, failed = _load_existing_counts(results_jsonl)

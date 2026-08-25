@@ -3,6 +3,7 @@
 from workflows.utils.lucid_tangent_db import (
     LucidTangentCandidate,
     build_lucid_tangents_db,
+    project_legacy_angle_to_lucid_candidate,
 )
 
 POST = "A city council delayed the river cleanup after flood damage."
@@ -56,3 +57,21 @@ def test_lucid_retains_candidate_scores_for_auditable_rejections() -> None:
     assert not score.accepted
     assert "not_parent_grounded" in score.rejection_reasons
     assert result.selected == []
+
+
+def test_legacy_projection_keeps_thread_cue_and_angle_roundtrip() -> None:
+    projected = project_legacy_angle_to_lucid_candidate(
+        {
+            "source_quote": "nearby residents worry about the river cleanup delay",
+            "tangent": "river cleanup was delayed after flood damage",
+            "category": "Original Post",
+            "source_document": 0,
+        },
+        tangent_id="t0000",
+        parent_context=PARENT,
+    )
+    angle = projected.to_angle()
+    assert angle["lucid_tangent_id"] == "t0000"
+    assert "residents" in projected.thread_cue or "river" in projected.thread_cue
+    assert angle["lucid_intent"]["subject"]
+    assert "tangent" in angle

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from loguru import logger
@@ -78,7 +81,32 @@ class LocalContentClient:
     """In-process content fetch client."""
 
     @staticmethod
+    def _jina_fetch(url: str) -> dict[str, Any]:
+        reader_url = url if urlparse(url).hostname == "r.jina.ai" else f"https://r.jina.ai/{url}"
+        response = None
+        for attempt in range(3):
+            response = requests.get(reader_url, timeout=60)
+            if getattr(response, "status_code", 200) not in {429, 503}:
+                break
+            retry_after = response.headers.get("Retry-After")
+            delay = float(retry_after) if retry_after else float(2 ** (attempt + 1))
+            time.sleep(min(30.0, max(1.0, delay)))
+        if response is None:
+            raise RuntimeError("Jina Reader returned no response")
+        response.raise_for_status()
+        return {
+            "result": {
+                "text": response.text,
+                "success": True,
+                "content_type": response.headers.get("Content-Type", "text/plain"),
+            }
+        }
+
+    @staticmethod
     def fetch(url: str, *, use_disk_cache: bool = True) -> dict[str, Any]:
+        jina_first = os.environ.get("WORKFLOW_URL_FETCH_JINA_FIRST", "").strip() == "1"
+        if urlparse(url).hostname == "r.jina.ai" or jina_first:
+            return LocalContentClient._jina_fetch(url)
         from services.analysis_service import fetch_url_content_crawl4ai
 
         return fetch_url_content_crawl4ai(url, use_disk_cache=use_disk_cache)

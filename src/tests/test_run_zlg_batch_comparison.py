@@ -54,6 +54,62 @@ def test_single_comment_sentence_is_topped_up_from_post_context() -> None:
     assert cover[0] == "The state is actively appealing that ruling."
 
 
+def test_json_array_selftext_is_parsed_not_dumped_as_cover() -> None:
+    mod = _load_module()
+    blob = json.dumps(
+        [
+            {
+                "title": "Alligator Alcatraz set to open under Trump.",
+                "summary": "Florida reopened a prison island as a tourist site.",
+            }
+        ]
+    )
+    context = {"title": "News thread.", "selftext": blob}
+    picked = [{"name": "u", "body": blob}]
+
+    cover = mod._build_cover_texts(context, picked, 2500, 1400)
+
+    assert all("[{" not in sentence for sentence in cover)
+    assert any("Alligator Alcatraz" in sentence for sentence in cover)
+
+
+def test_markdown_show_more_chrome_is_not_used_as_cover() -> None:
+    mod = _load_module()
+    context = {
+        "title": "Measles cases rise this year.",
+        "selftext": "Hospitals are reporting more cases.",
+    }
+    picked = [
+        {
+            "name": "u",
+            "body": "... [Show more](https://support.theguardian.com/x) The US has recorded more cases.",
+        }
+    ]
+
+    cover = mod._build_cover_texts(context, picked, 2500, 1400)
+
+    assert all("[Show more]" not in sentence for sentence in cover)
+    assert any("Measles" in sentence or "Hospitals" in sentence for sentence in cover)
+
+
+def test_drop_failed_result_rows_archives_and_keeps_accepted(tmp_path: Path) -> None:
+    mod = _load_module()
+    results = tmp_path / "results.jsonl"
+    archive = tmp_path / "failed.jsonl"
+    results.write_text(
+        '{"source_key":"ok","accepted":true}\n{"source_key":"bad","accepted":false}\n',
+        encoding="utf-8",
+    )
+
+    dropped = mod._drop_failed_result_rows(results, archive)
+
+    assert dropped == 1
+    kept = results.read_text(encoding="utf-8")
+    assert "ok" in kept
+    assert "bad" not in kept
+    assert "bad" in archive.read_text(encoding="utf-8")
+
+
 def test_sufficient_comment_sentences_do_not_pull_in_post_context() -> None:
     mod = _load_module()
     context = {"title": "A title that should stay out.", "selftext": "Body text."}

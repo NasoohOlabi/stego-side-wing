@@ -122,6 +122,7 @@ def summarize_stego_result(stego_result: dict[str, Any]) -> dict[str, Any]:
     candidates = validation_dict.get("candidates")
     error_details = stego_result.get("error_details")
     error_dict = error_details if isinstance(error_details, dict) else {}
+    taxonomy = stego_result.get("failure_taxonomy")
     return {
         "succeeded": bool(stego_result.get("succeeded")),
         "error": stego_result.get("error"),
@@ -134,6 +135,26 @@ def summarize_stego_result(stego_result: dict[str, Any]) -> dict[str, Any]:
         "selected_angle_index": stego_result.get("angle_index"),
         "has_stego_text": isinstance(stego_result.get("stego_text"), str)
         and bool(str(stego_result.get("stego_text")).strip()),
+        "failure_taxonomy": taxonomy if isinstance(taxonomy, dict) else None,
+    }
+
+
+def encode_failure_projection(stego_result: dict[str, Any]) -> dict[str, Any]:
+    """Compact LUCID diagnostics retained when e2e re-raises an encode failure."""
+    taxonomy = stego_result.get("failure_taxonomy")
+    selected = stego_result.get("selected_angle")
+    return {
+        "failure_taxonomy": taxonomy if isinstance(taxonomy, dict) else None,
+        "angle_index": stego_result.get("angle_index"),
+        "retry_count": stego_result.get("retry_count"),
+        "selected_angle": {
+            "idx": selected.get("idx"),
+            "category": selected.get("category"),
+            "tangent": selected.get("tangent"),
+        }
+        if isinstance(selected, dict)
+        else None,
+        "error_details": stego_result.get("error_details"),
     }
 
 

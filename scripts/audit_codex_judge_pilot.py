@@ -17,8 +17,16 @@ def _load(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-def _metric_audit(directory: Path, metric: str) -> dict[str, Any]:
+def _metric_audit(
+    directory: Path, metric: str, backend: str | None, model: str | None, reasoning_effort: str | None
+) -> dict[str, Any]:
     rows = _load(directory / f"{metric}_judgments.jsonl")
+    if backend is not None:
+        rows = [row for row in rows if row.get("judge_backend") == backend]
+    if model is not None:
+        rows = [row for row in rows if row.get("judge_model") == model]
+    if reasoning_effort is not None:
+        rows = [row for row in rows if row.get("reasoning_effort") == reasoning_effort]
     valid = [
         row for row in rows if row.get("error") is None and isinstance(row.get("result"), dict)
     ]
@@ -47,9 +55,17 @@ def _metric_audit(directory: Path, metric: str) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", required=True)
+    parser.add_argument("--backend")
+    parser.add_argument("--model")
+    parser.add_argument("--reasoning-effort")
     args = parser.parse_args()
     directory = Path(args.run_dir) / "comparison_dataset" / "codex_judgments"
-    report = {metric: _metric_audit(directory, metric) for metric in METRICS}
+    report = {
+        metric: _metric_audit(
+            directory, metric, args.backend, args.model, args.reasoning_effort
+        )
+        for metric in METRICS
+    }
     healthy = all(item["healthy"] for item in report.values())
     (directory / "pilot_audit.json").write_text(
         json.dumps({"healthy": healthy, "metrics": report}, indent=2), encoding="utf-8"

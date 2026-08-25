@@ -468,6 +468,44 @@ def test_tangent_db_v1_selection_is_sender_receiver_reproducible(
     )
 
 
+def test_lucid_builder_emits_frozen_codebook_metadata(
+    monkeypatch, clear_workflow_capacity_env
+):
+    monkeypatch.setenv("WORKFLOW_ANGLES_GENERATION_MODE", "extractive_zero_kld")
+    monkeypatch.setenv("WORKFLOW_TANGENT_DB_BUILDER", "lucid")
+    pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)
+    pipeline.backend = SimpleNamespace()
+    post = {
+        "id": "p-lucid",
+        "title": "Flash flood leaves campers missing",
+        "selftext": "Rescue teams searched the river through the night after flood damage.",
+        "comments": [{"body": "Nearby residents worry about the river and missing campers."}],
+    }
+
+    out = pipeline.preview_post(post)
+    artifact = out["post"]["angle_artifact"]["lucid_tangents_db"]
+    report = out["report"]["lucid_tangents_db_report"]
+
+    assert artifact["artifact_namespace"] == "project_lucid/tangents_db/v1"
+    assert artifact["content_hash"] == report["content_hash"]
+    assert artifact["kept_count"] == len(out["post"]["angles"])
+    assert all("lucid_tangent_id" in angle for angle in out["post"]["angles"])
+    assert out["post"]["lucid_tangents_db_report"]["content_hash"] == report["content_hash"]
+
+
+def test_lucid_tangents_db_parity_helper_detects_hash_drift() -> None:
+    from workflows.pipelines.receiver import _lucid_tangents_db_parity_mismatch
+
+    sender = {"lucid_tangents_db_report": {"content_hash": "abc", "artifact_namespace": "project_lucid/tangents_db/v1"}}
+    assert _lucid_tangents_db_parity_mismatch(sender, {"lucid_tangents_db_report": {"content_hash": "abc"}}) is None
+    mismatch = _lucid_tangents_db_parity_mismatch(
+        sender, {"lucid_tangents_db_report": {"content_hash": "xyz"}}
+    )
+    assert mismatch is not None
+    assert mismatch["sender_content_hash"] == "abc"
+    assert mismatch["receiver_content_hash"] == "xyz"
+
+
 def test_tangent_db_legacy_does_not_add_report(monkeypatch, clear_workflow_capacity_env):
     monkeypatch.setenv("WORKFLOW_ANGLES_GENERATION_MODE", "extractive_zero_kld")
     pipeline = GenAnglesPipeline.__new__(GenAnglesPipeline)

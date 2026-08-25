@@ -41,6 +41,18 @@ def _dedupe_by_task_id(judgments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(deduped.values())
 
 
+def _matching_config(
+    judgments: list[dict[str, Any]], backend: str | None, model: str | None, reasoning_effort: str | None
+) -> list[dict[str, Any]]:
+    return [
+        judgment
+        for judgment in judgments
+        if (backend is None or judgment.get("judge_backend") == backend)
+        and (model is None or judgment.get("judge_model") == model)
+        and (reasoning_effort is None or judgment.get("reasoning_effort") == reasoning_effort)
+    ]
+
+
 def _value(judgment: dict[str, Any], key: str) -> Any:
     result = judgment.get("result")
     return result.get(key) if isinstance(result, dict) else None
@@ -60,6 +72,7 @@ def _merge(rows: list[dict[str, Any]], judgments: list[dict[str, Any]], metric: 
         provenance = {
             key: judgment.get(key)
             for key in (
+                "judge_backend",
                 "judge_model",
                 "reasoning_effort",
                 "codex_cli_version",
@@ -87,7 +100,7 @@ def _merge(rows: list[dict[str, Any]], judgments: list[dict[str, Any]], metric: 
                 row[f"codex_register_{key}"] = result.get(key)
 
 
-def _summary(metric: str, judgments: list[dict[str, Any]]) -> dict[str, Any]:
+def _summary(metric: str, judgments: list[dict[str, Any]], methods: tuple[str, str]) -> dict[str, Any]:
     valid = [x for x in judgments if x.get("error") is None and isinstance(x.get("result"), dict)]
     output: dict[str, Any] = {"valid_judgments": len(valid), "tasks": len(judgments)}
     if metric in {"suspicion", "register"}:
@@ -97,12 +110,12 @@ def _summary(metric: str, judgments: list[dict[str, Any]]) -> dict[str, Any]:
             for x in valid
             if x.get("method") != "human"
         ]
-        output["post_cluster"] = post_cluster_summary(rows, key)
+        output["post_cluster"] = post_cluster_summary(rows, key, *methods)
         if metric == "suspicion":
             humans = [_value(x, key) for x in valid if x.get("method") == "human"]
             output["auroc"] = {
                 m: auroc([_value(x, key) for x in valid if x.get("method") == m], humans)
-                for m in ("our_method", "zlg")
+                for m in methods
             }
     if metric == "attribution":
         pairs = [
@@ -116,7 +129,7 @@ def _summary(metric: str, judgments: list[dict[str, Any]]) -> dict[str, Any]:
         output["accuracy"] = {
             m: sum(ok for ok, method in pairs if method == m)
             / max(1, sum(method == m for _, method in pairs))
-            for m in ("our_method", "zlg")
+            for m in methods
         }
     return output
 
@@ -129,6 +142,11 @@ def main() -> int:
         required=True,
     )
     parser.add_argument("--run-dir", required=True)
+    parser.add_argument("--backend")
+    parser.add_argument("--model")
+    parser.add_argument("--reasoning-effort")
+    parser.add_argument("--control-method", default="our_method")
+    parser.add_argument("--treatment-method", default="zlg")
     args = parser.parse_args()
     dataset = Path(args.run_dir) / "comparison_dataset"
     directory = dataset / "codex_judgments"
@@ -138,20 +156,25 @@ def main() -> int:
         "\n".join(json.dumps(row, ensure_ascii=False) for row in judgments) + "\n",
         encoding="utf-8",
     )
+    scored_judgments = _matching_config(
+        judgments, args.backend, args.model, args.reasoning_effort
+    )
     rows_path = dataset / "paired_rows.jsonl"
     rows = _load(rows_path)
     if args.metric in {"suspicion", "attribution", "register"}:
         backup = rows_path.with_name("paired_rows.jsonl.bak_pre_codex_judge")
         if not backup.exists():
             shutil.copy2(rows_path, backup)
-        _merge(rows, judgments, args.metric)
+        _merge(rows, scored_judgments, args.metric)
         rows_path.write_text(
             "\n".join(json.dumps(x, ensure_ascii=False, sort_keys=True) for x in rows) + "\n",
             encoding="utf-8",
         )
     summary_path = dataset / "codex_judge_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
-    summary[args.metric] = _summary(args.metric, judgments)
+    summary[args.metric] = _summary(
+        args.metric, scored_judgments, (args.control_method, args.treatment_method)
+    )
     primary = [
         x.get("post_cluster", {}).get("two_sided_sign_test_p")
         for x in summary.values()

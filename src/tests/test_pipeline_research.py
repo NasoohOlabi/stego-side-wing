@@ -84,6 +84,30 @@ def test_research_post_builds_deduped_non_pdf_results():
     assert timing["fetch_phase_ms"] >= 0
 
 
+def test_research_post_uses_title_when_term_generation_fails():
+    pipeline = _research_pipeline_stub()
+    pipeline.gen_terms = SimpleNamespace(
+        preview_generation=lambda **kwargs: {"terms": [], "error": "provider blocked"}
+    )
+    queries = []
+
+    def google_search(query, first, count):
+        queries.append(query)
+        return {"results": [{"link": "https://example.com/story"}]}
+
+    pipeline.backend = SimpleNamespace(google_search=google_search)
+    pipeline.fetch_content = SimpleNamespace(
+        fetch=lambda url, use_cache: FetchUrlResult(url=url, success=True, text="source text")
+    )
+
+    result = pipeline.research_post(
+        {"id": "p-title", "title": "Fallback title query", "selftext": "body"}
+    )
+
+    assert queries == ["Fallback title query"]
+    assert result["search_results"] == ["source text"]
+
+
 def test_process_posts_saves_local_for_all_and_remote_for_new_only():
     local_saves = []
     remote_saves = []
@@ -221,6 +245,10 @@ def test_web_search_google_or_bing_raises_quota_when_bing_fallback_disabled(monk
         raise AssertionError("bing fallback should be disabled")
 
     monkeypatch.setattr("services.search_service.search_bing", _should_not_use_bing)
+    monkeypatch.setattr("services.search_service.search_bing_news_rss", _should_not_use_bing)
+    monkeypatch.setattr("services.search_service.search_google_news_rss", _should_not_use_bing)
+    monkeypatch.setattr("services.search_service.search_yahoo_news", _should_not_use_bing)
+    monkeypatch.setattr("services.search_service.search_duckduckgo", _should_not_use_bing)
 
     with pytest.raises(RuntimeError, match="quota"):
         pipeline._web_search_google_or_bing(
@@ -230,3 +258,145 @@ def test_web_search_google_or_bing_raises_quota_when_bing_fallback_disabled(monk
             post_id="p1",
             disable_bing_fallback=True,
         )
+
+
+def test_web_search_falls_back_to_duckduckgo_on_google_quota(monkeypatch):
+    pipeline = _research_pipeline_stub()
+    pipeline.backend = SimpleNamespace(
+        google_search=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("429 quota exceeded"))
+    )
+    monkeypatch.setattr(
+        "services.search_service.search_duckduckgo",
+        lambda **kwargs: {"results": [{"title": "term", "link": "https://x", "snippet": "s"}]},
+    )
+
+    def _should_not_use_bing(**kwargs):
+        raise AssertionError("bing should not run when duckduckgo returns results")
+
+    monkeypatch.setattr("services.search_service.search_bing", _should_not_use_bing)
+    monkeypatch.setattr("services.search_service.search_bing_news_rss", _should_not_use_bing)
+    monkeypatch.setattr("services.search_service.search_google_news_rss", _should_not_use_bing)
+    monkeypatch.setattr("services.search_service.search_yahoo_news", _should_not_use_bing)
+    out = pipeline._web_search_google_or_bing(
+        query="term", first=1, count=10, post_id="p1", disable_bing_fallback=False
+    )
+    assert out["results"][0]["link"] == "https://x"
+
+
+def test_web_search_uses_bing_rss_before_metered_bing(monkeypatch):
+    pipeline = _research_pipeline_stub()
+    pipeline.backend = SimpleNamespace(
+        google_search=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("429 quota exceeded"))
+    )
+    monkeypatch.setattr("services.search_service.search_duckduckgo", lambda **kwargs: {"results": []})
+    monkeypatch.setattr("services.search_service.search_yahoo_news", lambda **kwargs: {"results": []})
+    monkeypatch.setattr(
+        "services.search_service.search_bing_news_rss",
+        lambda **kwargs: {"results": [{"title": "term", "link": "https://rss", "snippet": "s"}]},
+    )
+    monkeypatch.setattr("services.search_service.search_google_news_rss", lambda **kwargs: {"results": []})
+    monkeypatch.setattr(
+        "services.search_service.search_bing",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("metered Bing should not run")),
+    )
+
+    out = pipeline._web_search_google_or_bing(
+        query="term", first=1, count=10, post_id="p1", disable_bing_fallback=False
+    )
+
+    assert out["results"][0]["link"] == "https://rss"
+
+
+def test_web_search_uses_google_news_when_bing_news_is_empty(monkeypatch):
+    pipeline = _research_pipeline_stub()
+    pipeline._google_quota_detected = True
+    monkeypatch.setattr("services.search_service.search_duckduckgo", lambda **kwargs: {"results": []})
+    monkeypatch.setattr("services.search_service.search_yahoo_news", lambda **kwargs: {"results": []})
+    monkeypatch.setattr("services.search_service.search_bing_news_rss", lambda **kwargs: {"results": []})
+    monkeypatch.setattr(
+        "services.search_service.search_google_news_rss",
+        lambda **kwargs: {"results": [{"title": "term", "link": "https://news", "snippet": "s"}]},
+    )
+
+    out = pipeline._web_search_google_or_bing(
+        query="term", first=1, count=10, post_id="p1", disable_bing_fallback=False
+    )
+
+    assert out["results"][0]["link"] == "https://news"
+
+
+def test_web_search_uses_yahoo_news_before_google_news(monkeypatch):
+    pipeline = _research_pipeline_stub()
+    pipeline._google_quota_detected = True
+    monkeypatch.setattr("services.search_service.search_duckduckgo", lambda **kwargs: {"results": []})
+    monkeypatch.setattr(
+        "services.search_service.search_yahoo_news",
+        lambda **kwargs: {"results": [{"title": "term", "link": "https://yahoo", "snippet": "s"}]},
+    )
+    monkeypatch.setattr(
+        "services.search_service.search_google_news_rss",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("Google News should not run")),
+    )
+
+    out = pipeline._web_search_google_or_bing(
+        query="term", first=1, count=10, post_id="p1", disable_bing_fallback=False
+    )
+
+    assert out["results"][0]["link"] == "https://yahoo"
+
+
+def test_fallback_search_rejects_lexically_unrelated_results(monkeypatch):
+    pipeline = _research_pipeline_stub()
+    pipeline._google_quota_detected = True
+    monkeypatch.setattr(
+        "services.search_service.search_duckduckgo",
+        lambda **kwargs: {"results": [{"title": "Business branding elements", "link": "x"}]},
+    )
+    monkeypatch.setattr("services.search_service.search_yahoo_news", lambda **kwargs: {"results": []})
+    monkeypatch.setattr(
+        "services.search_service.search_google_news_rss",
+        lambda **kwargs: {
+            "results": [{"title": "Aalborg Zoo accepts donated pets", "link": "https://news"}]
+        },
+    )
+
+    out = pipeline._web_search_google_or_bing(
+        query="Aalborg Zoo donated pets", first=1, count=10, post_id="p1"
+    )
+
+    assert out["results"][0]["link"] == "https://news"
+
+
+def test_fallback_search_rejects_generic_heading_query():
+    pipeline = _research_pipeline_stub()
+
+    assert pipeline._relevant_fallback_results(
+        "* Key Elements:", [{"title": "Key elements for successful branding"}]
+    ) == []
+
+
+def test_google_quota_opens_circuit_for_later_queries(monkeypatch):
+    pipeline = _research_pipeline_stub()
+    calls = []
+
+    def google_search(**kwargs):
+        calls.append(kwargs["query"])
+        raise RuntimeError("429 quota exceeded")
+
+    pipeline.backend = SimpleNamespace(google_search=google_search)
+    monkeypatch.setattr("services.search_service.search_duckduckgo", lambda **kwargs: {"results": []})
+    monkeypatch.setattr("services.search_service.search_yahoo_news", lambda **kwargs: {"results": []})
+    monkeypatch.setattr(
+        "services.search_service.search_bing_news_rss",
+        lambda **kwargs: {
+            "results": [{"title": kwargs["query"], "link": "https://rss", "snippet": "s"}]
+        },
+    )
+    monkeypatch.setattr("services.search_service.search_google_news_rss", lambda **kwargs: {"results": []})
+
+    for query in ("first", "second"):
+        pipeline._web_search_google_or_bing(
+            query=query, first=1, count=10, post_id="p1", disable_bing_fallback=False
+        )
+
+    assert calls == ["first"]

@@ -34,6 +34,21 @@ class LucidTangentCandidate(BaseModel):
     def intent_text(self) -> str:
         return " ".join((self.subject, self.relation, self.thread_cue))
 
+    def to_angle(self) -> dict[str, Any]:
+        """Receiver-compatible angle dict; keeps LUCID intent for provenance."""
+        return {
+            "source_quote": self.source_quote,
+            "tangent": self.intent_text(),
+            "category": self.category,
+            "source_document": self.source_document,
+            "lucid_tangent_id": self.tangent_id,
+            "lucid_intent": {
+                "subject": self.subject,
+                "relation": self.relation,
+                "thread_cue": self.thread_cue,
+            },
+        }
+
 
 class LucidCandidateScore(BaseModel):
     """Deterministic admission result retained for candidate provenance."""
@@ -142,6 +157,60 @@ def _pairwise_separation(selected: list[LucidTangentCandidate]) -> dict[str, flo
 
 def _artifact_hash_payload(artifact: LucidTangentDbArtifact) -> dict[str, Any]:
     return artifact.model_dump(mode="json", exclude={"content_hash"})
+
+
+def _split_intent_spans(text: str) -> tuple[str, str, str]:
+    tokens = tokenize_content_words(text)
+    if len(tokens) < 2:
+        return text.strip(), "", ""
+    first = max(1, len(tokens) // 3)
+    second = max(first + 1, (2 * len(tokens)) // 3)
+    return " ".join(tokens[:first]), " ".join(tokens[first:second]), " ".join(tokens[second:])
+
+
+def _thread_cue_from_quote(source_quote: str, parent_tokens: set[str], fallback: str) -> str:
+    quote_tokens = [token for token in tokenize_content_words(source_quote) if token in parent_tokens]
+    if quote_tokens:
+        return " ".join(quote_tokens)
+    return fallback.strip()
+
+
+@validate_call
+def project_legacy_angle_to_lucid_candidate(
+    angle: dict[str, Any], *, tangent_id: str, parent_context: str = ""
+) -> LucidTangentCandidate:
+    """Lossy projection: academic/generic tangents should fail later admission checks."""
+    source_quote = str(angle.get("source_quote") or "").strip()
+    tangent = str(angle.get("tangent") or source_quote).strip()
+    subject, relation, residual = _split_intent_spans(tangent)
+    cue = _thread_cue_from_quote(source_quote, _tokens(parent_context), residual or source_quote)
+    return LucidTangentCandidate(
+        tangent_id=tangent_id,
+        subject=subject,
+        relation=relation,
+        thread_cue=cue,
+        source_quote=source_quote or tangent,
+        source_document=int(angle.get("source_document", 0) or 0),
+        category=str(angle.get("category") or ""),
+    )
+
+
+def post_context_text(post: dict[str, Any]) -> str:
+    return " ".join(
+        str(post.get(key) or "").strip() for key in ("title", "selftext") if str(post.get(key) or "").strip()
+    )
+
+
+def parent_context_text(post: dict[str, Any]) -> str:
+    comments = post.get("comments")
+    if not isinstance(comments, list):
+        return ""
+    bodies = [
+        " ".join(str(item.get("body") or "").split())
+        for item in comments
+        if isinstance(item, dict) and str(item.get("body") or "").strip()
+    ]
+    return " ".join(bodies)
 
 
 @validate_call

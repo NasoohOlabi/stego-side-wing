@@ -51,6 +51,12 @@ from workflows.utils.context_sampler import (
     ContextSamplerConfig,
     build_context_dictionary_bundle,
 )
+from workflows.utils.lucid_tangent_db import (
+    build_lucid_tangents_db,
+    parent_context_text,
+    post_context_text,
+    project_legacy_angle_to_lucid_candidate,
+)
 from workflows.utils.naturalness_gate import (
     filter_angles_for_post,
     naturalness_gate_enabled,
@@ -166,6 +172,15 @@ def _angle_artifact_metadata(report: dict[str, Any]) -> dict[str, Any]:
             "kept_count": tangent_report.get("kept_count"),
             "revamped_tangents": True,
         }
+    lucid_report = report.get("lucid_tangents_db_report")
+    if isinstance(lucid_report, dict):
+        metadata["lucid_tangents_db"] = {
+            "schema_version": lucid_report.get("schema_version"),
+            "artifact_namespace": lucid_report.get("artifact_namespace"),
+            "content_hash": lucid_report.get("content_hash"),
+            "kept_count": len(lucid_report.get("selected_tangent_ids") or []),
+            "pairwise_separation": lucid_report.get("pairwise_separation"),
+        }
     return metadata
 
 
@@ -234,6 +249,41 @@ def _candidate_for_entry(angle: dict[str, Any], entries: list[dict[str, Any]]) -
     return candidate
 
 
+def _apply_lucid_tangents_db_builder(
+    *,
+    post: dict[str, Any],
+    angles: list[dict[str, Any]],
+    max_output: int,
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    parent_context = parent_context_text(post)
+    post_context = post_context_text(post)
+    candidates = [
+        project_legacy_angle_to_lucid_candidate(
+            angle, tangent_id=f"t{index:04d}", parent_context=parent_context
+        )
+        for index, angle in enumerate(angles)
+    ]
+    result = build_lucid_tangents_db(
+        post_id=str(post.get("id") or ""),
+        post_context=post_context,
+        parent_context=parent_context,
+        candidates=candidates,
+        size=max_output,
+    )
+    artifact = result.artifact.model_dump(mode="json")
+    report["lucid_tangents_db_report"] = artifact
+    _gen_angles_bind_log().info(
+        "lucid_tangents_db_selection_complete",
+        post_id=post.get("id"),
+        input_count=len(candidates),
+        kept_count=len(result.selected),
+        content_hash=artifact.get("content_hash"),
+        pairwise_separation=artifact.get("pairwise_separation"),
+    )
+    return [item.to_angle() for item in result.selected]
+
+
 def _apply_tangent_db_builder(
     *,
     post: dict[str, Any],
@@ -242,7 +292,12 @@ def _apply_tangent_db_builder(
     max_output: int,
     report: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    if get_workflow_tangent_db_builder() != "v1":
+    builder = get_workflow_tangent_db_builder()
+    if builder == "lucid":
+        return _apply_lucid_tangents_db_builder(
+            post=post, angles=angles, max_output=max_output, report=report
+        )
+    if builder != "v1":
         return angles
     candidates = [_candidate_for_entry(angle, entries) for angle in angles]
     result = build_tangent_db(
@@ -279,6 +334,9 @@ def _post_with_angles(
     tangent_report = report.get("tangent_db_report")
     if isinstance(tangent_report, dict):
         processed["tangent_db_report"] = tangent_report
+    lucid_report = report.get("lucid_tangents_db_report")
+    if isinstance(lucid_report, dict):
+        processed["lucid_tangents_db_report"] = lucid_report
     return processed
 
 

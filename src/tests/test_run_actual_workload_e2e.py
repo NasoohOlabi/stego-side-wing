@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -213,6 +214,86 @@ def test_run_actual_workload_e2e_adaptive_feedback_writes_artifacts(monkeypatch)
     assert (feedback_dir / "adaptive_actions.jsonl").is_file()
     assert (feedback_dir / "failure_clusters.json").is_file()
     assert (feedback_dir / "leaderboard.json").is_file()
+
+
+def test_run_actual_workload_e2e_persists_encode_failure_taxonomy(monkeypatch) -> None:
+    module = _load_runner_module()
+    temp_root = Path(__file__).resolve().parents[2] / "metrics" / "test-run-actual-workload-e2e"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    run_root = temp_root / f"actual-workload-e2e-{uuid4().hex}"
+    run_root.mkdir()
+    angles_dir = run_root / "angles"
+    dataset_dir = run_root / "dataset"
+    angles_dir.mkdir()
+    dataset_dir.mkdir()
+
+    post_json = (
+        '{"id":"post-1","url":"https://example.test/a","selftext":"body",'
+        '"search_results":[{"url":"https://example.test/a"}],'
+        '"angles":[[{"category":"c","source_quote":"q","tangent":"t"}]],"title":"post"}'
+    )
+    (angles_dir / "post-1.json").write_text(post_json, encoding="utf-8")
+    (dataset_dir / "post-1.json").write_text(post_json, encoding="utf-8")
+
+    class FakeStegoPipeline:
+        def encode(self, *, payload: str, post: dict, tag: str, max_retries: int) -> dict:
+            del payload, post, tag, max_retries
+            return {
+                "succeeded": False,
+                "stego_text": "",
+                "angle_index": 4,
+                "retry_count": 1,
+                "error": "Decoding validation failed",
+                "selected_angle": {"idx": 4, "category": "c", "tangent": "t"},
+                "failure_taxonomy": {"no_decode": 0, "wrong_angle_decode": 2, "weak_thread_grounding": 1, "quality_gate_violation": 0},
+                "error_details": {"reason": "exhausted"},
+                "validation_details": {"candidates": []},
+            }
+
+    class FakeReceiverPipeline:
+        pass
+
+    monkeypatch.setattr(module, "StegoPipeline", FakeStegoPipeline)
+    monkeypatch.setattr(module, "ReceiverPipeline", FakeReceiverPipeline)
+    monkeypatch.setattr(
+        module,
+        "run_divergence_metrics",
+        lambda output_dir, baseline_dir, metrics_dir, progress_hook: {
+            "report_path": str(metrics_dir / "report.json"),
+            "report": {"dataset_summary": {"usable_stego_samples": 0}},
+        },
+    )
+    monkeypatch.setattr(
+        module, "get_workflow_encoding_settings", lambda: {"encoding_profile": "balanced"}
+    )
+    monkeypatch.setattr(module, "get_workflow_encoding_secret", lambda: "")
+
+    result = module.run_actual_workload_e2e(
+        profiles=["balanced"],
+        samples_per_profile=1,
+        post_ids=["post-1"],
+        angles_dir=angles_dir,
+        dataset_dir=dataset_dir,
+        run_dir=run_root / "run",
+        overwrite=False,
+        max_retries=1,
+        force_model_generation=True,
+        skip_receiver_decode=True,
+        allow_post_reuse=False,
+        fail_fast=False,
+        max_transient_sample_retries=0,
+        transient_sample_retry_base_delay_seconds=0.0,
+    )
+
+    assert result["total_failed_samples"] == 1
+    failure_files = list((run_root / "run" / "balanced" / "failures").glob("*.json"))
+    assert len(failure_files) == 1
+    failure = json.loads(failure_files[0].read_text(encoding="utf-8"))
+    assert failure["failure_taxonomy"]["wrong_angle_decode"] == 2
+    assert failure["angle_index"] == 4
+    assert failure["retry_count"] == 1
+    assert failure["selected_angle"]["idx"] == 4
+    assert failure["envelope"]["encode_failure"]["failure_taxonomy"]["wrong_angle_decode"] == 2
 
 
 def test_run_actual_workload_e2e_keeps_dedicated_experiment_artifacts(

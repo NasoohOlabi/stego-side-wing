@@ -28,7 +28,7 @@ failure diagnosis, not yet a completed or independently sampled benchmark.
 Its progress metadata has blank Git commit and branch fields and marks the
 worktree dirty. The nearest committed base before its start is `0353848` on
 `fix/zlg-benchmark-overhaul`; that is provenance context, not a precise code
-pin. See [the current research-state report](../reports/2026-08-03-current-research-state.md).
+pin. See [the current research-state report](../reports/2026-08-08-current-research-state.md).
 
 ## Run process
 

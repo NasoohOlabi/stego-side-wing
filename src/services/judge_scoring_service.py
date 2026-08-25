@@ -17,16 +17,21 @@ def _mean(values: Sequence[float]) -> float | None:
 
 
 @validate_call
-def post_cluster_summary(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
+def post_cluster_summary(
+    rows: list[dict[str, Any]],
+    key: str,
+    control_method: str = "our_method",
+    treatment_method: str = "zlg",
+) -> dict[str, Any]:
     clusters: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
         value = row.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             clusters[str(row.get("post_id"))][str(row.get("method"))].append(float(value))
     deltas = [
-        statistics.fmean(x["our_method"]) - statistics.fmean(x["zlg"])
+        statistics.fmean(x[control_method]) - statistics.fmean(x[treatment_method])
         for x in clusters.values()
-        if x.get("our_method") and x.get("zlg")
+        if x.get(control_method) and x.get(treatment_method)
     ]
     wins, losses = sum(x > 0 for x in deltas), sum(x < 0 for x in deltas)
     trials = wins + losses
@@ -35,14 +40,22 @@ def post_cluster_summary(rows: list[dict[str, Any]], key: str) -> dict[str, Any]
         if trials
         else None
     )
-    return {
+    result = {
         "independent_paired_post_clusters": len(deltas),
-        "our_minus_zlg_post_cluster_mean": _mean(deltas),
+        "control_method": control_method,
+        "treatment_method": treatment_method,
+        "control_minus_treatment_post_cluster_mean": _mean(deltas),
         "post_cluster_wins": wins,
         "post_cluster_losses": losses,
         "post_cluster_ties": len(deltas) - trials,
         "two_sided_sign_test_p": p,
     }
+    # Preserve the long-standing key for ZLG reports and callers.
+    if control_method == "our_method" and treatment_method == "zlg":
+        result["our_minus_zlg_post_cluster_mean"] = result[
+            "control_minus_treatment_post_cluster_mean"
+        ]
+    return result
 
 
 @validate_call

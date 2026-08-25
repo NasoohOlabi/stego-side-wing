@@ -53,6 +53,8 @@ def test_builder_defaults_to_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
     assert get_workflow_tangent_db_builder() == "legacy"
     monkeypatch.setenv("WORKFLOW_TANGENT_DB_BUILDER", "V1")
     assert get_workflow_tangent_db_builder() == "v1"
+    monkeypatch.setenv("WORKFLOW_TANGENT_DB_BUILDER", "lucid")
+    assert get_workflow_tangent_db_builder() == "lucid"
     monkeypatch.setenv("WORKFLOW_TANGENT_DB_BUILDER", "nonsense")
     assert get_workflow_tangent_db_builder() == "legacy"
 

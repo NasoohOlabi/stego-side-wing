@@ -25,7 +25,7 @@ the end-to-end path had never been run with this sampler before.
 > exact code version; the closest pre-run committed base is `0353848` on
 > `fix/zlg-benchmark-overhaul`. The latest recalibrated ZLG run (510/554) uses
 > a different, older source summary and is not a paired comparison. See
-> [the current research-state report](../reports/2026-08-03-current-research-state.md).
+> [the current research-state report](../reports/2026-08-08-current-research-state.md).
 
 ## 2. Environment
 

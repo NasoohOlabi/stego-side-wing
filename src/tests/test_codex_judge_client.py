@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from services.codex_judge_client import CodexJudgeConfig, default_model_for_backend, run_codex_judge
+from services.codex_judge_client import (
+    CodexJudgeConfig,
+    default_model_for_backend,
+    run_codex_judge,
+)
 
 
 def _schema(tmp_path: Path) -> Path:
@@ -63,6 +67,7 @@ def test_codex_backend_still_available(tmp_path: Path, monkeypatch) -> None:
     def fake_run(command, **kwargs):
         assert command[0] in {"codex", "codex.cmd"}
         assert "--output-schema" in command
+        assert "--ignore-user-config" in command
         out = Path(command[command.index("--output-last-message") + 1])
         out.write_text('{"ok": true}', encoding="utf-8")
         output_written["path"] = str(out)
@@ -72,8 +77,31 @@ def test_codex_backend_still_available(tmp_path: Path, monkeypatch) -> None:
     result = run_codex_judge(
         "prompt",
         schema,
-        CodexJudgeConfig(backend="codex", model="gpt-5.6-luna", max_attempts=1),
+        CodexJudgeConfig(
+            backend="codex",
+            model="gpt-5.6-luna",
+            max_attempts=1,
+            ignore_user_config=True,
+        ),
     )
     assert result.error is None
     assert result.parsed == {"ok": True}
     assert output_written["path"]
+
+
+def test_codex_failure_detail_excludes_process_output(tmp_path: Path, monkeypatch) -> None:
+    schema = _schema(tmp_path)
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=23, stdout="private stdout", stderr="private stderr")
+
+    monkeypatch.setattr("services.codex_judge_client.subprocess.run", fake_run)
+    result = run_codex_judge(
+        "prompt",
+        schema,
+        CodexJudgeConfig(backend="codex", model="gpt-5.6-luna", max_attempts=1),
+    )
+    assert result.error == "invalid codex output"
+    assert result.error_detail == (
+        "exit_code=23; output_file=False; stdout_bytes=14; stderr_bytes=14"
+    )

@@ -107,6 +107,7 @@ def _run(
         "result": result.parsed,
         "raw_response": result.text,
         "error": result.error,
+        "error_detail": result.error_detail,
         "judge_backend": config.backend,
         "judge_model": config.model,
         "reasoning_effort": config.reasoning_effort,
@@ -175,7 +176,10 @@ def main() -> int:
     )
     model = args.model or default_model_for_backend(args.backend)
     config = CodexJudgeConfig(
-        backend=args.backend, model=model, reasoning_effort=args.reasoning_effort
+        backend=args.backend,
+        model=model,
+        reasoning_effort=args.reasoning_effort,
+        ignore_user_config=args.backend == "codex",
     )
     for task in tasks:
         task["task_id"] = _task_id(task, prompt_hash, schema_hash, config)

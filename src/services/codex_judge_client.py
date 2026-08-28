@@ -43,6 +43,7 @@ class CodexJudgeResult(BaseModel):
     codex_version: str | None = None
     attempts: int = 0
     error: str | None = None
+    error_detail: str | None = None
 
 
 def default_model_for_backend(backend: JudgeBackend) -> str:
@@ -178,6 +179,13 @@ def _attempt_codex(
                 if completed.returncode == 0 and _schema_valid(parsed, schema_path)
                 else "invalid codex output"
             )
+            error_detail = None
+            if error is not None:
+                error_detail = (
+                    f"exit_code={completed.returncode}; output_file={output.exists()}; "
+                    f"stdout_bytes={len(completed.stdout or '')}; "
+                    f"stderr_bytes={len(completed.stderr or '')}"
+                )
             return CodexJudgeResult(
                 text=text,
                 parsed=parsed,
@@ -186,12 +194,14 @@ def _attempt_codex(
                 usage=_usage_from_jsonl(completed.stdout or ""),
                 attempts=attempt,
                 error=error,
+                error_detail=error_detail,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return CodexJudgeResult(
                 duration_ms=round((time.monotonic() - started) * 1000),
                 attempts=attempt,
                 error=str(exc),
+                error_detail=type(exc).__name__,
             )
 
 

@@ -49,6 +49,16 @@ artifact remains `metrics/zlg_comparison_runs/zlg_batch_scale300_recalibrated`.
 Do not treat it as paired with either LUCID 500-run until a frozen, clean,
 symmetric manifest exists.
 
+### 2026-08-29 update: independent fixed-text judge evaluation
+
+The fresh LUCID/ZLG comparison now has a completed **fixed-text** LLM-judge
+evaluation on 244 distinct posts, selected as one pair per post with globally
+unique ZLG cover texts. It is documented in
+[`2026-08-29-independent-llm-judge-results.md`](2026-08-29-independent-llm-judge-results.md).
+The note records the exact selection rule, all 2,928 completed judge tasks,
+results, and reporting limits. It supplements rather than replaces a frozen,
+symmetric, capacity-matched benchmark and its ITT reliability accounting.
+
 ## Next action
 
 1. Keep the LUCID implementation frozen (no codebook/revision/prompt changes from

@@ -30,7 +30,9 @@ def _schema(tmp_path: Path) -> Path:
 
 
 def test_default_models() -> None:
-    assert default_model_for_backend("claude") == "haiku"
+    assert CodexJudgeConfig().backend == "claude"
+    assert CodexJudgeConfig().model == "sonnet"
+    assert default_model_for_backend("claude") == "sonnet"
     assert default_model_for_backend("codex") == "gpt-5.6-luna"
 
 
@@ -53,7 +55,7 @@ def test_claude_backend_parses_structured_output(tmp_path: Path, monkeypatch) ->
     result = run_codex_judge(
         "prompt",
         schema,
-        CodexJudgeConfig(backend="claude", model="haiku", max_attempts=1),
+        CodexJudgeConfig(backend="claude", model="sonnet", max_attempts=1),
     )
     assert result.error is None
     assert result.parsed == {"ok": True}

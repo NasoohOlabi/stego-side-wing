@@ -154,7 +154,7 @@ def main() -> int:
     parser.add_argument(
         "--model",
         default=None,
-        help="Judge model; defaults to haiku (claude) or gpt-5.6-luna (codex).",
+        help="Judge model; defaults to Sonnet 5 (claude) or gpt-5.6-luna (codex).",
     )
     parser.add_argument("--reasoning-effort", default="high")
     parser.add_argument("--control", action="store_true")

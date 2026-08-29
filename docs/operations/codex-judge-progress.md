@@ -5,7 +5,8 @@ The five LLM-judge metrics write all artifacts under a comparison run's
 interrupted local/overnight run: judgments are append-only and a completed
 `task_id` is never sent again.
 
-Default backend is **Claude Code** (`--backend claude`, model `haiku`).
+Default backend is **Claude Code** (`--backend claude`, model `sonnet`, the
+Claude CLI alias for the current Sonnet 5 generation).
 Codex remains available via `--backend codex` (model `gpt-5.6-luna`).
 
 ## Monitoring

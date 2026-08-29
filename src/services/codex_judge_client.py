@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, validate_call
 
 JudgeBackend = Literal["claude", "codex"]
 DEFAULT_MODELS: dict[JudgeBackend, str] = {
-    "claude": "haiku",
+    "claude": "sonnet",
     "codex": "gpt-5.6-luna",
 }
 
@@ -25,7 +25,7 @@ class CodexJudgeConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
     backend: JudgeBackend = "claude"
-    model: str = "haiku"
+    model: str = "sonnet"
     reasoning_effort: str = "high"
     timeout_s: int = Field(default=600, gt=0)
     max_attempts: int = Field(default=2, ge=1)
